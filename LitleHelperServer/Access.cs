@@ -40,7 +40,7 @@ public static class Access
     public static async Task EnsureSchema(HelperDb db)
     {
         if (db.Database.IsNpgsql())
-            await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Users\" ADD COLUMN IF NOT EXISTS \"PermissionOverrides\" TEXT NOT NULL DEFAULT '{}'");
+            await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Users\" ADD COLUMN IF NOT EXISTS \"PermissionOverrides\" TEXT NOT NULL DEFAULT '{{}}'");
         else
         {
             await db.Database.OpenConnectionAsync();
@@ -48,7 +48,7 @@ public static class Access
             bool exists = false;
             using (var reader = await command.ExecuteReaderAsync())
                 while (await reader.ReadAsync()) if (reader.GetString(1) == "PermissionOverrides") exists = true;
-            if (!exists) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Users\" ADD COLUMN \"PermissionOverrides\" TEXT NOT NULL DEFAULT '{}'");
+            if (!exists) await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Users\" ADD COLUMN \"PermissionOverrides\" TEXT NOT NULL DEFAULT '{{}}'");
             await db.Database.CloseConnectionAsync();
         }
     }

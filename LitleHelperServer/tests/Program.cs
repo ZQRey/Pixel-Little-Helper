@@ -54,6 +54,7 @@ if (args.FirstOrDefault() == "--ad-probe")
     await connection.ConnectAsync("localhost", ldap.Port); await connection.BindAsync("alice@ad.test", "AD-test-password");
     Console.WriteLine("LDAP bind successful"); return;
 }
+if (args.FirstOrDefault() == "--telegram-management") { await TelegramManagementTests.RunAsync(); return; }
 string url = args.FirstOrDefault() ?? "http://127.0.0.1:21500";
 string mockUrl = args.Skip(1).FirstOrDefault() ?? "http://127.0.0.1:21501";
 var mockBuilder = WebApplication.CreateBuilder();
@@ -101,8 +102,10 @@ mock.MapPost("/apirest.php/Ticket", async (HttpRequest request) =>
     requester = input.GetProperty("_users_id_requester").GetInt32(); content = input.GetProperty("content").GetString()!;
     return Results.Ok(new { id = 7001 });
 });
-mock.MapGet("/apirest.php/Ticket/{id:int}", (int id) => Results.Ok(new { id, status = 1 }));
-mock.MapPut("/apirest.php/Ticket/{id:int}", (int id) => Results.Ok(new { id }));
+var ticketStatuses = new Dictionary<int, int>();
+mock.MapGet("/apirest.php/Ticket/{id:int}", (int id) => Results.Ok(new { id, status = ticketStatuses.GetValueOrDefault(id, 1) }));
+mock.MapGet("/apirest.php/Ticket/{id:int}/Ticket_User", () => Results.Json(Array.Empty<object>()));
+mock.MapPut("/apirest.php/Ticket/{id:int}", async (int id, HttpRequest request) => { using var body = await JsonDocument.ParseAsync(request.Body); ticketStatuses[id] = body.RootElement.GetProperty("input").GetProperty("status").GetInt32(); return Results.Ok(new { id }); });
 mock.MapGet("/apirest.php/killSession", () => { killCount++; return Results.Ok(); });
 await mock.StartAsync();
 using var http = new HttpClient { BaseAddress = new Uri(url), Timeout = TimeSpan.FromSeconds(20) };
@@ -208,6 +211,11 @@ try
     ownTickets = await Json("/tickets", staffTokens["alice"]); Check(ownTickets.GetArrayLength() == 1, "User cannot enumerate other users' tickets");
     var allTickets = await Json("/tickets", admin);
     int otherId = allTickets.EnumerateArray().First(x => x.GetProperty("username").GetString() == "operator").GetProperty("id").GetInt32();
+    await Json("/tickets/" + otherId + "/status", admin, new { status = 4 }, HttpMethod.Put);
+    Check((await Json("/tickets?status=4", admin)).GetArrayLength() == 1, "ticket status filter selects waiting tickets");
+    Check((await Json("/tickets?status=4", staffTokens["alice"])).GetArrayLength() == 0, "ticket status filter preserves owner isolation");
+    using (var badFilter = await Call("/tickets?status=unknown", admin)) Check(badFilter.StatusCode == HttpStatusCode.BadRequest, "invalid status filter rejected");
+    Check((await Json("/tickets?status=active", admin)).GetArrayLength() == 2, "active status filter includes new and waiting tickets");
     using var other = await Call("/tickets/" + otherId, staffTokens["alice"]); Check(other.StatusCode == HttpStatusCode.Forbidden, "User cannot fetch another ticket by ID");
     await using var badAgent = new HubConnectionBuilder().WithUrl(url + "/helperHub", o => { o.Headers["X-Client-Key"] = "incorrect"; o.Headers["X-Machine-Name"] = "TEST-PC"; }).Build();
     bool badRejected = false; try { await badAgent.StartAsync(); } catch { badRejected = true; } Check(badRejected, "incorrect agent key rejected");

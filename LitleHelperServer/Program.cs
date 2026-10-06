@@ -90,8 +90,16 @@ builder.Services.AddSingleton<IntegrationSettings>();
 builder.Services.AddSingleton<ClientReleases>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = PixelHelper.Updates.ClientUpdateManifest.MaximumSize + 65536);
 builder.Services.AddScoped<IAdAuthentication, AdAuthentication>();
+builder.Services.AddScoped<ITelegramDirectory, TelegramDirectory>();
+builder.Services.AddSingleton<TicketManagementGate>();
+builder.Services.AddSingleton<TelegramBotHealth>();
+builder.Services.AddScoped<TicketManagement>();
+builder.Services.AddScoped<TelegramBotHandler>();
+builder.Services.AddScoped<TelegramBotInbox>();
 builder.Services.AddHttpClient<TelegramClient>(http => { http.Timeout = TimeSpan.FromSeconds(15); http.MaxResponseContentBufferSize = 65536; }).RemoveAllLoggers();
 builder.Services.AddHostedService<TelegramWorker>();
+builder.Services.AddHostedService<TelegramBotWorker>();
+builder.Services.AddHostedService<TicketSyncWorker>();
 builder.Services.AddHostedService<TaskExpiryService>();
 builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.FromSeconds(20); http.MaxResponseContentBufferSize = 2_097_152; });
 var app = builder.Build();
@@ -100,6 +108,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
     await Access.EnsureSchema(db);
+    await TicketManagement.EnsureSchemaAsync(db);
     // Existing deployments use EnsureCreated; add the outbox without changing existing tables.
     string timestamp = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT";
     string outboxSql = "CREATE TABLE IF NOT EXISTS \"TelegramDeliveries\" (\"TicketId\" INTEGER PRIMARY KEY REFERENCES \"Tickets\"(\"Id\") ON DELETE CASCADE, \"Attempts\" INTEGER NOT NULL, \"State\" TEXT NOT NULL, \"NextAttemptAt\" " + timestamp + " NOT NULL, \"SentAt\" " + timestamp + " NULL, \"LastError\" TEXT NOT NULL)";

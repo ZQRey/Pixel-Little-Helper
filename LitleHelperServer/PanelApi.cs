@@ -155,11 +155,19 @@ public static class PanelApi
         }).RequireAuthorization("audit.view");
         app.MapDelete("/api/audit", async (HelperDb db) => { await db.AuditLogs.ExecuteDeleteAsync(); return Results.NoContent(); }).RequireAuthorization("audit.all");
 
-        app.MapGet("/api/tickets", async (ClaimsPrincipal p, HelperDb db) =>
+        app.MapGet("/api/tickets", async (ClaimsPrincipal p, HelperDb db, string? status) =>
         {
             var query = db.Tickets.AsNoTracking();
             string owner = Security.TicketOwner(p);
             if (!Access.Can(p, "tickets.all")) query = query.Where(t => t.Username.ToLower() == owner);
+            if (!string.IsNullOrEmpty(status) && status != "all")
+            {
+                if (status == "active") query = query.Where(t => t.Status == "Created" || t.Status == "1" || t.Status == "2" || t.Status == "3" || t.Status == "4");
+                else if (status == "work") query = query.Where(t => t.Status == "2" || t.Status == "3");
+                else if (int.TryParse(status, out int number) && number is >= 1 and <= 6)
+                    query = number == 1 ? query.Where(t => t.Status == "1" || t.Status == "Created") : query.Where(t => t.Status == status);
+                else return Results.BadRequest(new { error = "Неверный фильтр статуса" });
+            }
             return Results.Ok(await query.OrderByDescending(t => t.CreatedAt).Take(500).ToListAsync());
         }).RequireAuthorization("Panel");
         app.MapPost("/api/tickets", async (TicketRequest request, ClaimsPrincipal p, HelperDb db, GlpiService glpi, IntegrationSettings settings, CancellationToken token) =>
@@ -171,17 +179,17 @@ public static class PanelApi
             if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
             await db.SaveChangesAsync(token); return Results.Ok(ticket);
         }).RequireAuthorization("tickets.manage");
-        app.MapGet("/api/tickets/{id:int}", async (int id, ClaimsPrincipal p, HelperDb db, GlpiService glpi, CancellationToken token) =>
+        app.MapGet("/api/tickets/{id:int}", async (int id, ClaimsPrincipal p, HelperDb db, GlpiService glpi, TicketManagement management, CancellationToken token) =>
         {
             var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
             if (!Access.Can(p, "tickets.all") && !ticket.Username.Equals(Security.TicketOwner(p), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            await management.SyncAsync(ticket, token);
             return Results.Ok(new { local = ticket, glpi = await glpi.GetTicketAsync(ticket.GlpiId, token) });
         }).RequireAuthorization("Panel");
-        app.MapPut("/api/tickets/{id:int}/status", async (int id, TicketStatus request, HelperDb db, GlpiService glpi, CancellationToken token) =>
+        app.MapPut("/api/tickets/{id:int}/status", async (int id, TicketStatus request, HelperDb db, TicketManagement management, CancellationToken token) =>
         {
             var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
-            await glpi.UpdateTicketAsync(ticket.GlpiId, request.Status, token); ticket.Status = request.Status.ToString();
-            await db.SaveChangesAsync(token); return Results.Ok(ticket);
+            await management.SetStatusAsync(ticket, request.Status, token); return Results.Ok(ticket);
         }).RequireAuthorization("tickets.manage");
     }
     private static async Task ProtectLastSuper(HelperDb db, PanelUser user)

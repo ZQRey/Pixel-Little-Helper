@@ -8,5 +8,7 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <Compile Remove="tests\**\*.cs" />
+    <Content Remove="tests\**;artifacts\**" />
+    <None Remove="tests\**;artifacts\**" />
   </ItemGroup>
 </Project>

@@ -31,7 +31,7 @@ public class AdAuthentication(IntegrationSettings settings, ILogger<AdAuthentica
             throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
         return value.ToLowerInvariant();
     }
-    private static LdapConnection Connection(AdOptions options)
+    internal static LdapConnection Connection(AdOptions options)
     {
         var connectionOptions = new LdapConnectionOptions().UseSsl();
         if (options.CaCertificate.Length > 0)

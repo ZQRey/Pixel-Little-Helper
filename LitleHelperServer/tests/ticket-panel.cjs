@@ -1,0 +1,20 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync(require('path').join(__dirname,'../wwwroot/app.js'),'utf8');
+const elements=new Map();
+function element(id){if(id==='#new-ticket')return null;if(!elements.has(id))elements.set(id,{innerHTML:'',value:'',handlers:{},addEventListener(e,f){this.handlers[e]=f;},querySelectorAll(){return [];}});return elements.get(id);}
+let reloads=0;
+const context=vm.createContext({$:element,can:()=>false,date:()=>'',loadPage:async()=>{reloads++;},toast(){}});
+vm.runInContext(source.split('\n').find(l=>l.startsWith('const escape ='))+'\n'+source.split('\n').find(l=>l.startsWith('function table('))+'\n'+source.slice(source.indexOf('let ticketStatusFilter='),source.indexOf('async function ticketForm(')),context);
+context.items=[{id:1,glpiId:100,status:'Created',username:'alice',machineName:'PC',title:'<script>',description:'First'},{id:2,glpiId:101,status:'2',username:'bob',machineName:'PC',title:'Work',description:'Second',assignedUsername:'<admin>'},{id:3,glpiId:102,status:'6',username:'alice',machineName:'PC',title:'Closed',description:'Third'}];
+vm.runInContext('renderTickets(items)',context);
+assert(element('#content').innerHTML.includes('ticket-status-filter'));
+assert(element('#content').innerHTML.includes('Выполнена (решена)'));
+assert(element('#ticket-table').innerHTML.includes('&lt;script&gt;'));
+assert(element('#ticket-table').innerHTML.includes('&lt;admin&gt;'));
+vm.runInContext("ticketStatusFilter='work';renderTickets(items)",context);
+assert(element('#ticket-table').innerHTML.includes('#101'));assert(!element('#ticket-table').innerHTML.includes('#100'));assert(!element('#ticket-table').innerHTML.includes('#102'));
+vm.runInContext("ticketStatusFilter='1';renderTickets(items)",context);assert(element('#ticket-table').innerHTML.includes('#100'));
+vm.runInContext("ticketStatusFilter='6';renderTickets(items)",context);assert(element('#ticket-table').innerHTML.includes('#102'));
+element('#ticket-filter').value='missing';element('#ticket-filter').handlers.input();assert(!element('#ticket-table').innerHTML.includes('#102'));
+element('#ticket-status-filter').handlers.change({target:{value:'active'}});assert.equal(reloads,1);
+console.log('PASS ticket panel: status labels, legacy status, filters, search, escaping, server reload');

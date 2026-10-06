@@ -5,8 +5,10 @@ using System.Text.RegularExpressions;
 
 namespace LitleHelperServer;
 
-public record TelegramOptions(bool Enabled = false, string BotToken = "", string ChatId = "", int ThreadId = 0);
-public record TelegramUpdate(bool Enabled, string? BotToken, string ChatId, int ThreadId = 0, bool ClearBotToken = false);
+public record TelegramOptions(bool Enabled = false, string BotToken = "", string ChatId = "", int ThreadId = 0,
+    bool ManagementEnabled = false, string DirectoryLogin = "", string DirectoryPassword = "", string IdAttribute = "physicalDeliveryOfficeName");
+public record TelegramUpdate(bool Enabled, string? BotToken, string ChatId, int ThreadId = 0, bool ClearBotToken = false,
+    bool ManagementEnabled = false, string DirectoryLogin = "", string? DirectoryPassword = null, string IdAttribute = "physicalDeliveryOfficeName", bool ClearDirectoryPassword = false);
 public record AdOptions(bool Enabled = false, string Host = "", int Port = 636, string Domain = "", string NetbiosDomain = "", string BaseDn = "", string CaCertificate = "");
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
@@ -16,8 +18,8 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
     private string PathName => configuration["Integrations:SettingsFile"] ?? Path.Combine("data", "integrations.json");
     private record Stored(TelegramOptions Telegram, AdOptions Ad);
     private Stored ReadStored() => File.Exists(PathName) ? JsonSerializer.Deserialize<Stored>(File.ReadAllText(PathName))! : new(new(), new());
-    public TelegramOptions Telegram() { lock (gate) { var value = ReadStored().Telegram; return value with { BotToken = value.BotToken.Length == 0 ? "" : protector.Unprotect(value.BotToken) }; } }
-    public object TelegramView() { var v = Telegram(); return new { v.Enabled, v.ChatId, v.ThreadId, hasBotToken = v.BotToken.Length > 0 }; }
+    public TelegramOptions Telegram() { lock (gate) { var value = ReadStored().Telegram; return value with { BotToken = value.BotToken.Length == 0 ? "" : protector.Unprotect(value.BotToken), DirectoryPassword = value.DirectoryPassword.Length == 0 ? "" : protector.Unprotect(value.DirectoryPassword) }; } }
+    public object TelegramView() { var v = Telegram(); return new { v.Enabled, v.ChatId, v.ThreadId, v.ManagementEnabled, v.DirectoryLogin, v.IdAttribute, hasBotToken = v.BotToken.Length > 0, hasDirectoryPassword = v.DirectoryPassword.Length > 0 }; }
     public AdOptions Ad() { lock (gate) return ReadStored().Ad; }
     private void Write(Stored value)
     {
@@ -26,7 +28,8 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
     }
     public void SaveTelegram(TelegramUpdate update)
     {
-        if (update.ThreadId < 0 || update.ChatId.Length > 100 || update.BotToken?.Length > 300 ||
+        if (update.DirectoryLogin.Length > 256 || update.DirectoryPassword?.Length > 256 || !Regex.IsMatch(update.IdAttribute, @"^[A-Za-z][A-Za-z0-9-]{0,63}$") ||
+            update.ThreadId < 0 || update.ChatId.Length > 100 || update.BotToken?.Length > 300 ||
             (update.ChatId.Length > 0 && !Regex.IsMatch(update.ChatId, @"^-?\d+$|^@[A-Za-z0-9_]+$")) ||
             (!string.IsNullOrEmpty(update.BotToken) && !Regex.IsMatch(update.BotToken, @"^\d+:[A-Za-z0-9_-]+$")))
             throw new ArgumentException("Проверьте токен, Chat ID и ID темы Telegram.");
@@ -34,7 +37,10 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
         {
             var old = ReadStored(); var token = update.ClearBotToken ? "" : string.IsNullOrEmpty(update.BotToken) ? old.Telegram.BotToken : protector.Protect(update.BotToken);
             if (update.Enabled && (token.Length == 0 || update.ChatId.Length == 0)) throw new ArgumentException("Для включения Telegram нужны токен бота и Chat ID.");
-            Write(old with { Telegram = new(update.Enabled, token, update.ChatId, update.ThreadId) });
+            string password = update.ClearDirectoryPassword ? "" : string.IsNullOrEmpty(update.DirectoryPassword) ? old.Telegram.DirectoryPassword : protector.Protect(update.DirectoryPassword);
+            if (update.ManagementEnabled && (token.Length == 0 || password.Length == 0 || string.IsNullOrWhiteSpace(update.DirectoryLogin)))
+                throw new ArgumentException("Для управления заявками нужны токен бота и учётная запись чтения AD.");
+            Write(old with { Telegram = new(update.Enabled, token, update.ChatId, update.ThreadId, update.ManagementEnabled, update.DirectoryLogin.Trim(), password, update.IdAttribute) });
         }
     }
     public void SaveAd(AdOptions update)

@@ -76,11 +76,17 @@ public class TicketRecord
     public string MachineName { get; set; } = "";
     public string Title { get; set; } = "";
     public string Description { get; set; } = "";
-    public string Status { get; set; } = "Created";
+    public string Status { get; set; } = "1";
+    public int AssignedGlpiUserId { get; set; }
+    public string AssignedUsername { get; set; } = "";
+    public DateTime? SyncedAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
+    public DbSet<TelegramBotState> TelegramBotStates => Set<TelegramBotState>();
+    public DbSet<TelegramReplySession> TelegramReplySessions => Set<TelegramReplySession>();
+    public DbSet<TelegramHandledUpdate> TelegramHandledUpdates => Set<TelegramHandledUpdate>();
     public DbSet<TelegramDelivery> TelegramDeliveries => Set<TelegramDelivery>();
     public DbSet<Computer> Computers => Set<Computer>();
     public DbSet<ActionButton> Buttons => Set<ActionButton>();

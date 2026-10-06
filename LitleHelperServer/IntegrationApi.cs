@@ -43,9 +43,11 @@ public static class IntegrationApi
             }
             return Results.Ok(new { token = Security.Token(user, config), user });
         }).RequireRateLimiting("login");
-        app.MapGet("/api/settings/telegram", async (IntegrationSettings settings, HelperDb db) => Results.Ok(new
+        app.MapGet("/api/settings/telegram", async (IntegrationSettings settings, HelperDb db, TelegramBotHealth health) => Results.Ok(new
         {
             settings = settings.TelegramView(),
+            botLastError = health.LastError,
+            botLastPollAt = health.LastPollAt,
             pending = await db.TelegramDeliveries.CountAsync(x => x.State == "Pending"),
             failed = await db.TelegramDeliveries.CountAsync(x => x.State == "Failed"),
             lastError = await db.TelegramDeliveries.Where(x => x.LastError != "").OrderByDescending(x => x.TicketId).Select(x => x.LastError).FirstOrDefaultAsync()
@@ -60,6 +62,11 @@ public static class IntegrationApi
         {
             int count = await db.TelegramDeliveries.Where(x => x.State == "Failed").ExecuteUpdateAsync(x => x.SetProperty(d => d.State, "Pending").SetProperty(d => d.Attempts, 0).SetProperty(d => d.NextAttemptAt, DateTime.UtcNow));
             return Results.Ok(new { count });
+        }).RequireAuthorization("settings.manage");
+        app.MapPost("/api/settings/telegram/directory/test", async (TelegramDirectoryProbe request, TelegramBotHandler handler, CancellationToken token) =>
+        {
+            var actor = await handler.ActorAsync(request.TelegramId, token);
+            return Results.Ok(new { success = true, message = "AD, права панели и GLPI проверены: " + actor.User.Username, actor.GlpiUserId });
         }).RequireAuthorization("settings.manage");
         app.MapGet("/api/settings/ad", (IntegrationSettings settings) => Results.Ok(settings.Ad())).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/ad", async (AdOptions update, IntegrationSettings settings, HelperDb db, PanelSessions sessions) =>
@@ -76,4 +83,5 @@ public static class IntegrationApi
         }).RequireAuthorization("settings.manage");
     }
     public record UpdateSwitch(bool Enabled);
+    public record TelegramDirectoryProbe(long TelegramId);
 }

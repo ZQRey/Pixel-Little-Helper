@@ -7,6 +7,8 @@ New-Item -ItemType Directory -Force $testRoot | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Server build failed' }
 & $Dotnet build (Join-Path $PSScriptRoot 'IntegrationTests.csproj') -c Release
 if ($LASTEXITCODE -ne 0) { throw 'Tests build failed' }
+& $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') --telegram-management
+if ($LASTEXITCODE -ne 0) { throw 'Telegram management checks failed' }
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $serverPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $mockPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $serverUrl = "http://127.0.0.1:$serverPort"

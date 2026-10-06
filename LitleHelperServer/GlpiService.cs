@@ -134,4 +134,48 @@ public class GlpiService(HttpClient http, GlpiSettingsStore store, ILogger<GlpiS
         }
         finally { await Kill(session); }
     }
+
+    private async Task<JsonElement> CallAsync(HttpMethod method, string path, object? input, CancellationToken token)
+    {
+        string session = await Init(token);
+        try
+        {
+            using var request = Request(method, path, session);
+            if (input != null) request.Content = JsonContent.Create(new { input });
+            using var response = await http.SendAsync(request, token); await EnsureSuccess(response, token);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token)); return json.RootElement.Clone();
+        }
+        finally { await Kill(session); }
+    }
+    public static int Number(JsonElement value) => value.ValueKind == JsonValueKind.Number ? value.GetInt32() : int.Parse(value.GetString()!);
+    public async Task<int> FindTechnicianAsync(string account, CancellationToken token)
+    {
+        var json = await CallAsync(HttpMethod.Get, "search/User?criteria[0][field]=1&criteria[0][searchtype]=equals&criteria[0][value]=" + Uri.EscapeDataString(account) + "&forcedisplay[0]=2&range=0-2", null, token);
+        if (!json.TryGetProperty("data", out var rows) || rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() != 1)
+            throw new InvalidOperationException("В GLPI должен существовать ровно один пользователь с логином AD " + account + ".");
+        int id = Number(rows[0].GetProperty("2"));
+        var user = await CallAsync(HttpMethod.Get, "User/" + id, null, token);
+        if (!user.GetProperty("name").GetString()!.Equals(account, StringComparison.OrdinalIgnoreCase) || Number(user.GetProperty("is_active")) != 1 || Number(user.GetProperty("is_deleted")) != 0)
+            throw new InvalidOperationException("Пользователь GLPI отключён или его логин не совпадает с AD.");
+        return id;
+    }
+    public async Task<int[]> AssigneesAsync(int id, CancellationToken token)
+    {
+        var rows = await CallAsync(HttpMethod.Get, "Ticket/" + id + "/Ticket_User?range=0-999", null, token);
+        return rows.EnumerateArray().Where(r => Number(r.GetProperty("type")) == 2).Select(r => Number(r.GetProperty("users_id"))).Distinct().ToArray();
+    }
+    public async Task AssignAsync(int id, int userId, CancellationToken token) =>
+        await CallAsync(HttpMethod.Put, "Ticket/" + id, new { id, _users_id_assign = userId, status = 2 }, token);
+    public async Task FollowupAsync(int id, string username, string text, CancellationToken token)
+    {
+        var result = await CallAsync(HttpMethod.Post, "ITILFollowup", new { itemtype = "Ticket", items_id = id, content = System.Net.WebUtility.HtmlEncode("[Telegram · " + username + "]\n" + text).Replace("\n", "<br>"), is_private = 0 }, token);
+        if (!result.TryGetProperty("id", out var created) || Number(created) <= 0) throw new InvalidOperationException("GLPI не подтвердил сохранение ответа. Проверьте заявку перед повтором.");
+    }
+    public async Task SolveAsync(int id, string username, string text, CancellationToken token)
+    {
+        var result = await CallAsync(HttpMethod.Post, "ITILSolution", new { itemtype = "Ticket", items_id = id, content = System.Net.WebUtility.HtmlEncode("[Telegram · " + username + "]\n" + text).Replace("\n", "<br>") }, token);
+        if (!result.TryGetProperty("id", out var created) || Number(created) <= 0) throw new InvalidOperationException("GLPI не подтвердил сохранение решения. Проверьте заявку перед повтором.");
+    }
+    public async Task<JsonElement> FollowupsAsync(int id, CancellationToken token) =>
+        await CallAsync(HttpMethod.Get, "Ticket/" + id + "/ITILFollowup?range=0-999", null, token);
 }

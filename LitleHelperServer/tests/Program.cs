@@ -3,8 +3,23 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 static void Check(bool result, string text) { if (!result) throw new Exception(text); Console.WriteLine("PASS " + text); }
+if (args.FirstOrDefault() == "--permissions-schema")
+{
+    using var db = new LitleHelperServer.HelperDb(new DbContextOptionsBuilder<LitleHelperServer.HelperDb>().UseSqlite("Data Source=:memory:").Options);
+    await db.Database.OpenConnectionAsync(); await db.Database.EnsureCreatedAsync();
+    db.Users.Add(new() { Username = "legacy", PasswordHash = "!AD", Role = "User" }); await db.SaveChangesAsync();
+    await db.Database.ExecuteSqlRawAsync("ALTER TABLE Users DROP COLUMN PermissionOverrides");
+    await LitleHelperServer.Access.EnsureSchema(db); db.ChangeTracker.Clear();
+    var user = await db.Users.SingleAsync();
+    Check(user.Username == "legacy" && user.Permissions.Count == 0, "legacy SQLite users preserved with empty overrides");
+    user.Permissions = new() { ["users.manage"] = true }; await db.SaveChangesAsync();
+    await LitleHelperServer.Access.EnsureSchema(db); db.ChangeTracker.Clear();
+    Check((await db.Users.SingleAsync()).EffectivePermissions.Contains("users.manage"), "repeated migration preserves individual permissions");
+    return;
+}
 if (args.FirstOrDefault() == "--ad-referrals")
 {
     await using var ldap = new MockAd();

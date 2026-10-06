@@ -93,6 +93,23 @@ public sealed class PetWindow : Window
         robot.MouseLeftButtonDown += MouseDownRobot;
         robot.MouseMove += MouseMoveRobot;
         robot.MouseLeftButtonUp += MouseUpRobot;
+        robot.MouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            if (firstPrompt || mouseDown) return;
+            Wake(); HideBubbles();
+            var menu = new ContextMenu { PlacementTarget = robot, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+            if (hub?.IsOnline == true && superAvailable)
+            {
+                var admin = new MenuItem { Header = "Кнопки супер админа" };
+                admin.Click += (_, _) => OpenSuperAdminWindow();
+                menu.Items.Add(admin);
+            }
+            var exit = new MenuItem { Header = "Закрыть помощника" };
+            exit.Click += (_, _) => Close();
+            menu.Items.Add(exit);
+            menu.IsOpen = true;
+        };
         robot.LostMouseCapture += (_, _) => { if (mouseDown) EndDrag(); };
         SourceInitialized += InitializeNative;
         Loaded += async (_, _) =>
@@ -349,29 +366,22 @@ public sealed class PetWindow : Window
     private void ShowMenu()
     {
         HideBubbles(); Expand(); menuOpen = true; Wake();
-        for (int i = 0; i < actions.Count; i++)
+        var visibleActions = actions.Where(a => a.Type != "exit").ToList();
+        for (int i = 0; i < visibleActions.Count; i++)
         {
-            var action = actions[i]; var button = MakeButton(action.Title);
+            var action = visibleActions[i]; var button = MakeButton(action.Title);
             button.Click += async (_, _) => await ExecuteAction(action);
             AddBubble(button, 10 + (i % 3) * 162, 18 + (i / 3) * 56, 154, 48);
         }
-        if (hub?.IsOnline == true)
-        {
-            if (superAvailable)
-            {
-                var admin = MakeButton("Кнопки супер админа"); admin.Click += (_, _) =>
-                {
-                    HideBubbles(); if (superWindow != null) { superWindow.Activate(); return; }
-                    try { superWindow = new SuperAdminWindow(settings); superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); }
-                    catch (Exception ex) { Settings.Log(ex); ShowNotice(ex.Message); }
-                };
-                AddBubble(admin, 10, 292, 300, 34);
-            }
-            var exit = MakeButton("Закрыть помощника"); exit.Click += (_, _) => Close();
-            AddBubble(exit, 322, 292, 154, 34);
-        }
         KeepMenuVisible(); UpdateRegion();
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();
+    }
+    private void OpenSuperAdminWindow()
+    {
+        if (hub?.IsOnline != true || !superAvailable) return;
+        if (superWindow != null) { superWindow.Activate(); return; }
+        try { superWindow = new SuperAdminWindow(settings); superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); }
+        catch (Exception ex) { Settings.Log(ex); ShowNotice(ex.Message); }
     }
     private void HideBubbles()
     {

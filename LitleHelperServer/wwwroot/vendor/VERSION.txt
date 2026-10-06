@@ -1,0 +1,1 @@
+@microsoft/signalr 8.0.29; source: https://registry.npmjs.org/@microsoft/signalr/-/signalr-8.0.29.tgz

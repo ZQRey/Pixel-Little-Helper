@@ -1,0 +1,37 @@
+services:
+  server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      ASPNETCORE_URLS: http://+:5000
+      Database__Provider: Postgres
+      ConnectionStrings__Database: Host=db;Database=litlehelper;Username=litlehelper;Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+      Glpi__BaseUrl: ${GLPI_BASE_URL:-http://glpi.gp1.loc/apirest.php}
+      Glpi__AppToken: ${GLPI_APP_TOKEN:-}
+      Glpi__UserToken: ${GLPI_USER_TOKEN:-}
+      Glpi__ServiceUserId: ${GLPI_SERVICE_USER_ID:-0}
+    volumes:
+      - server-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litlehelper
+      POSTGRES_USER: litlehelper
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litlehelper -d litlehelper"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  postgres-data:
+  server-data:

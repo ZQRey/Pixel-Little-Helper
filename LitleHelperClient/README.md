@@ -1,0 +1,70 @@
+# LitleHelperClient / PixelHelper 1.1
+
+WPF-помощник Windows 10/11 x64 на .NET 8. Сохранены прозрачность, анимации, перетаскивание, автозапуск, сон и клики сквозь пустые области. Добавлены SignalR, инвентарь, административные команды и GLPI.
+
+Свежий MSI: `artifacts/release-1.1.0/PixelHelper.msi`. Для переносного запуска EXE нужны **все** соседние файлы `artifacts/release-1.1.0/publish`. Старый `artifacts/publish` не является новым релизом. Закройте старого помощника перед запуском нового: действует ограничение одного экземпляра на пользователя.
+
+## Настройки
+
+Получите ключ для имени ПК в панели сервера, затем создайте `%APPDATA%\PixelHelper\config.json`:
+
+```json
+{
+  "x": null, "y": null,
+  "serverUrl": "http://helper-server:5000",
+  "hubUrl": null,
+  "clientToken": "КЛЮЧ-ДЛЯ-ЭТОГО-ПК",
+  "enableAdministrativeCommands": true,
+  "allowRemoteCommands": false
+}
+```
+
+hubUrl задаёт полный адрес явно; иначе используется serverUrl + /helperHub. Без ключа соединение не запускается. Если user config отсутствует, читается config.example.json возле EXE. Перезапуск применяет изменения. Координаты сохраняются при перетаскивании/выходе; первое «Да» добавляет HKCU/Run, «Нет» отмечает первое появление и закрывает помощника. Последующий ручной запуск разрешён без автозагрузки.
+
+## Онлайн и офлайн
+
+WithAutomaticReconnect дополнен повторами первого подключения. Регистрация отправляет ПК, AD-логин, домен, IP и Windows. WMI/реестр читаются в фоне при подключении и по запросу администратора. Во время реконнекта и без сети показываются ровно пять кнопок:
+
+1. Поиск файлов и папок — explorer.exe search-ms:.
+2. Открыть DMED — https://krg.dmed.kz.
+3. Открыть EISZ — https://www.eisz.kz.
+4. Отключить автозапуск — удаление HKCU/Run PixelHelper.
+5. Закрыть помощника.
+
+Старый actions_cache.json не используется меню. ApiClient сохранён для совместимости прежнего REST-кода/тестов, но WPF 1.1 подключается через HubConnectionService. Серверные кнопки приходят OnButtonsUpdated, при регистрации/реконнекте и каждые 30 минут; максимум 12. Онлайн также доступны закрытие и отключение автозапуска; офлайн они входят в фиксированные пять и не дублируются.
+
+Ticket открывает поле текста без пароля. Хаб CreateTicket(title, description) получает username/PC из регистрации соединения. Успех: «Заявка №ID успешно создана!». При ошибке текст сохраняется; GLPI-секреты находятся только на сервере.
+
+## Команды
+
+enableAdministrativeCommands регулирует RPC; allowRemoteCommands отдельно разрешает EXE-кнопки. Команды выполняются с правами пользователя, при отказе доступа возвращаются stderr/exit code. SYSTEM-worker не устанавливается: выбран fallback из задания.
+
+CMD/PS передают поток stdout/stderr и итог с taskId. Команды последовательные, максимум 3 минуты/128 КиБ. Kill нормализует excel.exe в excel и запрещает завершение самого помощника. Питание: shutdown.exe /r или /s /t 5 /f. Тесты не запускают питание и Kill пользовательских процессов.
+
+## Сборка
+
+```powershell
+python -m pip install Pillow
+python tools/generate_assets.py
+dotnet build PixelHelper.csproj -c Release
+dotnet run --project tests/PixelHelper.Tests.csproj -c Release
+.\tools\build.ps1 -WixBin 'C:\Tools\wix314'
+# Без MSI:
+.\tools\build.ps1 -SkipMsi
+```
+
+SDK/Pillow/WiX нужны разработчику; MSI включает runtime. Генератор создаёт 10 прозрачных кадров 48×48 и Assets/preview.png. WiX 3.14.1, Product.wxs использует схему WiX 3. Скрипт собирает релиз в artifacts/release-VERSION; OutputDirectory позволяет задать каталог.
+
+```powershell
+msiexec /i PixelHelper.msi /qn /norestart
+msiexec /x PixelHelper.msi /qn /norestart
+PixelHelper.exe --reset-user-data
+```
+
+Сброс текущего пользователя запускайте при закрытом помощнике. Полное удаление MSI чистит профили, upgrade пропускает очистку. Подробные инструкции GPO, роли и GLPI: `../LitleHelperServer/README.md`.
+
+## Ограничения
+
+Win32-регион строится по alpha ≥20, кнопки включаются, промежутки исключаются. GDI-регионы кэшируются. Окно 96×96 расширяется для меню до 500×400; после HWND_BOTTOM порядок корректируется перед shell-хостом значков, чтобы Explorer не закрыл робота целиком. Перекрытая анимация останавливается. DPI, Win+D, Explorer и клики по значкам требуют проверки на целевой Windows.
+
+Диагностика: `PixelHelper.exe --diagnostics "C:\path\diagnostics.json"`, 5 секунд прогрева +30 измерения, без изменений реестра/координат. **Хаб в этом режиме не включается.** Старые замеры 1.0 не относятся к сетевому клиенту 1.1. Жёсткий бюджет 25–35 МБ RAM/CPU ≤0,1% не гарантируется: исходная WPF-версия его не выполнила, SignalR/WMI добавляют зависимости. Свежие функциональные результаты — `../VERIFICATION.md`.

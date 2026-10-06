@@ -164,6 +164,11 @@ try
     pet.UpdateLayout();
     Check(pet.ActualWidth == 500 && pet.ActualHeight == 400, "expanded menu layout");
     Check(pet.InputHitTest(new System.Windows.Point(250, 318)) is System.Windows.Controls.Image, "robot input remains correct with menu open");
+    var menuCanvas = (System.Windows.Controls.Canvas)pet.Content;
+    foreach (var child in menuCanvas.Children.OfType<System.Windows.UIElement>()) { child.BeginAnimation(System.Windows.UIElement.OpacityProperty, null); child.Opacity = 1; }
+    var menuBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(500, 400, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); menuBitmap.Render(menuCanvas);
+    var menuPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "menu-preview.png")); Directory.CreateDirectory(Path.GetDirectoryName(menuPreview)!);
+    var menuPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); menuPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(menuBitmap)); using (var menuImage = File.Create(menuPreview)) menuPng.Save(menuImage);
     typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
     Check(pet.ActualWidth == 96 && pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "menu collapse restores robot hit testing");

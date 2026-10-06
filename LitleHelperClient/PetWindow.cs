@@ -306,12 +306,43 @@ public sealed class PetWindow : Window
     }
     internal static Button MakeButton(string title) => new()
     {
-        Content = title, Background = Brushes.AliceBlue, Foreground = new SolidColorBrush(Color.FromRgb(24, 54, 85)),
-        BorderBrush = new SolidColorBrush(Color.FromRgb(55, 117, 161)), BorderThickness = new Thickness(2),
-        Padding = new Thickness(6), FontSize = 12, Cursor = Cursors.Hand,
+        Content = title, Style = AssistantButtonStyle,
+        Padding = new Thickness(10, 2, 10, 2), FontSize = 12, Cursor = Cursors.Hand,
         Focusable = false, SnapsToDevicePixels = true,
         ContentTemplate = WrappingTemplate()
     };
+    private static readonly Style AssistantButtonStyle = (Style)System.Windows.Markup.XamlReader.Parse("""
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
+          <Setter Property="Foreground" Value="#183655"/>
+          <Setter Property="Background" Value="#F0F8FF"/>
+          <Setter Property="BorderBrush" Value="#83B7D9"/>
+          <Setter Property="BorderThickness" Value="1"/>
+          <Setter Property="FontFamily" Value="Segoe UI"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <Border x:Name="Card" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                        Margin="3" CornerRadius="10" Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                  <Border.Effect><DropShadowEffect Color="#183655" BlurRadius="4" ShadowDepth="1" Opacity="0.22"/></Border.Effect>
+                  <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Card" Property="Background" Value="#DDF3FF"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="#329ED2"/>
+                  </Trigger>
+                  <Trigger Property="IsPressed" Value="True">
+                    <Setter TargetName="Card" Property="Background" Value="#BDE7FA"/>
+                    <Setter TargetName="Card" Property="BorderBrush" Value="#2179A8"/>
+                  </Trigger>
+                  <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        """);
     private static DataTemplate WrappingTemplate()
     {
         var factory = new FrameworkElementFactory(typeof(TextBlock));
@@ -367,11 +398,13 @@ public sealed class PetWindow : Window
     {
         HideBubbles(); Expand(); menuOpen = true; Wake();
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
+        int rows = (visibleActions.Count + 1) / 2;
         for (int i = 0; i < visibleActions.Count; i++)
         {
             var action = visibleActions[i]; var button = MakeButton(action.Title);
+            button.ToolTip = action.Title;
             button.Click += async (_, _) => await ExecuteAction(action);
-            AddBubble(button, 10 + (i % 3) * 162, 18 + (i / 3) * 56, 154, 48);
+            AddBubble(button, 54 + (i % 2) * 202, 278 - rows * 44 + (i / 2) * 44, 190, 40);
         }
         KeepMenuVisible(); UpdateRegion();
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();

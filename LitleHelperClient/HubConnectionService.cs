@@ -17,6 +17,8 @@ public sealed class HubConnectionService : IAsyncDisposable
     public bool IsOnline => registered && connection.State == HubConnectionState.Connected;
     public event Action<bool>? OnlineChanged;
     public event Action<List<ActionButton>>? ButtonsUpdated;
+    public event Action<bool>? SuperAdminAvailable;
+    public event Func<ClientNotice, Task<string>>? NoticeReceived;
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
@@ -33,6 +35,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         }).WithAutomaticReconnect().Build();
         connection.On<List<ActionButton>>("OnButtonsUpdated", buttons => { if (registered) ButtonsUpdated?.Invoke(buttons); });
         connection.On<CommandEnvelope>("ExecuteCommand", RunTask);
+        connection.On<bool>("SuperAdminAvailable", available => SuperAdminAvailable?.Invoke(available));
         connection.On("RefreshInventory", SendInventory);
         connection.On<string>("KillProcess", name => RunTask(new(Guid.NewGuid().ToString("N"), "kill", name)));
         connection.On("Reboot", () => RunTask(new(Guid.NewGuid().ToString("N"), "reboot", "")));
@@ -41,7 +44,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         connection.Closed += _ => { Offline(); return Task.CompletedTask; };
         connection.Reconnected += async _ => { try { await Register(); } catch (Exception ex) { Settings.Log(ex); Offline(); } };
     }
-    private void Offline() { registered = false; OnlineChanged?.Invoke(false); }
+    private void Offline() { registered = false; SuperAdminAvailable?.Invoke(false); OnlineChanged?.Invoke(false); }
     public void Start() => loop ??= ConnectLoop();
     private async Task ConnectLoop()
     {
@@ -110,7 +113,18 @@ public sealed class HubConnectionService : IAsyncDisposable
         try
         {
             (string Output, int ExitCode) result;
-            if (task.Type == "inventory") { bool updated = await SendInventory(); result = updated ? ("Инвентаризация обновлена", 0) : ("Инвентаризация не отправлена: ошибка связи или предыдущий сбор ещё выполняется", 1); }
+            if (task.Type == "notice")
+            {
+                try
+                {
+                    var notice = System.Text.Json.JsonSerializer.Deserialize<ClientNotice>(task.Payload, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (notice == null || string.IsNullOrWhiteSpace(notice.Text) || notice.Text.Length > 1000 || notice.DurationSeconds is < 10 or > 300 || NoticeReceived == null)
+                        result = ("Сообщение не показано: неверные данные или окно недоступно", 1);
+                    else result = (await NoticeReceived(notice), 0);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { result = ("Сообщение не показано: " + ex.Message, 1); }
+            }
+            else if (task.Type == "inventory") { bool updated = await SendInventory(); result = updated ? ("Инвентаризация обновлена", 0) : ("Инвентаризация не отправлена: ошибка связи или предыдущий сбор ещё выполняется", 1); }
             else result = await executor.ExecuteAsync(task, async output =>
             {
                 try { if (IsOnline) await connection.InvokeAsync("SendExecutionOutput", task.TaskId, output, lifetime.Token); }

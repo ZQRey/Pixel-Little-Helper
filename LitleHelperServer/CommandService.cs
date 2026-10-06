@@ -13,10 +13,19 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
         if (user == null || !user.IsActive || user.MustChangePassword || !principal.HasClaim("version", user.SecurityVersion.ToString()))
             throw new UnauthorizedAccessException("Требуется повторный вход");
         bool super = Access.Can(user, "terminal.execute");
-        if (!Access.Can(user, "commands.execute")) throw new UnauthorizedAccessException("Недостаточно прав");
-        if (request.Machines.Length is < 1 or > 500 || request.Payload.Length > 8000) throw new ArgumentException("Неверный размер команды");
+        if (request.Type == "notice") { if (user.Role != Roles.SuperAdmin) throw new UnauthorizedAccessException("Сообщения доступны только SuperAdmin"); }
+        else if (!Access.Can(user, "commands.execute")) throw new UnauthorizedAccessException("Недостаточно прав");
+        if (request.Machines == null || request.Payload == null || request.Machines.Length is < 1 or > 500 || request.Payload.Length > 8000) throw new ArgumentException("Неверный размер команды");
         string type = request.Type, payload = request.Payload;
-        if (type is "cmd" or "powershell")
+        if (type == "notice")
+        {
+            ClientNotice notice;
+            try { notice = JsonSerializer.Deserialize<ClientNotice>(payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new ArgumentException("Введите сообщение"); }
+            catch (JsonException) { throw new ArgumentException("Неверное сообщение"); }
+            AnnouncementService.Validate(notice.Text, notice.DurationSeconds);
+            payload = JsonSerializer.Serialize(notice with { Sender = string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName });
+        }
+        else if (type is "cmd" or "powershell")
         {
             if (!super) throw new UnauthorizedAccessException("Не выдано право CMD / PowerShell");
             if (string.IsNullOrWhiteSpace(payload)) throw new ArgumentException("Введите команду");

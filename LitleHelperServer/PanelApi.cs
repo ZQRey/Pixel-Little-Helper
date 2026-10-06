@@ -121,24 +121,31 @@ public static class PanelApi
 
         app.MapGet("/api/permissions", () => Results.Ok(new { catalog = Access.Catalog, roles = Roles.All.ToDictionary(r => r, r => Access.Defaults(r)) })).RequireAuthorization("users.manage");
         app.MapGet("/api/users", async (HelperDb db) => Results.Ok(await db.Users.AsNoTracking().OrderBy(u => u.Username).ToListAsync())).RequireAuthorization("users.manage");
-        app.MapPost("/api/users", async (UserRequest request, HelperDb db) =>
+        app.MapPost("/api/users", async (UserRequest request, ClaimsPrincipal p, HelperDb db, AnnouncementService announcements, CancellationToken token) =>
         {
             ValidateUser(request, true); string name = Security.Login(request.Username);
             if (await db.Users.AnyAsync(u => u.Username == name)) return Results.Conflict(new { error = "Логин уже существует" });
             var user = new PanelUser { Username = name, FullName = request.FullName.Trim(), Role = request.Role, IsActive = request.IsActive,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password!, 12), MustChangePassword = true, Permissions = request.Permissions ?? new() };
+            user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
             db.Users.Add(user); await db.SaveChangesAsync(); return Results.Ok(user);
         }).RequireAuthorization("users.manage");
-        app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, HelperDb db, PanelSessions sessions) =>
+        app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, ClaimsPrincipal p, HelperDb db, PanelSessions sessions, AnnouncementService announcements, CancellationToken token) =>
         {
             ValidateUser(request, false); var user = await db.Users.FindAsync(id); if (user == null) return Results.NotFound();
             if (user.AuthSource == "AD" && (Security.Login(request.Username) != user.Username || !string.IsNullOrEmpty(request.Password))) return Results.BadRequest(new { error = "Логин и пароль AD изменяются в Active Directory." });
             if (user.Role == Roles.SuperAdmin && user.IsActive && (request.Role != Roles.SuperAdmin || !request.IsActive)) await ProtectLastSuper(db, user);
             string name = Security.Login(request.Username);
             if (await db.Users.AnyAsync(u => u.Id != id && u.Username == name)) return Results.Conflict(new { error = "Логин уже существует" });
+            if (request.AssistantMachine != null)
+            {
+                if (!p.IsInRole(Roles.SuperAdmin) && Security.Canonical(request.AssistantMachine) != user.AssistantMachine) return Results.Forbid();
+                if (p.IsInRole(Roles.SuperAdmin)) user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
+            }
+            if (request.Role != Roles.SuperAdmin) user.AssistantMachine = "";
             user.Username = name; user.FullName = request.FullName.Trim(); user.Role = request.Role; user.IsActive = request.IsActive; if (request.Permissions != null) user.Permissions = request.Permissions; user.SecurityVersion++;
             if (!string.IsNullOrEmpty(request.Password)) { user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12); user.MustChangePassword = true; }
-            await db.SaveChangesAsync(); sessions.Revoke(user.Id); return Results.Ok(user);
+            await db.SaveChangesAsync(); sessions.Revoke(user.Id); await announcements.RefreshAvailabilityAsync(token); return Results.Ok(user);
         }).RequireAuthorization("users.manage");
         app.MapDelete("/api/users/{id:int}", async (int id, HelperDb db, PanelSessions sessions) =>
         {

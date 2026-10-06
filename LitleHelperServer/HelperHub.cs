@@ -65,9 +65,11 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         c.CurrentUser = Security.Login(info.UserName); c.DomainName = info.DomainName; c.IpAddress = info.IpAddress;
         c.OsVersion = info.OsVersion; c.LastSeen = DateTime.UtcNow;
         await db.SaveChangesAsync(); await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
-        var buttons = await Buttons(db, c); await Clients.Caller.SendAsync("OnButtonsUpdated", buttons); return buttons;
+        var buttons = await Buttons(db, c); await Clients.Caller.SendAsync("OnButtonsUpdated", buttons);
+        await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName));
+        return buttons;
     }
-    public async Task Heartbeat() { var c = await Agent(); c.LastSeen = DateTime.UtcNow; await db.SaveChangesAsync(); }
+    public async Task Heartbeat() { var c = await Agent(); c.LastSeen = DateTime.UtcNow; await db.SaveChangesAsync(); await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName)); }
     public async Task UpdateHardwareAndSoftware(JsonElement hardware, JsonElement software)
     {
         var c = await Agent();

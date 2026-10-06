@@ -117,6 +117,9 @@ public static class TelegramManagementTests
             await db.Database.ExecuteSqlRawAsync("ALTER TABLE Tickets DROP COLUMN AssignedUsername");
             await db.Database.ExecuteSqlRawAsync("ALTER TABLE Tickets DROP COLUMN SyncedAt");
             await TicketManagement.EnsureSchemaAsync(db); await TicketManagement.EnsureSchemaAsync(db);
+            await db.Database.ExecuteSqlRawAsync("ALTER TABLE Users DROP COLUMN AssistantMachine");
+            await AnnouncementService.EnsureSchemaAsync(db); await AnnouncementService.EnsureSchemaAsync(db);
+            Check(true,"legacy user schema gains assistant binding without destructive migration");
             var alice = new PanelUser { Username = "alice@ad.test", PasswordHash = "!AD", Role = Roles.User };
             var bob = new PanelUser { Username = "bob@ad.test", PasswordHash = "!AD", Role = Roles.Admin };
             var ticket = new TicketRecord { GlpiId = 100, Description = "Issue" };

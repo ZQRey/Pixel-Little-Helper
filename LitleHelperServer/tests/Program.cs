@@ -199,6 +199,40 @@ try
     bool spoofRejected = false;
     try { await agent.InvokeAsync("SendExecutionResult", "unknown-task", "spoof", 0); } catch { spoofRejected = true; }
     Check(spoofRejected, "unissued task result rejected");
+    foreach(string role in new[]{"manager","operator","alice"})
+    {
+        using var forbiddenMessage=await Call("/messages",staffTokens[role],new{machines=new[]{"TEST-PC"},text="Denied"});
+        Check(forbiddenMessage.StatusCode==HttpStatusCode.Forbidden,role+" cannot send assistant messages");
+        using var forbiddenButtons=await Call("/super-buttons",staffTokens[role]);Check(forbiddenButtons.StatusCode==HttpStatusCode.Forbidden,role+" cannot configure super buttons");
+    }
+    var noticeReceived=new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+    agent.On<JsonElement>("ExecuteCommand",envelope=>{if(envelope.GetProperty("type").GetString()=="notice")noticeReceived.TrySetResult(JsonDocument.Parse(envelope.GetProperty("payload").GetString()!).RootElement.Clone());});
+    var noticeTasks=await Json("/messages",admin,new{machines=new[]{"TEST-PC"},text="Test comic message",durationSeconds=30});
+    var noticeWire=await noticeReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    Check(noticeWire.GetProperty("Text").GetString()=="Test comic message" && noticeWire.GetProperty("Sender").GetString()!="", "super message delivered to selected agent with trusted sender");
+    for(int n=0;n<30;n++){var result=await Json("/tasks/"+noticeTasks[0].GetProperty("taskId").GetString(),admin);if(result.GetProperty("status").GetString()=="Completed")break;await Task.Delay(100);}
+    using(var invalidNotice=await Call("/messages",admin,new{machines=new[]{"ALL"},text=new string('x',1001)}))Check(invalidNotice.StatusCode==HttpStatusCode.BadRequest,"message length limit enforced");
+    await Json("/users",admin,new{username="notice-delegate",fullName="Delegate",role="User",isActive=true,password="Start8!x",permissions=new Dictionary<string,bool>{{"commands.execute",true},{"terminal.execute",true}}});
+    var noticeDelegate=await Change(await Login("notice-delegate","Start8!x"),"Start8!x","Delegate8!x");
+    using(var delegatedNotice=await Call("/commands",noticeDelegate,new{machines=new[]{"TEST-PC"},type="notice",payload="{\"Text\":\"Denied\",\"DurationSeconds\":30}"}))Check(delegatedNotice.StatusCode==HttpStatusCode.Forbidden,"command and terminal grants do not bypass SuperAdmin-only messaging");
+    using(var badBinding=await Call("/users",admin,new{username="bad-binding",fullName="Wrong",role="User",isActive=true,password="Start8!x",assistantMachine="TEST-PC"}))Check(badBinding.StatusCode==HttpStatusCode.BadRequest,"ordinary user cannot be bound as super administrator");
+    http.DefaultRequestHeaders.Add("X-Machine-Name","TEST-PC");http.DefaultRequestHeaders.Add("X-Client-Key",key);
+    using(var unbound=await Call("/super-client/buttons",admin))Check(unbound.StatusCode==HttpStatusCode.Forbidden,"unbound super administrator cannot send from a client");
+    await Json("/users/1",admin,new{username="admin",fullName="Root",role="SuperAdmin",isActive=true,assistantMachine="TEST-PC"},HttpMethod.Put);admin=await Login("admin","Admin8!x");
+    Check((await Json("/super-client/buttons",admin)).GetArrayLength()==1,"bound super administrator can load separate buttons");
+    http.DefaultRequestHeaders.Remove("X-Client-Key");http.DefaultRequestHeaders.Add("X-Client-Key",new string('x',48));
+    using(var wrongKey=await Call("/super-client/buttons",admin))Check(wrongKey.StatusCode==HttpStatusCode.Forbidden,"client binding also requires actual agent key");
+    http.DefaultRequestHeaders.Remove("X-Client-Key");http.DefaultRequestHeaders.Add("X-Client-Key",key);
+    http.DefaultRequestHeaders.Remove("X-Machine-Name");http.DefaultRequestHeaders.Add("X-Machine-Name","OTHER-PC");
+    using(var wrongMachine=await Call("/super-client/buttons",admin))Check(wrongMachine.StatusCode==HttpStatusCode.Forbidden,"super token cannot be used from another computer");
+    http.DefaultRequestHeaders.Remove("X-Machine-Name");http.DefaultRequestHeaders.Add("X-Machine-Name","TEST-PC");
+    var superButton=await Json("/super-buttons",admin,new{title="Maintenance",message="Maintenance soon",target="all",durationSeconds=60,isActive=true});
+    Check((await Json("/super-client/buttons",admin)).GetArrayLength()==2,"super button changes available to authenticated bound client");
+    var clientNotice=await Json("/super-client/send",admin,new{machines=new[]{"ALL"},text="From bound helper",durationSeconds=30});Check(clientNotice.GetArrayLength()==1,"bound client can send to all registered helpers");
+    using(var deletedSuperButton=await Call("/super-buttons/"+superButton.GetProperty("id").GetInt32(),admin,method:HttpMethod.Delete))Check(deletedSuperButton.StatusCode==HttpStatusCode.NoContent,"super button can be removed");
+    await Json("/users/1",admin,new{username="admin",fullName="Root",role="SuperAdmin",isActive=true,assistantMachine=""},HttpMethod.Put);admin=await Login("admin","Admin8!x");
+    using(var removedBinding=await Call("/super-client/send",admin,new{machines=new[]{"TEST-PC"},text="Denied"}))Check(removedBinding.StatusCode==HttpStatusCode.Forbidden,"removed binding blocks further client sends immediately");
+    http.DefaultRequestHeaders.Remove("X-Machine-Name");http.DefaultRequestHeaders.Remove("X-Client-Key");
     var added = await Json("/buttons", staffTokens["manager"], new { title = "New URL", actionType = "open_url", payload = "https://example.org", targetGroup = "All", isActive = true, orderIndex = 10 });
     pushed = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
     await Json("/buttons/apply", admin, new { });
@@ -302,7 +336,9 @@ try
     using var localAdLogin = await Call("/auth/login", body: new { username = "alice@ad.test", password = "AD-test-password" }); Check(localAdLogin.StatusCode == HttpStatusCode.Unauthorized, "AD account cannot authenticate through local password endpoint");
     await Json("/users/" + adId, admin, new { username = "alice@ad.test", fullName = "Alice AD", role = "User", isActive = false }, HttpMethod.Put);
     using var revokedAd = await Call("/tickets", adToken); Check(revokedAd.StatusCode == HttpStatusCode.Unauthorized, "disabled AD user token revoked immediately");
-    using var blockedAd = await Call("/auth/ad", body: new { username = "alice@ad.test", password = "AD-test-password" }); Check(blockedAd.StatusCode == HttpStatusCode.Unauthorized, "disabled AD user cannot reactivate by signing in");
+    using var blockedAd = await Call("/auth/ad", body: new { username = "alice@ad.test", password = "AD-test-password" });
+    if(blockedAd.StatusCode==HttpStatusCode.TooManyRequests){Console.WriteLine("Waiting for login rate-limit window before disabled-account check");await Task.Delay(TimeSpan.FromSeconds(60));using var retried=await Call("/auth/ad",body:new{username="alice@ad.test",password="AD-test-password"});Check(retried.StatusCode==HttpStatusCode.Unauthorized,"disabled AD user cannot reactivate by signing in");}
+    else Check(blockedAd.StatusCode==HttpStatusCode.Unauthorized,"disabled AD user cannot reactivate by signing in");
     if (args.Length > 3) { string stored = File.ReadAllText(args[3]); Check(!stored.Contains("123456:mock-token") && !stored.Contains("AD-test-password"), "Telegram token encrypted and AD user password never saved"); }
     using var unavailableUpdate = await http.GetAsync("/api/client-updates/latest"); Check(unavailableUpdate.StatusCode == HttpStatusCode.NoContent, "no update offered before publishing");
     foreach (string restricted in new[] { "manager", "operator", "alice" })

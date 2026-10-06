@@ -84,6 +84,7 @@ builder.Services.AddRateLimiter(options =>
 });
 builder.Services.AddSignalR(options => { options.MaximumReceiveMessageSize = 1_500_000; options.EnableDetailedErrors = false; });
 builder.Services.AddScoped<CommandService>();
+builder.Services.AddScoped<AnnouncementService>();
 builder.Services.AddSingleton<PanelSessions>();
 builder.Services.AddSingleton<GlpiSettingsStore>();
 builder.Services.AddSingleton<IntegrationSettings>();
@@ -108,6 +109,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
     await Access.EnsureSchema(db);
+    await AnnouncementService.EnsureSchemaAsync(db);
     await TicketManagement.EnsureSchemaAsync(db);
     // Existing deployments use EnsureCreated; add the outbox without changing existing tables.
     string timestamp = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT";
@@ -122,6 +124,7 @@ using (var scope = app.Services.CreateScope())
         new ActionButton { Title = "Открыть DMED", Payload = "https://krg.dmed.kz", OrderIndex = 1 },
         new ActionButton { Title = "Открыть EISZ", Payload = "https://www.eisz.kz", OrderIndex = 2 },
         new ActionButton { Title = "Написать программистам", ActionType = "ticket", OrderIndex = 3 });
+    if (!await db.SuperAdminButtons.AnyAsync()) db.SuperAdminButtons.Add(new() { Title = "Сообщение клиентам", Target = "select" });
     await db.SaveChangesAsync();
 }
 app.Use(async (context, next) =>
@@ -154,5 +157,6 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
 app.MapIntegrationApi();
+app.MapAnnouncementApi();
 await app.RunAsync();
 public partial class Program { }

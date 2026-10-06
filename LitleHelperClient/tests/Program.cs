@@ -167,6 +167,20 @@ try
     typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
     Check(pet.ActualWidth == 96 && pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "menu collapse restores robot hit testing");
+    Check(pet.ReceiveAnnouncement(new("Проверка сообщения\nПомощник показывает текст в облачке над собой.", "Супер администратор", 30)).Contains("показано"), "notice displayed on WPF dispatcher");
+    pet.UpdateLayout();
+    var canvas = (System.Windows.Controls.Canvas)pet.Content;
+    var bubble = canvas.Children.OfType<System.Windows.Controls.Border>().Single();
+    Check(System.Windows.Controls.Canvas.GetTop(bubble) + bubble.Height <= 286 && canvas.Children.OfType<System.Windows.Shapes.Polygon>().Any(), "comic bubble and tail are above robot");
+    foreach(var child in canvas.Children.OfType<System.Windows.UIElement>()) { child.BeginAnimation(System.Windows.UIElement.OpacityProperty,null); child.Opacity=1; }
+    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(500,400,96,96,System.Windows.Media.PixelFormats.Pbgra32); bitmap.Render(canvas);
+    var preview=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..","artifacts","notification-preview.png")); Directory.CreateDirectory(Path.GetDirectoryName(preview)!);
+    var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using(var imageFile=File.Create(preview))png.Save(imageFile);
+    typeof(PetWindow).GetField("announcementUntil",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(pet,DateTime.UtcNow.AddSeconds(-1));pet.AdvanceAnnouncements();pet.UpdateLayout();
+    Check(pet.ActualWidth==96,"announcement expires and restores compact helper");
+    pet.ReceiveAnnouncement(new("Первое", "Администратор", 30));
+    for(int n=0;n<10;n++)Check(pet.ReceiveAnnouncement(new("Очередь "+n,"Администратор",30)).Contains("очередь"),"queued notice "+n);
+    bool full=false;try{pet.ReceiveAnnouncement(new("Лишнее","Администратор",30));}catch(InvalidOperationException){full=true;}Check(full,"notice queue bounded to ten pending messages");
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

@@ -39,6 +39,10 @@ public sealed class PetWindow : Window
     private double startLeft, startTop;
     private bool refreshing;
     private TicketWindow? ticket;
+    private SuperAdminWindow? superWindow;
+    private bool superAvailable, announcementVisible;
+    private readonly Queue<ClientNotice> announcements = new();
+    private DateTime announcementUntil;
     private readonly bool diagnostics;
     private bool expanded = true;
     internal int AnimatedFrames { get; private set; }
@@ -64,9 +68,11 @@ public sealed class PetWindow : Window
             try
             {
                 hub = new HubConnectionService(settings);
+                hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; if (menuOpen && !announcementVisible) ShowMenu(); }));
+                hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (!online) { actions = ApiClient.Defaults(); if (menuOpen) ShowMenu(); }
+                    if (!online) { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
                 }));
                 hub.ButtonsUpdated += buttons => Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -74,7 +80,7 @@ public sealed class PetWindow : Window
                     {
                         actions = buttons.Where(b => b.IsActive).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
                             .Select(b => new AssistantAction(b.Id.ToString(), b.Title, b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
-                        if (menuOpen) ShowMenu();
+                        if (menuOpen && !announcementVisible) ShowMenu();
                     }
                 }));
             }
@@ -104,6 +110,7 @@ public sealed class PetWindow : Window
         };
         inactivity.Tick += (_, _) =>
         {
+            AdvanceAnnouncements();
             NativeMethods.Bottom(handle);
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
@@ -116,14 +123,14 @@ public sealed class PetWindow : Window
         outsideClick.Tick += (_, _) =>
         {
             bool down = NativeMethods.GetAsyncKeyState(1) < 0 || NativeMethods.GetAsyncKeyState(2) < 0;
-            if (down && !previousLeft && NativeMethods.GetCursorPos(out var p) && NativeMethods.WindowFromPoint(p) != handle)
+            if (!announcementVisible && down && !previousLeft && NativeMethods.GetCursorPos(out var p) && NativeMethods.WindowFromPoint(p) != handle)
                 HideBubbles();
             previousLeft = down;
         };
         Closed += async (_, _) =>
         {
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
-            lifetime.Cancel(); ticket?.Close(); source?.RemoveHook(Hook);
+            lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); source?.RemoveHook(Hook);
             ClearRegions(); SavePosition();
             if (hub != null) await hub.DisposeAsync();
             lifetime.Dispose();
@@ -350,6 +357,16 @@ public sealed class PetWindow : Window
         }
         if (hub?.IsOnline == true)
         {
+            if (superAvailable)
+            {
+                var admin = MakeButton("Кнопки супер админа"); admin.Click += (_, _) =>
+                {
+                    HideBubbles(); if (superWindow != null) { superWindow.Activate(); return; }
+                    try { superWindow = new SuperAdminWindow(settings); superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); }
+                    catch (Exception ex) { Settings.Log(ex); ShowNotice(ex.Message); }
+                };
+                AddBubble(admin, 10, 292, 300, 34);
+            }
             var exit = MakeButton("Закрыть помощника"); exit.Click += (_, _) => Close();
             AddBubble(exit, 322, 292, 154, 34);
         }
@@ -359,6 +376,7 @@ public sealed class PetWindow : Window
     private void HideBubbles()
     {
         if (firstPrompt) return;
+        announcementVisible = false;
         outsideClick.Stop();
         foreach (var bubble in bubbles) canvas.Children.Remove(bubble);
         bubbles.Clear(); ClearRegions(); menuOpen = false; Collapse(); UpdateRegion();
@@ -372,6 +390,36 @@ public sealed class PetWindow : Window
         AddBubble(button, 90, 182, 320, 92); KeepMenuVisible(); UpdateRegion();
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();
     }
+    internal string ReceiveAnnouncement(ClientNotice notice)
+    {
+        if (string.IsNullOrWhiteSpace(notice.Text) || notice.Text.Length > 1000 || notice.DurationSeconds is < 10 or > 300) throw new ArgumentException("Неверное сообщение");
+        if (announcements.Count >= 10) throw new InvalidOperationException("Очередь сообщений помощника заполнена");
+        announcements.Enqueue(notice);
+        if (!announcementVisible && !firstPrompt && !mouseDown) { ShowNextAnnouncement(); return "Сообщение показано в облачке помощника"; }
+        return "Сообщение принято в очередь показа";
+    }
+    internal void AdvanceAnnouncements()
+    {
+        if (announcementVisible && DateTime.UtcNow >= announcementUntil) HideBubbles();
+        if (!announcementVisible && announcements.Count > 0 && !firstPrompt && !mouseDown) ShowNextAnnouncement();
+    }
+    private void ShowNextAnnouncement()
+    {
+        if (announcements.Count == 0 || firstPrompt) return;
+        var notice = announcements.Dequeue(); HideBubbles(); Expand(); Wake(); menuOpen = true; announcementVisible = true;
+        var panel = new Grid { Margin = new Thickness(12) };
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.Children.Add(new TextBlock { Text = notice.Sender, FontWeight = FontWeights.Bold, Foreground = Brushes.MidnightBlue, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 6) });
+        var scroll = new ScrollViewer { Content = new TextBlock { Text = notice.Text, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.MidnightBlue, FontSize = 14 }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        Grid.SetRow(scroll, 1); panel.Children.Add(scroll);
+        var close = MakeButton("Закрыть"); close.Margin = new Thickness(0, 8, 0, 0); close.Click += (_, _) => { HideBubbles(); ShowNextAnnouncement(); }; Grid.SetRow(close, 2); panel.Children.Add(close);
+        AddBubble(new Border { Background = Brushes.AliceBlue, BorderBrush = Brushes.SteelBlue, BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(14), Child = panel }, 70, 48, 360, 216);
+        var tail = new System.Windows.Shapes.Polygon { Fill = Brushes.AliceBlue, Stroke = Brushes.SteelBlue, StrokeThickness = 2, Points = new PointCollection { new(0, 0), new(22, 0), new(11, 22) } };
+        AddBubble(tail, SpriteLeft + 36, 262, 22, 22);
+        announcementUntil = DateTime.UtcNow.AddSeconds(notice.DurationSeconds); KeepMenuVisible(); UpdateRegion();
+    }
     private async Task RefreshActions()
     {
         if (refreshing) return;
@@ -379,9 +427,9 @@ public sealed class PetWindow : Window
         try
         {
             if (hub?.IsOnline == true) await hub.RefreshButtons();
-            else { actions = ApiClient.Defaults(); if (menuOpen) ShowMenu(); }
+            else { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
         }
-        catch (Exception ex) { Settings.Log(ex); actions = ApiClient.Defaults(); if (menuOpen) ShowMenu(); }
+        catch (Exception ex) { Settings.Log(ex); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
         finally { refreshing = false; }
     }
     private Task ExecuteAction(AssistantAction action)

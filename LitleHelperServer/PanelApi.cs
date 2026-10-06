@@ -128,6 +128,7 @@ public static class PanelApi
             var user = new PanelUser { Username = name, FullName = request.FullName.Trim(), Role = request.Role, IsActive = request.IsActive,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password!, 12), MustChangePassword = true, Permissions = request.Permissions ?? new() };
             user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
+            await Branches.ValidateUserAsync(db, request.BranchId); user.BranchId = request.BranchId;
             db.Users.Add(user); await db.SaveChangesAsync(); return Results.Ok(user);
         }).RequireAuthorization("users.manage");
         app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, ClaimsPrincipal p, HelperDb db, PanelSessions sessions, AnnouncementService announcements, CancellationToken token) =>
@@ -143,6 +144,7 @@ public static class PanelApi
                 if (p.IsInRole(Roles.SuperAdmin)) user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
             }
             if (request.Role != Roles.SuperAdmin) user.AssistantMachine = "";
+            await Branches.ValidateUserAsync(db, request.BranchId); user.BranchId = request.BranchId;
             user.Username = name; user.FullName = request.FullName.Trim(); user.Role = request.Role; user.IsActive = request.IsActive; if (request.Permissions != null) user.Permissions = request.Permissions; user.SecurityVersion++;
             if (!string.IsNullOrEmpty(request.Password)) { user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12); user.MustChangePassword = true; }
             await db.SaveChangesAsync(); sessions.Revoke(user.Id); await announcements.RefreshAvailabilityAsync(token); return Results.Ok(user);
@@ -162,11 +164,17 @@ public static class PanelApi
         }).RequireAuthorization("audit.view");
         app.MapDelete("/api/audit", async (HelperDb db) => { await db.AuditLogs.ExecuteDeleteAsync(); return Results.NoContent(); }).RequireAuthorization("audit.all");
 
-        app.MapGet("/api/tickets", async (ClaimsPrincipal p, HelperDb db, string? status) =>
+        app.MapGet("/api/tickets", async (ClaimsPrincipal p, HelperDb db, string? status, int? branchId) =>
         {
             var query = db.Tickets.AsNoTracking();
             string owner = Security.TicketOwner(p);
             if (!Access.Can(p, "tickets.all")) query = query.Where(t => t.Username.ToLower() == owner);
+            else if (!p.IsInRole(Roles.SuperAdmin))
+            {
+                var staff = await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name);
+                query = query.Where(t => t.BranchId == null || t.BranchId == staff.BranchId);
+            }
+            if (branchId != null) query = branchId == 0 ? query.Where(t => t.BranchId == null) : query.Where(t => t.BranchId == branchId);
             if (!string.IsNullOrEmpty(status) && status != "all")
             {
                 if (status == "active") query = query.Where(t => t.Status == "Created" || t.Status == "1" || t.Status == "2" || t.Status == "3" || t.Status == "4");
@@ -180,8 +188,9 @@ public static class PanelApi
         app.MapPost("/api/tickets", async (TicketRequest request, ClaimsPrincipal p, HelperDb db, GlpiService glpi, IntegrationSettings settings, CancellationToken token) =>
         {
             if (string.IsNullOrWhiteSpace(request.Description) || request.Description.Length > 8000 || request.Title.Length > 160) return Results.BadRequest();
-            string user = Security.TicketOwner(p); int id = await glpi.CreateTicketAsync(user, "WebPanel", request.Description, token);
-            var ticket = new TicketRecord { GlpiId = id, Username = user, MachineName = "WebPanel", Title = request.Title, Description = request.Description };
+            var branch = await Branches.ValidateTicketAsync(db, request.BranchId, request.Room);
+            string user = Security.TicketOwner(p); int id = await glpi.CreateTicketAsync(user, "WebPanel", Branches.Description(request.Description, branch, request.Room), token);
+            var ticket = new TicketRecord { GlpiId = id, Username = user, MachineName = "WebPanel", Title = request.Title, Description = request.Description, BranchId = branch?.Id, BranchName = branch?.Name ?? "", Room = request.Room.Trim() };
             db.Tickets.Add(ticket);
             if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
             await db.SaveChangesAsync(token); return Results.Ok(ticket);
@@ -190,12 +199,14 @@ public static class PanelApi
         {
             var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
             if (!Access.Can(p, "tickets.all") && !ticket.Username.Equals(Security.TicketOwner(p), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            if (Access.Can(p, "tickets.all")) Branches.Require(await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name), ticket);
             await management.SyncAsync(ticket, token);
             return Results.Ok(new { local = ticket, glpi = await glpi.GetTicketAsync(ticket.GlpiId, token) });
         }).RequireAuthorization("Panel");
-        app.MapPut("/api/tickets/{id:int}/status", async (int id, TicketStatus request, HelperDb db, TicketManagement management, CancellationToken token) =>
+        app.MapPut("/api/tickets/{id:int}/status", async (int id, TicketStatus request, ClaimsPrincipal p, HelperDb db, TicketManagement management, CancellationToken token) =>
         {
             var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
+            Branches.Require(await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name), ticket);
             await management.SetStatusAsync(ticket, request.Status, token); return Results.Ok(ticket);
         }).RequireAuthorization("tickets.manage");
     }

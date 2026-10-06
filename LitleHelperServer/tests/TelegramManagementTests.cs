@@ -133,6 +133,16 @@ public static class TelegramManagementTests
             alice.Role = Roles.Admin; await db.SaveChangesAsync();
             var actor = await handler.ActorAsync(123, default);
             Check(actor.GlpiUserId == 42, "Telegram AD login maps to exact active GLPI user");
+            await Branches.EnsureSchemaAsync(db); await Branches.EnsureSchemaAsync(db);
+            var branch = new Branch { Name = "Clinic" }; db.Branches.Add(branch); await db.SaveChangesAsync();
+            try { await Branches.ValidateTicketAsync(db, null, "12"); throw new Exception("Missing branch accepted"); } catch (ArgumentException) { Check(true, "configured branches require explicit ticket location"); }
+            try { await Branches.ValidateTicketAsync(db, branch.Id, ""); throw new Exception("Missing room accepted"); } catch (ArgumentException) { Check(true, "branch ticket requires room"); }
+            Check((await Branches.ValidateTicketAsync(db, branch.Id, "12"))!.Name == "Clinic", "active branch and room accepted");
+            ticket.BranchId = branch.Id; ticket.BranchName = branch.Name; ticket.Room = "12"; await db.SaveChangesAsync();
+            await handler.HandleAsync(Callback(123, ticket.Id, "claim", "supergroup", -100888), default);
+            Check(transport.Assignments == 0, "administrator without matching branch cannot claim ticket");
+            alice.BranchId = branch.Id; await db.SaveChangesAsync(); actor = await handler.ActorAsync(123, default);
+            Check(Branches.CanHandle(new PanelUser { Role = Roles.SuperAdmin }, ticket), "super administrator can handle every branch");
             await telegram.SendTicketAsync(ticket, default); Check(transport.HasClaimButton, "new group notification contains accept button");
             await handler.HandleAsync(Callback(123, ticket.Id, "claim", "supergroup", -999), default);
             Check(transport.Assignments == 0, "accept button from another group is rejected");

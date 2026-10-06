@@ -486,7 +486,7 @@ public sealed class PetWindow : Window
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
                     if (ticket != null) return Task.CompletedTask;
-                    ticket = new TicketWindow(hub.CreateTicketAsync, lifetime.Token) { Left = Left - 135, Top = Math.Max(SystemParameters.VirtualScreenTop, Top - 270) };
+                    ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Left = Left - 135, Top = Math.Max(SystemParameters.VirtualScreenTop, Top - 410) };
                     ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
                     ticket.Closed += (_, _) => { ticket = null; Wake(); };
                     ticket.Show(); break;

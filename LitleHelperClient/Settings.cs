@@ -13,6 +13,8 @@ public sealed class Settings
     public string ClientToken { get; set; } = "";
     public bool EnableAdministrativeCommands { get; set; } = true;
     public bool AllowRemoteCommands { get; set; }
+    public int? TicketBranchId { get; set; }
+    public string TicketRoom { get; set; } = "";
     internal bool EnsureClientKey()
     {
         if (!string.IsNullOrWhiteSpace(ClientToken)) return false;

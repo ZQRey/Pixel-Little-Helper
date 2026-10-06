@@ -36,7 +36,11 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             if (!user.IsActive || user.MustChangePassword) { Context.Abort(); return; }
             var context = Context;
             sessions.Add(Context.ConnectionId, user.Id, context.Abort);
-            if (Access.Can(user, "tickets.all")) await Groups.AddToGroupAsync(Context.ConnectionId, "TicketStaff");
+            if (Access.Can(user, "tickets.all"))
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, user.Role == Roles.SuperAdmin ? "TicketStaffAll" : "TicketStaff:" + user.BranchId);
+                await Groups.AddToGroupAsync(Context.ConnectionId, "TicketStaffLegacy");
+            }
             if (Access.Can(user, "computers.view")) await Groups.AddToGroupAsync(Context.ConnectionId, "PanelStaff");
             if (Access.Can(user, "commands.execute")) await Groups.AddToGroupAsync(Context.ConnectionId, "Admin:" + user.Username);
             await Groups.AddToGroupAsync(Context.ConnectionId, "User:" + Security.TicketOwner(Context.User));
@@ -101,6 +105,10 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         await Clients.Group("Admin:" + log.AdminUsername).SendAsync("ExecutionResult", log);
     }
     public async Task<int> CreateTicket(string title, string description)
+        => await CreateTicketAt(title, description, null, "");
+    public async Task<List<Branch>> GetBranches()
+    { await Agent(); return await db.Branches.AsNoTracking().Where(b => b.IsActive).OrderBy(b => b.Name).ToListAsync(); }
+    public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room)
     {
         var c = await Agent();
         if (string.IsNullOrWhiteSpace(c.CurrentUser) || string.IsNullOrWhiteSpace(description) || description.Length > 8000 || title.Length > 160)
@@ -108,18 +116,20 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         try
         {
             string owner = Security.TicketUser(c.CurrentUser);
-            int id = await glpi.CreateTicketAsync(owner, c.MachineName, description, Context.ConnectionAborted);
-            var ticket = new TicketRecord { GlpiId = id, Username = owner, MachineName = c.MachineName, Title = title, Description = description };
+            var branch = await Branches.ValidateTicketAsync(db, branchId, room);
+            int id = await glpi.CreateTicketAsync(owner, c.MachineName, Branches.Description(description, branch, room), Context.ConnectionAborted);
+            var ticket = new TicketRecord { GlpiId = id, Username = owner, MachineName = c.MachineName, Title = title, Description = description, BranchId = branch?.Id, BranchName = branch?.Name ?? "", Room = room.Trim() };
             db.Tickets.Add(ticket);
             if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
             await db.SaveChangesAsync();
             await Clients.Group("User:" + owner).SendAsync("TicketCreated", ticket);
-            await Clients.Group("TicketStaff").SendAsync("TicketCreated", ticket);
+            await Clients.Group("TicketStaffAll").SendAsync("TicketCreated", ticket);
+            await Clients.Group(ticket.BranchId == null ? "TicketStaffLegacy" : "TicketStaff:" + ticket.BranchId).SendAsync("TicketCreated", ticket);
             return id;
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException or ArgumentException)
         {
-            string message = ex is InvalidOperationException ? ex.Message : ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Заявка не отправлена." : "Сервер не смог подключиться к GLPI. Проверьте адрес, DNS и сеть в настройках GLPI.";
+            string message = ex is InvalidOperationException or ArgumentException ? ex.Message : ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Заявка не отправлена." : "Сервер не смог подключиться к GLPI. Проверьте адрес, DNS и сеть в настройках GLPI.";
             throw new HubException(message);
         }
     }

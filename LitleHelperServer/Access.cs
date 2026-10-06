@@ -19,7 +19,7 @@ public static class Access
         ["audit.view"] = "Просмотр своего журнала команд",
         ["audit.all"] = "Просмотр и очистка общего журнала",
         ["users.manage"] = "Управление пользователями и всеми правами",
-        ["settings.manage"] = "Настройки GLPI, AD и Telegram",
+        ["settings.manage"] = "Настройки GLPI, AD, Telegram и филиалов",
         ["updates.manage"] = "Публикация обновлений клиента"
     };
     public static string[] Defaults(string role) => role switch

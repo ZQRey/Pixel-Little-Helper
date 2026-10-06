@@ -80,7 +80,7 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
         await gate.Semaphore.WaitAsync(token);
         try
         {
-            await db.Entry(ticket).ReloadAsync(token); await SyncUnlockedAsync(ticket, token);
+            await db.Entry(ticket).ReloadAsync(token); Branches.Require(actor.User, ticket); await SyncUnlockedAsync(ticket, token);
             if (Status(ticket.Status) >= 5) throw new InvalidOperationException("Заявка уже выполнена или закрыта.");
             int[] assigned = await glpi.AssigneesAsync(ticket.GlpiId, token);
             if (assigned.Any(id => id != actor.GlpiUserId)) throw new InvalidOperationException("Заявка уже назначена другому исполнителю в GLPI.");
@@ -99,7 +99,7 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
         await gate.Semaphore.WaitAsync(token);
         try
         {
-            await db.Entry(ticket).ReloadAsync(token); await SyncUnlockedAsync(ticket, token);
+            await db.Entry(ticket).ReloadAsync(token); Branches.Require(actor.User, ticket); await SyncUnlockedAsync(ticket, token);
             if (!(await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId))
                 throw new UnauthorizedAccessException("Вы не являетесь исполнителем этой заявки в GLPI.");
             if (Status(ticket.Status) == 6) throw new InvalidOperationException("Заявка закрыта.");
@@ -162,11 +162,12 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
     private static object Button(string text, string data) => new { text, callback_data = data };
     private async Task CardAsync(long chat, TicketRecord ticket, TelegramActor actor, CancellationToken token)
     {
+        Branches.Require(actor.User, ticket);
         await tickets.SyncAsync(ticket, token);
         if (!(await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)) throw new UnauthorizedAccessException("Эта заявка назначена другому исполнителю.");
         var history = await glpi.FollowupsAsync(ticket.GlpiId, token);
         string comments = string.Join("\n", history.EnumerateArray().Where(r => !r.TryGetProperty("is_private", out var p) || GlpiService.Number(p) == 0).TakeLast(5).Select(r => r.TryGetProperty("content", out var c) ? Plain(c.GetString() ?? "") : ""));
-        string text = $"Заявка GLPI #{ticket.GlpiId}\n{TicketManagement.StatusName(TicketManagement.Status(ticket.Status))}\n{ticket.Username} · {ticket.MachineName}\n{ticket.Title}\n{ticket.Description}\n\nПоследние ответы:\n{comments}";
+        string text = $"Заявка GLPI #{ticket.GlpiId}\n{TicketManagement.StatusName(TicketManagement.Status(ticket.Status))}\n{ticket.Username} · {ticket.MachineName}\nФилиал: {ticket.BranchName} · Кабинет: {ticket.Room}\n{ticket.Title}\n{ticket.Description}\n\nПоследние ответы:\n{comments}";
         object[][] buttons = TicketManagement.Status(ticket.Status) == 6 ? [] :
             [[Button("Ответить", "reply:" + ticket.Id), Button("Добавить решение", "solve:" + ticket.Id)],
              [Button("В работе", "status:" + ticket.Id + ":2"), Button("Ожидание", "status:" + ticket.Id + ":4")],
@@ -199,7 +200,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                 if (command == "/start") await telegram.SendToAsync(sender.ToString(), "Управление заявками GLPI. «Мои заявки» — назначенные обращения, «Отмена» — отменить ввод ответа.", new { keyboard = new[] { new[] { new { text = "Мои заявки" }, new { text = "Отмена" } } }, resize_keyboard = true }, token);
                 var all = await db.Tickets.Where(t => t.Status != "6").OrderByDescending(t => t.CreatedAt).ToListAsync(token);
                 var mine = new List<TicketRecord>();
-                foreach (var ticket in all) { await tickets.SyncAsync(ticket, token); if (TicketManagement.Status(ticket.Status) < 5 && (await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)) mine.Add(ticket); }
+                foreach (var ticket in all.Where(t => Branches.CanHandle(actor.User, t))) { await tickets.SyncAsync(ticket, token); if (TicketManagement.Status(ticket.Status) < 5 && (await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)) mine.Add(ticket); }
                 var rows = mine.Select(t => new[] { Button("#" + t.GlpiId + " · " + TicketManagement.StatusName(TicketManagement.Status(t.Status)), "open:" + t.Id) }).Chunk(80);
                 if (mine.Count == 0) await telegram.SendToAsync(sender.ToString(), "Активных заявок на вас нет. Команда /my — мои заявки; /cancel — отмена ввода ответа.", null, token);
                 else foreach (var chunk in rows) await telegram.SendToAsync(sender.ToString(), "Ваши активные заявки:", new { inline_keyboard = chunk }, token);
@@ -215,6 +216,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                 string[] parts = command.Split(':');
                 if (parts.Length < 2 || !int.TryParse(parts[1], out int ticketId)) throw new ArgumentException("Неизвестная команда.");
                 var ticket = await db.Tickets.FindAsync([ticketId], token) ?? throw new ArgumentException("Заявка не найдена.");
+                Branches.Require(actor.User, ticket);
                 if (parts[0] == "claim")
                 {
                     // Verify that private messages work before assigning the ticket.

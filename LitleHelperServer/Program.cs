@@ -111,6 +111,7 @@ using (var scope = app.Services.CreateScope())
     await Access.EnsureSchema(db);
     await AnnouncementService.EnsureSchemaAsync(db);
     await TicketManagement.EnsureSchemaAsync(db);
+    await Branches.EnsureSchemaAsync(db);
     // Existing deployments use EnsureCreated; add the outbox without changing existing tables.
     string timestamp = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT";
     string outboxSql = "CREATE TABLE IF NOT EXISTS \"TelegramDeliveries\" (\"TicketId\" INTEGER PRIMARY KEY REFERENCES \"Tickets\"(\"Id\") ON DELETE CASCADE, \"Attempts\" INTEGER NOT NULL, \"State\" TEXT NOT NULL, \"NextAttemptAt\" " + timestamp + " NOT NULL, \"SentAt\" " + timestamp + " NULL, \"LastError\" TEXT NOT NULL)";
@@ -158,5 +159,6 @@ app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpi
 app.MapPanelApi();
 app.MapIntegrationApi();
 app.MapAnnouncementApi();
+app.MapBranchApi();
 await app.RunAsync();
 public partial class Program { }

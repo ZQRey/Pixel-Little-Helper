@@ -43,6 +43,7 @@ public class PanelUser
     public string FullName { get; set; } = "";
     public string Role { get; set; } = Roles.User;
     public string AssistantMachine { get; set; } = "";
+    public int? BranchId { get; set; }
     [JsonIgnore] public string PermissionOverrides { get; set; } = "{}";
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public Dictionary<string, bool> Permissions
@@ -77,6 +78,9 @@ public class TicketRecord
     public string MachineName { get; set; } = "";
     public string Title { get; set; } = "";
     public string Description { get; set; } = "";
+    public int? BranchId { get; set; }
+    public string BranchName { get; set; } = "";
+    public string Room { get; set; } = "";
     public string Status { get; set; } = "1";
     public int AssignedGlpiUserId { get; set; }
     public string AssignedUsername { get; set; } = "";
@@ -95,6 +99,7 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<TicketRecord> Tickets => Set<TicketRecord>();
     public DbSet<SuperAdminButton> SuperAdminButtons => Set<SuperAdminButton>();
+    public DbSet<Branch> Branches => Set<Branch>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<TelegramDelivery>().HasKey(x => x.TicketId);
@@ -109,8 +114,8 @@ public record MachineInfo(string MachineName, string UserName, string DomainName
 public record CommandEnvelope(string TaskId, string Type, string Payload);
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
-public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null);
+public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null);
 public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
 public record AgentRegistrationRequest(string MachineName, string ClientKey);
-public record TicketRequest(string Title, string Description);
+public record TicketRequest(string Title, string Description, int? BranchId = null, string Room = "");

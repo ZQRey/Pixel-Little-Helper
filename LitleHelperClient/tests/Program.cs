@@ -186,6 +186,15 @@ try
     pet.ReceiveAnnouncement(new("Первое", "Администратор", 30));
     for(int n=0;n<10;n++)Check(pet.ReceiveAnnouncement(new("Очередь "+n,"Администратор",30)).Contains("очередь"),"queued notice "+n);
     bool full=false;try{pet.ReceiveAnnouncement(new("Лишнее","Администратор",30));}catch(InvalidOperationException){full=true;}Check(full,"notice queue bounded to ten pending messages");
+    var ticketWindow = new TicketWindow((title, description, branch, room, cancellation) => Task.FromResult(1), cancellation => Task.FromResult(new List<TicketBranch> { new(1, "Поликлиника"), new(2, "Больница") }), new Settings { TicketBranchId = 1, TicketRoom = "12" }, CancellationToken.None);
+    ticketWindow.Show(); ticketWindow.UpdateLayout(); ticketWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+    var ticketPanel = (System.Windows.Controls.StackPanel)((System.Windows.Controls.Border)ticketWindow.Content).Child;
+    Check(ticketPanel.Children.OfType<System.Windows.Controls.ComboBox>().Single().SelectedValue is int selectedBranch && selectedBranch == 1, "ticket form restores saved branch after directory load");
+    Check(ticketPanel.Children.OfType<System.Windows.Controls.TextBox>().First().Text == "12", "ticket form restores saved room");
+    var ticketBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(410, 410, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); ticketBitmap.Render(ticketWindow);
+    var ticketPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "ticket-preview.png"));
+    var ticketPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); ticketPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(ticketBitmap)); using (var ticketImage = File.Create(ticketPreview)) ticketPng.Save(ticketImage);
+    ticketWindow.Close();
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

@@ -139,6 +139,16 @@ public sealed class HubConnectionService : IAsyncDisposable
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
         return await connection.InvokeAsync<int>("CreateTicket", title, description, token);
     }
+    public async Task<List<TicketBranch>> GetBranchesAsync(CancellationToken token)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        return await connection.InvokeAsync<List<TicketBranch>>("GetBranches", token);
+    }
+    public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, CancellationToken token)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
+        return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, token);
+    }
     public async ValueTask DisposeAsync()
     {
         lifetime.Cancel(); Offline();

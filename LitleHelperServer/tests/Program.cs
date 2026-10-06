@@ -364,6 +364,19 @@ try
         await Json("/settings/updates", admin, new { enabled = false }, HttpMethod.Put);
         using var paused = await http.GetAsync("/api/client-updates/latest"); Check(paused.StatusCode == HttpStatusCode.NoContent, "administrator can pause client updates");
     }
+    var branch = await Json("/branches", admin, new { name = "Clinic", isActive = true }); int branchId = branch.GetProperty("id").GetInt32();
+    using var deniedBranch = await Call("/branches", staffTokens["operator"], new { name = "Denied", isActive = true }); Check(deniedBranch.StatusCode == HttpStatusCode.Forbidden, "operator cannot change branch directory");
+    using var noLocation = await Call("/tickets", admin, new { title = "Missing location", description = "Test" }); Check(noLocation.StatusCode == HttpStatusCode.BadRequest, "new tickets require configured branch and room");
+    var located = await Json("/tickets", admin, new { title = "Branch ticket", description = "Test", branchId, room = "12A" });
+    int locatedId = located.GetProperty("id").GetInt32(); Check(located.GetProperty("branchName").GetString() == "Clinic" && located.GetProperty("room").GetString() == "12A", "ticket stores branch snapshot and room");
+    var branchList = await Json("/tickets?branchId=" + branchId, admin); Check(branchList.GetArrayLength() == 1, "branch filter applies before list limit");
+    var operatorList = await Json("/tickets", staffTokens["operator"]); Check(!operatorList.EnumerateArray().Any(t => t.GetProperty("id").GetInt32() == locatedId), "unassigned operator cannot list another branch ticket");
+    using var crossDetail = await Call("/tickets/" + locatedId, staffTokens["operator"]); Check(crossDetail.StatusCode == HttpStatusCode.Forbidden, "branch restriction protects direct ticket URL");
+    using var crossStatus = await Call("/tickets/" + locatedId + "/status", staffTokens["operator"], new { status = 2 }, HttpMethod.Put); Check(crossStatus.StatusCode == HttpStatusCode.Forbidden, "branch restriction protects status updates");
+    using var usedBranch = await Call("/branches/" + branchId, admin, method: HttpMethod.Delete); Check(usedBranch.StatusCode == HttpStatusCode.Conflict, "used branch deletion preserves ticket history");
+    await Json("/branches/" + branchId, admin, new { name = "Renamed", isActive = false }, HttpMethod.Put);
+    using var disabledBranch = await Call("/tickets", admin, new { title = "Disabled", description = "Test", branchId, room = "12" }); Check(disabledBranch.StatusCode == HttpStatusCode.BadRequest, "disabled branch rejects new tickets");
+    var unused = await Json("/branches", admin, new { name = "Unused", isActive = true }); using var deletedBranch = await Call("/branches/" + unused.GetProperty("id").GetInt32(), admin, method: HttpMethod.Delete); Check(deletedBranch.StatusCode == HttpStatusCode.NoContent, "unused branch can be deleted");
     Console.WriteLine("ALL INTEGRATION CHECKS PASSED");
 }
 finally { await mock.StopAsync(); await mock.DisposeAsync(); }

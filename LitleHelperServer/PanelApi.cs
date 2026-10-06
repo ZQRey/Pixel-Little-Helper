@@ -10,6 +10,14 @@ public static class PanelApi
 {
     public static void MapPanelApi(this WebApplication app)
     {
+        app.MapGet("/api/settings/glpi", (GlpiSettingsStore settings) => Results.Ok(settings.View())).RequireAuthorization("Super");
+        app.MapPut("/api/settings/glpi", (GlpiSettingsUpdate update, GlpiSettingsStore settings) => { settings.Save(update); return Results.Ok(settings.View()); }).RequireAuthorization("Super");
+        app.MapPost("/api/settings/glpi/test", async (GlpiService glpi, CancellationToken token) =>
+        {
+            try { await glpi.TestConnectionAsync(token); return Results.Ok(new { success = true, message = "GLPI API: авторизация успешна. Тестовая заявка не создавалась." }); }
+            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or TaskCanceledException)
+            { return Results.Ok(new { success = false, message = ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Проверьте сеть и адрес." : ex is HttpRequestException ? "Сервер помощника не смог подключиться к GLPI. Проверьте адрес, DNS, TLS и сеть." : ex.Message }); }
+        }).RequireAuthorization("Super");
         app.MapPost("/api/auth/login", async (LoginRequest request, HelperDb db, IConfiguration config) =>
         {
             if (request.Username.Length > 100 || request.Password.Length > 72) return Results.Unauthorized();

@@ -77,6 +77,7 @@ builder.Services.AddRateLimiter(options =>
 builder.Services.AddSignalR(options => { options.MaximumReceiveMessageSize = 1_500_000; options.EnableDetailedErrors = false; });
 builder.Services.AddScoped<CommandService>();
 builder.Services.AddSingleton<PanelSessions>();
+builder.Services.AddSingleton<GlpiSettingsStore>();
 builder.Services.AddHostedService<TaskExpiryService>();
 builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.FromSeconds(20); http.MaxResponseContentBufferSize = 2_097_152; });
 var app = builder.Build();

@@ -4,26 +4,31 @@ using System.Text.Json;
 
 namespace LitleHelperServer;
 
-public class GlpiService(HttpClient http, IConfiguration config, ILogger<GlpiService> logger)
+public class GlpiService(HttpClient http, GlpiSettingsStore store, ILogger<GlpiService> logger)
 {
-    private string Base => config["Glpi:BaseUrl"]!.TrimEnd('/') + "/";
+    private readonly GlpiOptions settings = store.Read();
+    private string Base => settings.BaseUrl.TrimEnd('/') + "/";
     private HttpRequestMessage Request(HttpMethod method, string path, string? session = null)
     {
         var request = new HttpRequestMessage(method, Base + path);
-        request.Headers.Add("App-Token", config["Glpi:AppToken"]);
+        if (!string.IsNullOrWhiteSpace(settings.AppToken)) request.Headers.Add("App-Token", settings.AppToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (session != null) request.Headers.Add("Session-Token", session);
-        else request.Headers.TryAddWithoutValidation("Authorization", "user_token " + config["Glpi:UserToken"]);
+        else if (settings.AuthMode == "password" && !string.IsNullOrEmpty(settings.Password))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(settings.Login + ":" + settings.Password)));
+        else if (settings.AuthMode == "token" && !string.IsNullOrWhiteSpace(settings.UserToken)) request.Headers.TryAddWithoutValidation("Authorization", "user_token " + settings.UserToken);
         return request;
     }
-    private async Task<string> Init(CancellationToken token)
+    private async Task<string> Init(CancellationToken token, bool probe = false)
     {
-        if (string.IsNullOrWhiteSpace(config["Glpi:UserToken"]) || string.IsNullOrWhiteSpace(config["Glpi:AppToken"]))
-            throw new InvalidOperationException("GLPI ещё не настроен: заполните AppToken и UserToken на сервере.");
+        if (!probe && (settings.AuthMode == "password" ? string.IsNullOrWhiteSpace(settings.Login) || string.IsNullOrEmpty(settings.Password) : string.IsNullOrWhiteSpace(settings.UserToken)))
+            throw new InvalidOperationException("GLPI ещё не настроен: заполните User Token или логин/пароль во вкладке «Настройки GLPI» веб-панели.");
         using var request = Request(HttpMethod.Get, "initSession");
-        using var response = await http.SendAsync(request, token); response.EnsureSuccessStatusCode();
+        using var response = await http.SendAsync(request, token); await EnsureSuccess(response, token);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-        return json.RootElement.GetProperty("session_token").GetString() ?? throw new InvalidDataException("GLPI: нет Session-Token");
+        if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("session_token", out var session) || session.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(session.GetString()))
+            throw new InvalidOperationException("GLPI не вернул Session-Token. Проверьте адрес REST API.");
+        return session.GetString()!;
     }
     private async Task Kill(string session)
     {
@@ -35,6 +40,47 @@ public class GlpiService(HttpClient http, IConfiguration config, ILogger<GlpiSer
         }
         catch (Exception ex) { logger.LogWarning("GLPI session cleanup failed: {Type}", ex.GetType().Name); }
     }
+    public async Task TestConnectionAsync(CancellationToken token)
+    {
+        string session = await Init(token, probe: true);
+        await Kill(session);
+    }
+    private static async Task EnsureSuccess(HttpResponseMessage response, CancellationToken token)
+    {
+        string body = await response.Content.ReadAsStringAsync(token);
+        string code = "", errorText = body;
+        bool jsonValid = false;
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            jsonValid = true;
+            if (json.RootElement.ValueKind == JsonValueKind.Array && json.RootElement.GetArrayLength() > 0 && json.RootElement[0].ValueKind == JsonValueKind.String)
+                {
+                code = json.RootElement[0].GetString() ?? "";
+                if (json.RootElement.GetArrayLength() > 1 && json.RootElement[1].ValueKind == JsonValueKind.String) errorText = json.RootElement[1].GetString() ?? body;
+            }
+        }
+        catch (JsonException) { }
+        if (errorText.Contains("API отключ", StringComparison.OrdinalIgnoreCase) || errorText.Contains("API is disabled", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("GLPI REST API отключён. В GLPI откройте Настройка → Общие → API и включите REST API.");
+        string? detail = code switch
+        {
+            "ERROR_NOT_ALLOWED_IP" => "GLPI не разрешает IP этого сервера. Добавьте IP сервера помощника в разрешённый диапазон API-клиента GLPI.",
+            "ERROR_APP_TOKEN_PARAMETERS_MISSING" => "GLPI требует App Token. Заполните его во вкладке «Настройки GLPI».",
+            "ERROR_WRONG_APP_TOKEN_PARAMETER" => "GLPI отклонил App Token. Проверьте ключ API-клиента.",
+            "ERROR_LOGIN_PARAMETERS_MISSING" => "GLPI требует User Token или логин/пароль. Заполните настройки доступа.",
+            "ERROR_GLPI_LOGIN_USER_TOKEN" or "ERROR_GLPI_LOGIN" => "GLPI отклонил учётные данные. Проверьте User Token или логин/пароль.",
+            "ERROR_LOGIN_WITH_CREDENTIALS_DISABLED" => "В GLPI отключён API-вход по логину/паролю. Используйте User Token или включите такой способ входа.",
+            "ERROR_RIGHT_MISSING" => "Учётная запись GLPI не имеет прав на это действие. Проверьте профиль, сущность и права на заявки/пользователей.",
+            _ => null
+        };
+        if (detail != null) throw new InvalidOperationException(detail);
+        if (!response.IsSuccessStatusCode || code.StartsWith("ERROR", StringComparison.Ordinal))
+            throw new InvalidOperationException($"GLPI API вернул HTTP {(int)response.StatusCode}. Проверьте настройки API и права учётной записи.");
+        if (response.Content.Headers.ContentType?.MediaType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true)
+            throw new InvalidOperationException("Вместо REST API GLPI вернул страницу входа. Укажите адрес, заканчивающийся /apirest.php. Автовход браузера не авторизует серверное API.");
+        if (!jsonValid) throw new InvalidOperationException("GLPI вернул некорректный JSON. Проверьте адрес REST API и настройки прокси.");
+    }
     public async Task<int> CreateTicketAsync(string username, string machineName, string text, CancellationToken token = default)
     {
         string session = await Init(token);
@@ -42,9 +88,9 @@ public class GlpiService(HttpClient http, IConfiguration config, ILogger<GlpiSer
         {
             string query = "search/User?criteria[0][field]=1&criteria[0][searchtype]=equals&criteria[0][value]=" + Uri.EscapeDataString(username) + "&forcedisplay[0]=2";
             using var search = Request(HttpMethod.Get, query, session);
-            using var response = await http.SendAsync(search, token); response.EnsureSuccessStatusCode();
+            using var response = await http.SendAsync(search, token); await EnsureSuccess(response, token);
             using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-            int requester = config.GetValue<int>("Glpi:ServiceUserId");
+            int requester = settings.ServiceUserId;
             if (json.RootElement.TryGetProperty("data", out var rows) && rows.ValueKind == JsonValueKind.Array && rows.GetArrayLength() > 0)
             {
                 var first = rows[0];
@@ -59,7 +105,7 @@ public class GlpiService(HttpClient http, IConfiguration config, ILogger<GlpiSer
                 content = text + $"\n\nКомпьютер: {machineName}\nПользователь: {username}",
                 _users_id_requester = requester
             } });
-            using var result = await http.SendAsync(create, token); result.EnsureSuccessStatusCode();
+            using var result = await http.SendAsync(create, token); await EnsureSuccess(result, token);
             using var ticket = JsonDocument.Parse(await result.Content.ReadAsStringAsync(token));
             return ticket.RootElement.GetProperty("id").GetInt32();
         }
@@ -71,7 +117,7 @@ public class GlpiService(HttpClient http, IConfiguration config, ILogger<GlpiSer
         try
         {
             using var request = Request(HttpMethod.Get, "Ticket/" + id, session);
-            using var response = await http.SendAsync(request, token); response.EnsureSuccessStatusCode();
+            using var response = await http.SendAsync(request, token); await EnsureSuccess(response, token);
             using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token)); return json.RootElement.Clone();
         }
         finally { await Kill(session); }
@@ -84,7 +130,7 @@ public class GlpiService(HttpClient http, IConfiguration config, ILogger<GlpiSer
         {
             using var request = Request(HttpMethod.Put, "Ticket/" + id, session);
             request.Content = JsonContent.Create(new { input = new { id, status } });
-            using var response = await http.SendAsync(request, token); response.EnsureSuccessStatusCode();
+            using var response = await http.SendAsync(request, token); await EnsureSuccess(response, token);
         }
         finally { await Kill(session); }
     }

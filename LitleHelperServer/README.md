@@ -119,7 +119,9 @@ run_command Payload: полный путь EXE или JSON:
 
 ## GLPI
 
-Настройте Glpi в appsettings.json либо `Glpi__BaseUrl`, `Glpi__AppToken`, `Glpi__UserToken`, `Glpi__ServiceUserId` (Compose использует GLPI_* из .env).
+В панели SuperAdmin откройте «Настройки GLPI». Задайте адрес сайта или полный /apirest.php (путь добавляется автоматически), способ входа User Token или логин/пароль, App Token при необходимости и fallback ID заявителя. «Сохранить и проверить подключение» проверяет initSession/killSession без создания заявки. Настройки применяются сразу, хранятся в data/glpi-settings.json; токены и пароль защищены ASP.NET Data Protection. Сохраняйте весь server-data volume, включая dataprotection. Пустое поле сохраняет прежний секрет, для удаления есть отдельный флажок. Секреты не возвращаются в GET API и доступны для изменения только SuperAdmin.
+
+Если настройки панели ещё не сохранены, используются Glpi в appsettings.json или Glpi__BaseUrl/AppToken/UserToken/ServiceUserId (Compose GLPI_* из .env). Сохранённые настройки панели имеют приоритет. В GLPI включите REST API и нужный способ API-входа; браузерная авторизация/SSO не предоставляет серверу API-токен.
 
 * BaseUrl: `http://glpi.gp1.loc/apirest.php`.
 * AppToken: токен API-клиента GLPI.

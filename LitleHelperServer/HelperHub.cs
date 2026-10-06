@@ -112,6 +112,9 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             return id;
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)
-        { throw new HubException("GLPI не создал заявку. Проверьте доступность и настройки интеграции."); }
+        {
+            string message = ex is InvalidOperationException ? ex.Message : ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Заявка не отправлена." : "Сервер не смог подключиться к GLPI. Проверьте адрес, DNS и сеть в настройках GLPI.";
+            throw new HubException(message);
+        }
     }
 }

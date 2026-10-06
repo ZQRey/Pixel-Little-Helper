@@ -11,9 +11,20 @@ var mockBuilder = WebApplication.CreateBuilder();
 mockBuilder.Logging.ClearProviders(); mockBuilder.WebHost.UseUrls(mockUrl);
 var mock = mockBuilder.Build();
 int initCount = 0, killCount = 0, requester = 0;
+int ticketCount = 0;
+string mockMode = "token";
 string content = "";
 mock.MapGet("/apirest.php/initSession", (HttpRequest request) =>
 {
+    if (mockMode == "disabled") return Results.Json(new[] { "ERROR", "API отключено" }, statusCode: 400);
+    if (mockMode == "denied-ip") return Results.Json(new[] { "ERROR_NOT_ALLOWED_IP", "Not allowed" }, statusCode: 401);
+    if (mockMode == "bad-token") return Results.Json(new[] { "ERROR_GLPI_LOGIN_USER_TOKEN", "Invalid token" }, statusCode: 401);
+    if (mockMode == "html") return Results.Text("<html>Login</html>", "text/html");
+    if (mockMode == "basic")
+    {
+        Check(request.Headers.Authorization == "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("mock-login:mock-password")), "GLPI Basic authentication headers");
+        initCount++; return Results.Ok(new { session_token = "mock-session" });
+    }
     Check(request.Headers["App-Token"] == "mock-app" && request.Headers.Authorization == "user_token mock-user", "GLPI init authentication headers");
     initCount++; return Results.Ok(new { session_token = "mock-session" });
 });
@@ -24,6 +35,7 @@ mock.MapGet("/apirest.php/search/User", (HttpRequest request) =>
 });
 mock.MapPost("/apirest.php/Ticket", async (HttpRequest request) =>
 {
+    ticketCount++;
     using var body = await JsonDocument.ParseAsync(request.Body); var input = body.RootElement.GetProperty("input");
     requester = input.GetProperty("_users_id_requester").GetInt32(); content = input.GetProperty("content").GetString()!;
     return Results.Ok(new { id = 7001 });
@@ -146,6 +158,38 @@ try
     for (int i = 0; i < 30; i++) { list = await Json("/computers", admin); if (!list[0].GetProperty("isOnline").GetBoolean()) break; await Task.Delay(100); }
     Check(!list[0].GetProperty("isOnline").GetBoolean(), "disconnect marks computer offline");
     using var last = await Call("/users/1", admin, method: HttpMethod.Delete); Check(last.StatusCode == HttpStatusCode.BadRequest, "last SuperAdmin protected");
+    foreach (string role in new[] { "manager", "operator", "alice" })
+    {
+        using var deniedSettings = await Call("/settings/glpi", staffTokens[role]);
+        Check(deniedSettings.StatusCode == HttpStatusCode.Forbidden, role + " cannot access GLPI secrets/settings");
+    }
+    var settingsBefore = await Json("/settings/glpi", admin);
+    Check(settingsBefore.GetProperty("hasUserToken").GetBoolean() && !settingsBefore.GetRawText().Contains("mock-user"), "GLPI settings expose flags without secrets");
+    using var invalidUrl = await Call("/settings/glpi", admin, new { baseUrl = "file:///tmp/test", serviceUserId = 0, authMode = "token", login = "" }, HttpMethod.Put);
+    Check(invalidUrl.StatusCode == HttpStatusCode.BadRequest, "GLPI settings reject non-HTTP URL");
+    var savedSettings = await Json("/settings/glpi", admin, new { baseUrl = mockUrl, appToken = "", userToken = "", serviceUserId = 99, authMode = "token", login = "" }, HttpMethod.Put);
+    Check(savedSettings.GetProperty("baseUrl").GetString() == mockUrl + "/apirest.php" && savedSettings.GetProperty("hasUserToken").GetBoolean(), "GLPI URL normalized and blank secrets preserved");
+    int ticketsBeforeTest = ticketCount;
+    var connected = await Json("/settings/glpi/test", admin, new { });
+    Check(connected.GetProperty("success").GetBoolean() && ticketCount == ticketsBeforeTest && initCount == killCount, "GLPI connection test releases session without creating ticket");
+    foreach (var (mode, phrase) in new[] { ("disabled", "API отключён"), ("denied-ip", "не разрешает IP"), ("bad-token", "отклонил учётные данные"), ("html", "страницу входа") })
+    {
+        mockMode = mode;
+        var diagnosis = await Json("/settings/glpi/test", admin, new { });
+        Check(!diagnosis.GetProperty("success").GetBoolean() && diagnosis.GetProperty("message").GetString()!.Contains(phrase), "GLPI diagnostic explains " + mode);
+    }
+    mockMode = "basic";
+    var basicSettings = await Json("/settings/glpi", admin, new { baseUrl = mockUrl, serviceUserId = 99, authMode = "password", login = "mock-login", password = "mock-password" }, HttpMethod.Put);
+    Check(basicSettings.GetProperty("hasPassword").GetBoolean() && !basicSettings.GetRawText().Contains("mock-password"), "GLPI password saved without returning it");
+    connected = await Json("/settings/glpi/test", admin, new { });
+    Check(connected.GetProperty("success").GetBoolean(), "GLPI login/password mode works");
+    if (args.Length > 2)
+    {
+        string encrypted = await File.ReadAllTextAsync(args[2]);
+        Check(!encrypted.Contains("mock-password") && !encrypted.Contains("mock-user") && !encrypted.Contains("mock-app"), "persisted GLPI secrets encrypted at rest");
+    }
+    var cleared = await Json("/settings/glpi", admin, new { baseUrl = mockUrl, serviceUserId = 99, authMode = "token", login = "", clearAppToken = true, clearUserToken = true, clearPassword = true }, HttpMethod.Put);
+    Check(!cleared.GetProperty("hasAppToken").GetBoolean() && !cleared.GetProperty("hasUserToken").GetBoolean() && !cleared.GetProperty("hasPassword").GetBoolean(), "explicit clear removes saved GLPI secrets");
     Console.WriteLine("ALL INTEGRATION CHECKS PASSED");
 }
 finally { await mock.StopAsync(); await mock.DisposeAsync(); }

@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace LitleHelperServer;
 
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
-public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions) : Hub
+public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings) : Hub
 {
     public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
@@ -38,7 +38,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             sessions.Add(Context.ConnectionId, user.Id, context.Abort);
             if (user.Role != Roles.User) await Groups.AddToGroupAsync(Context.ConnectionId, "PanelStaff");
             if (user.Role is Roles.SuperAdmin or Roles.Admin) await Groups.AddToGroupAsync(Context.ConnectionId, "Admin:" + user.Username);
-            await Groups.AddToGroupAsync(Context.ConnectionId, "User:" + user.Username);
+            await Groups.AddToGroupAsync(Context.ConnectionId, "User:" + Security.TicketOwner(Context.User));
         }
         await base.OnConnectedAsync();
     }
@@ -104,10 +104,13 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             throw new HubException("Введите текст проблемы (до 8000 символов)");
         try
         {
-            int id = await glpi.CreateTicketAsync(c.CurrentUser, c.MachineName, description, Context.ConnectionAborted);
-            var ticket = new TicketRecord { GlpiId = id, Username = c.CurrentUser, MachineName = c.MachineName, Title = title, Description = description };
-            db.Tickets.Add(ticket); await db.SaveChangesAsync();
-            await Clients.Group("User:" + c.CurrentUser).SendAsync("TicketCreated", ticket);
+            string owner = Security.TicketUser(c.CurrentUser);
+            int id = await glpi.CreateTicketAsync(owner, c.MachineName, description, Context.ConnectionAborted);
+            var ticket = new TicketRecord { GlpiId = id, Username = owner, MachineName = c.MachineName, Title = title, Description = description };
+            db.Tickets.Add(ticket);
+            if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
+            await db.SaveChangesAsync();
+            await Clients.Group("User:" + owner).SendAsync("TicketCreated", ticket);
             await Clients.Group("PanelStaff").SendAsync("TicketCreated", ticket);
             return id;
         }

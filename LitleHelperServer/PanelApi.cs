@@ -23,13 +23,14 @@ public static class PanelApi
             if (request.Username.Length > 100 || request.Password.Length > 72) return Results.Unauthorized();
             string login = Security.Login(request.Username);
             var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login);
-            if (user == null || !user.IsActive || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
+            if (user == null || !user.IsActive || user.AuthSource == "AD" || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
             return Results.Ok(new { token = Security.Token(user, config), user });
         }).RequireRateLimiting("login");
         app.MapGet("/api/auth/me", async (ClaimsPrincipal p, HelperDb db) => Results.Ok(await db.Users.SingleAsync(u => u.Username == p.Identity!.Name))).RequireAuthorization("Panel");
         app.MapPost("/api/auth/change-password", async (PasswordRequest request, ClaimsPrincipal p, HelperDb db, IConfiguration config, PanelSessions sessions) =>
         {
             var user = await db.Users.SingleAsync(u => u.Username == p.Identity!.Name);
+            if (user.AuthSource == "AD") return Results.BadRequest(new { error = "Пароль AD изменяется в домене Windows." });
             if (!Security.PasswordValid(request.NewPassword) || request.NewPassword == request.CurrentPassword || !BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
                 return Results.BadRequest(new { error = "Проверьте текущий пароль. Новый пароль: 8–72 символа, до 72 байт UTF-8." });
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, 12); user.MustChangePassword = false; user.SecurityVersion++;
@@ -105,6 +106,7 @@ public static class PanelApi
         app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, HelperDb db, PanelSessions sessions) =>
         {
             ValidateUser(request, false); var user = await db.Users.FindAsync(id); if (user == null) return Results.NotFound();
+            if (user.AuthSource == "AD" && (Security.Login(request.Username) != user.Username || !string.IsNullOrEmpty(request.Password))) return Results.BadRequest(new { error = "Логин и пароль AD изменяются в Active Directory." });
             if (user.Role == Roles.SuperAdmin && user.IsActive && (request.Role != Roles.SuperAdmin || !request.IsActive)) await ProtectLastSuper(db, user);
             string name = Security.Login(request.Username);
             if (await db.Users.AnyAsync(u => u.Id != id && u.Username == name)) return Results.Conflict(new { error = "Логин уже существует" });
@@ -115,6 +117,7 @@ public static class PanelApi
         app.MapDelete("/api/users/{id:int}", async (int id, HelperDb db, PanelSessions sessions) =>
         {
             var user = await db.Users.FindAsync(id); if (user == null) return Results.NotFound();
+            if (user.AuthSource == "AD") return Results.BadRequest(new { error = "Для запрета повторного входа AD отключите пользователя вместо удаления." });
             await ProtectLastSuper(db, user); db.Users.Remove(user); await db.SaveChangesAsync(); sessions.Revoke(id); return Results.NoContent();
         }).RequireAuthorization("Super");
         app.MapGet("/api/audit", async (ClaimsPrincipal p, HelperDb db) =>
@@ -128,20 +131,23 @@ public static class PanelApi
         app.MapGet("/api/tickets", async (ClaimsPrincipal p, HelperDb db) =>
         {
             var query = db.Tickets.AsNoTracking();
-            if (p.IsInRole(Roles.User)) query = query.Where(t => t.Username == p.Identity!.Name);
+            string owner = Security.TicketOwner(p);
+            if (p.IsInRole(Roles.User)) query = query.Where(t => t.Username.ToLower() == owner);
             return Results.Ok(await query.OrderByDescending(t => t.CreatedAt).Take(500).ToListAsync());
         }).RequireAuthorization("Panel");
-        app.MapPost("/api/tickets", async (TicketRequest request, ClaimsPrincipal p, HelperDb db, GlpiService glpi, CancellationToken token) =>
+        app.MapPost("/api/tickets", async (TicketRequest request, ClaimsPrincipal p, HelperDb db, GlpiService glpi, IntegrationSettings settings, CancellationToken token) =>
         {
             if (string.IsNullOrWhiteSpace(request.Description) || request.Description.Length > 8000 || request.Title.Length > 160) return Results.BadRequest();
-            string user = p.Identity!.Name!; int id = await glpi.CreateTicketAsync(user, "WebPanel", request.Description, token);
+            string user = Security.TicketOwner(p); int id = await glpi.CreateTicketAsync(user, "WebPanel", request.Description, token);
             var ticket = new TicketRecord { GlpiId = id, Username = user, MachineName = "WebPanel", Title = request.Title, Description = request.Description };
-            db.Tickets.Add(ticket); await db.SaveChangesAsync(token); return Results.Ok(ticket);
+            db.Tickets.Add(ticket);
+            if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
+            await db.SaveChangesAsync(token); return Results.Ok(ticket);
         }).RequireAuthorization("Staff");
         app.MapGet("/api/tickets/{id:int}", async (int id, ClaimsPrincipal p, HelperDb db, GlpiService glpi, CancellationToken token) =>
         {
             var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
-            if (p.IsInRole(Roles.User) && ticket.Username != p.Identity!.Name) return Results.Forbid();
+            if (p.IsInRole(Roles.User) && !ticket.Username.Equals(Security.TicketOwner(p), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
             return Results.Ok(new { local = ticket, glpi = await glpi.GetTicketAsync(ticket.GlpiId, token) });
         }).RequireAuthorization("Panel");
         app.MapPut("/api/tickets/{id:int}/status", async (int id, TicketStatus request, HelperDb db, GlpiService glpi, CancellationToken token) =>

@@ -12,13 +12,16 @@ namespace LitleHelperServer;
 
 public static class Security
 {
+    public static string TicketUser(string value) => value.Trim().Split('\\').Last().Split('@')[0].ToLowerInvariant();
+    public static string TicketOwner(ClaimsPrincipal user) => user.FindFirst("ticket_owner")?.Value ?? user.Identity!.Name!;
     public static string KeyHash(string key) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
     public static string Canonical(string value) => value.Trim().ToUpperInvariant();
     public static string Login(string value) => value.Trim().ToLowerInvariant();
     public static string Token(PanelUser user, IConfiguration config)
     {
         var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username),
-            new Claim(ClaimTypes.Role, user.Role), new Claim("version", user.SecurityVersion.ToString()) };
+            new Claim(ClaimTypes.Role, user.Role), new Claim("version", user.SecurityVersion.ToString()),
+            new Claim("ticket_owner", user.AuthSource == "AD" ? TicketUser(user.Username) : user.Username) };
         var token = new JwtSecurityToken(config["Jwt:Issuer"], config["Jwt:Audience"], claims,
             expires: DateTime.UtcNow.AddMinutes(config.GetValue("Jwt:Minutes", 60)),
             signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:SigningKey"]!)), SecurityAlgorithms.HmacSha256));

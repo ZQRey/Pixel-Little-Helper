@@ -5,6 +5,22 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 static void Check(bool result, string text) { if (!result) throw new Exception(text); Console.WriteLine("PASS " + text); }
+if (args.FirstOrDefault() == "--ad-probe")
+{
+    await using var ldap = new MockAd();
+    var options = new Novell.Directory.Ldap.LdapConnectionOptions().UseSsl().ConfigureRemoteCertificateValidationCallback((_, cert, _, errors) =>
+    {
+        Console.WriteLine("TLS errors: " + errors);
+        using var chain = new System.Security.Cryptography.X509Certificates.X509Chain();
+        chain.ChainPolicy.TrustMode = System.Security.Cryptography.X509Certificates.X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.ImportFromPem(ldap.Pem); chain.ChainPolicy.RevocationMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck;
+        bool valid = chain.Build(new System.Security.Cryptography.X509Certificates.X509Certificate2(cert!));
+        Console.WriteLine("Custom CA valid: " + valid + "; " + string.Join(",", chain.ChainStatus.Select(x => x.Status.ToString()))); return valid;
+    });
+    using var connection = new Novell.Directory.Ldap.LdapConnection(options);
+    await connection.ConnectAsync("localhost", ldap.Port); await connection.BindAsync("alice@ad.test", "AD-test-password");
+    Console.WriteLine("LDAP bind successful"); return;
+}
 string url = args.FirstOrDefault() ?? "http://127.0.0.1:21500";
 string mockUrl = args.Skip(1).FirstOrDefault() ?? "http://127.0.0.1:21501";
 var mockBuilder = WebApplication.CreateBuilder();
@@ -14,6 +30,18 @@ int initCount = 0, killCount = 0, requester = 0;
 int ticketCount = 0;
 string mockMode = "token";
 string content = "";
+int telegramMessages = 0;
+bool telegramFail = false;
+string telegramText = "";
+mock.MapPost("/bot{botToken}/sendMessage", async (string botToken, HttpRequest request) =>
+{
+    Check(botToken == "123456:mock-token", "Telegram uses configured bot token");
+    using var body = await JsonDocument.ParseAsync(request.Body);
+    Check(body.RootElement.GetProperty("chat_id").GetString() == "-100888" && body.RootElement.GetProperty("message_thread_id").GetInt32() == 7, "Telegram group and topic configured");
+    if (telegramFail) return Results.Json(new { ok = false }, statusCode: 429);
+    telegramText = body.RootElement.GetProperty("text").GetString()!; telegramMessages++;
+    return Results.Ok(new { ok = true, result = new { message_id = telegramMessages } });
+});
 mock.MapGet("/apirest.php/initSession", (HttpRequest request) =>
 {
     if (mockMode == "disabled") return Results.Json(new[] { "ERROR", "API отключено" }, statusCode: 400);
@@ -190,6 +218,75 @@ try
     }
     var cleared = await Json("/settings/glpi", admin, new { baseUrl = mockUrl, serviceUserId = 99, authMode = "token", login = "", clearAppToken = true, clearUserToken = true, clearPassword = true }, HttpMethod.Put);
     Check(!cleared.GetProperty("hasAppToken").GetBoolean() && !cleared.GetProperty("hasUserToken").GetBoolean() && !cleared.GetProperty("hasPassword").GetBoolean(), "explicit clear removes saved GLPI secrets");
+    foreach (string restricted in new[] { "manager", "operator", "alice" })
+    foreach (string integration in new[] { "telegram", "ad" })
+    {
+        using var denied = await Call("/settings/" + integration, staffTokens[restricted]);
+        Check(denied.StatusCode == HttpStatusCode.Forbidden, restricted + " cannot access " + integration + " settings");
+    }
+    using var disabledAd = await Call("/auth/ad", body: new { username = "alice", password = "wrong" });
+    Check(disabledAd.StatusCode == HttpStatusCode.Unauthorized, "AD login disabled until configured");
+    var telegramOptions = await Json("/settings/telegram", admin, new { enabled = false, botToken = "123456:mock-token", chatId = "-100888", threadId = 7 }, HttpMethod.Put);
+    Check(telegramOptions.GetProperty("hasBotToken").GetBoolean() && !telegramOptions.GetRawText().Contains("mock-token"), "Telegram token never returned to browser");
+    telegramOptions = await Json("/settings/telegram", admin, new { enabled = true, botToken = "", chatId = "-100888", threadId = 7 }, HttpMethod.Put);
+    Check(telegramOptions.GetProperty("hasBotToken").GetBoolean(), "blank Telegram token preserves saved secret");
+    var telegramTest = await Json("/settings/telegram/test", admin, new { });
+    Check(telegramTest.GetProperty("success").GetBoolean() && telegramMessages == 1, "explicit Telegram test sends message");
+    await Json("/settings/glpi", admin, new { baseUrl = mockUrl, appToken = "mock-app", userToken = "mock-user", serviceUserId = 99, authMode = "token", login = "" }, HttpMethod.Put);
+    mockMode = "token"; telegramFail = true;
+    await Json("/tickets", admin, new { title = "Notification test", description = "Telegram failure must not cancel ticket" });
+    await agent.StartAsync(); await agent.InvokeAsync<int>("CreateTicket", "Agent notification", "Created from pet"); await agent.StopAsync();
+    var notificationState = await Json("/settings/telegram", admin);
+    Check(notificationState.GetProperty("pending").GetInt32() == 2, "panel and agent tickets persist notifications in outbox");
+    for (int i = 0; i < 50; i++) { notificationState = await Json("/settings/telegram", admin); if (notificationState.GetProperty("lastError").ValueKind == JsonValueKind.String) break; await Task.Delay(100); }
+    Check(notificationState.GetProperty("lastError").GetString()!.Contains("лимит"), "Telegram failure recorded without failing ticket creation");
+    telegramFail = false;
+    for (int i = 0; i < 70 && telegramMessages < 3; i++) await Task.Delay(500);
+    Check(telegramMessages == 3 && telegramText.Contains("GLPI #7001"), "outbox retries Telegram and delivers both tickets");
+    await using var adMock = new MockAd();
+    var adOptions = new { enabled = true, host = "localhost", port = adMock.Port, domain = "ad.test", netbiosDomain = "AD", baseDn = "DC=ad,DC=test", caCertificate = adMock.Pem };
+    await Json("/settings/ad", admin, adOptions, HttpMethod.Put);
+    var adTest = await Json("/settings/ad/test", admin, new { });
+    Check(adTest.GetProperty("success").GetBoolean(), "LDAPS connection validates supplied CA certificate");
+    using var wrongAd = await Call("/auth/ad", body: new { username = "alice", password = "wrong" });
+    Check(wrongAd.StatusCode == HttpStatusCode.Unauthorized, "incorrect AD password rejected");
+    var adLogin = await Json("/auth/ad", body: new { username = "AD\\alice", password = "AD-test-password" });
+    string adToken = adLogin.GetProperty("token").GetString()!; int adId = adLogin.GetProperty("user").GetProperty("id").GetInt32();
+    Check(adLogin.GetProperty("user").GetProperty("role").GetString() == "User" && adLogin.GetProperty("user").GetProperty("authSource").GetString() == "AD", "first AD login creates User role without stored password");
+    var adTickets = await Json("/tickets", adToken);
+    Check(adTickets.GetArrayLength() == 2 && adTickets.EnumerateArray().All(t => t.GetProperty("username").GetString() == "alice"), "AD UPN maps to own agent tickets only");
+    using var adOther = await Call("/tickets/" + otherId, adToken); Check(adOther.StatusCode == HttpStatusCode.Forbidden, "AD user cannot fetch another user's ticket");
+    using var adCreate = await Call("/tickets", adToken, new { title = "Denied", description = "Denied" }); Check(adCreate.StatusCode == HttpStatusCode.Forbidden, "AD default User has read-only ticket access");
+    using var adPassword = await Call("/auth/change-password", adToken, new { currentPassword = "AD-test-password", newPassword = "New-password" }); Check(adPassword.StatusCode == HttpStatusCode.BadRequest, "AD password cannot be changed locally");
+    using var localAdLogin = await Call("/auth/login", body: new { username = "alice@ad.test", password = "AD-test-password" }); Check(localAdLogin.StatusCode == HttpStatusCode.Unauthorized, "AD account cannot authenticate through local password endpoint");
+    await Json("/users/" + adId, admin, new { username = "alice@ad.test", fullName = "Alice AD", role = "User", isActive = false }, HttpMethod.Put);
+    using var revokedAd = await Call("/tickets", adToken); Check(revokedAd.StatusCode == HttpStatusCode.Unauthorized, "disabled AD user token revoked immediately");
+    using var blockedAd = await Call("/auth/ad", body: new { username = "alice@ad.test", password = "AD-test-password" }); Check(blockedAd.StatusCode == HttpStatusCode.Unauthorized, "disabled AD user cannot reactivate by signing in");
+    if (args.Length > 3) { string stored = File.ReadAllText(args[3]); Check(!stored.Contains("123456:mock-token") && !stored.Contains("AD-test-password"), "Telegram token encrypted and AD user password never saved"); }
+    using var unavailableUpdate = await http.GetAsync("/api/client-updates/latest"); Check(unavailableUpdate.StatusCode == HttpStatusCode.NoContent, "no update offered before publishing");
+    foreach (string restricted in new[] { "manager", "operator", "alice" })
+    { using var denied = await Call("/settings/updates", staffTokens[restricted]); Check(denied.StatusCode == HttpStatusCode.Forbidden, restricted + " cannot publish updates"); }
+    if (args.Length > 4 && File.Exists(Path.Combine(args[4], "PixelHelper.update.json")))
+    {
+        string manifestText = File.ReadAllText(Path.Combine(args[4], "PixelHelper.update.json"));
+        var signed = JsonSerializer.Deserialize<PixelHelper.Updates.ClientUpdateManifest>(manifestText, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Check(signed.Valid() && !(signed with { Version = "9.9.9" }).Valid(), "update signature verified and manifest tampering rejected");
+        async Task<HttpResponseMessage> Upload(string manifest, bool corrupt = false)
+        {
+            using var form = new MultipartFormDataContent();
+            byte[] bytes = File.ReadAllBytes(Path.Combine(args[4], "PixelHelper.msi")); if (corrupt) bytes[0] ^= 1;
+            form.Add(new ByteArrayContent(bytes), "package", "package.msi"); form.Add(new StringContent(manifest), "manifest", "manifest.json");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/settings/updates/upload") { Content = form }; request.Headers.Authorization = new("Bearer", admin); return await http.SendAsync(request);
+        }
+        using var badSignature = await Upload(JsonSerializer.Serialize(signed with { Signature = "invalid" })); Check(badSignature.StatusCode == HttpStatusCode.BadRequest, "unsigned update rejected before publication");
+        using var badHash = await Upload(manifestText, true); Check(badHash.StatusCode == HttpStatusCode.BadRequest, "modified MSI rejected by checksum");
+        using var published = await Upload(manifestText); Check(published.IsSuccessStatusCode, "signed MSI published successfully");
+        var latest = await http.GetFromJsonAsync<PixelHelper.Updates.ClientUpdateManifest>("/api/client-updates/latest"); Check(latest!.Version == signed.Version && latest.Valid(), "client receives signed release manifest");
+        using var package = await http.GetAsync("/api/client-updates/package/" + signed.Sha256, HttpCompletionOption.ResponseHeadersRead); Check(package.IsSuccessStatusCode && package.Content.Headers.ContentLength == signed.Size, "client package download has expected size");
+        using var duplicate = await Upload(manifestText); Check(duplicate.StatusCode == HttpStatusCode.BadRequest, "release downgrade or duplicate version blocked");
+        await Json("/settings/updates", admin, new { enabled = false }, HttpMethod.Put);
+        using var paused = await http.GetAsync("/api/client-updates/latest"); Check(paused.StatusCode == HttpStatusCode.NoContent, "administrator can pause client updates");
+    }
     Console.WriteLine("ALL INTEGRATION CHECKS PASSED");
 }
 finally { await mock.StopAsync(); await mock.DisposeAsync(); }

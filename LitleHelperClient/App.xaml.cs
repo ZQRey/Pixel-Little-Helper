@@ -9,6 +9,10 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Contains("--update-service"))
+        {
+            System.ServiceProcess.ServiceBase.Run(new UpdateService()); Shutdown(); return;
+        }
         if (e.Args.Contains("--cleanup-machine"))
         {
             Shutdown(MachineCleanup.Run());
@@ -31,7 +35,9 @@ public partial class App : Application
         };
         bool diagnostics = e.Args.Length == 2 && e.Args[0] == "--diagnostics";
         MainWindow = new PetWindow(diagnostics);
+        if (!diagnostics) NativeMethods.RegisterApplicationRestart(null, 0);
         MainWindow.Show();
+        if (!diagnostics) UpdateRestart.Watch(MainWindow);
         if (diagnostics)
         {
             var process = System.Diagnostics.Process.GetCurrentProcess();

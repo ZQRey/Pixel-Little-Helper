@@ -6,12 +6,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>PixelHelper</AssemblyName>
-    <Version>1.1.3</Version>
+    <Version>1.2.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <DebugType>none</DebugType>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
+    <Compile Include="..\LitleHelperServer\ClientUpdateManifest.cs" Link="ClientUpdateManifest.cs" />
+    <EmbeddedResource Include="UpdatePublicKey.pem" LogicalName="PixelHelper.UpdatePublicKey" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.31" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <Compile Remove="tests\**\*.cs" />

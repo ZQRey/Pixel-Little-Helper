@@ -58,6 +58,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 string? name = context.Principal!.Identity!.Name;
                 var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Username == name);
                 if (user == null || !user.IsActive || !context.Principal.HasClaim("version", user.SecurityVersion.ToString())) context.Fail("Account changed; sign in again");
+                if (user?.AuthSource == "AD" && !context.HttpContext.RequestServices.GetRequiredService<IntegrationSettings>().Ad().Enabled) context.Fail("AD sign-in disabled");
             }
         };
     }).AddScheme<AuthenticationSchemeOptions, AgentAuthenticationHandler>("Agent", _ => { });
@@ -78,6 +79,12 @@ builder.Services.AddSignalR(options => { options.MaximumReceiveMessageSize = 1_5
 builder.Services.AddScoped<CommandService>();
 builder.Services.AddSingleton<PanelSessions>();
 builder.Services.AddSingleton<GlpiSettingsStore>();
+builder.Services.AddSingleton<IntegrationSettings>();
+builder.Services.AddSingleton<ClientReleases>();
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = PixelHelper.Updates.ClientUpdateManifest.MaximumSize + 65536);
+builder.Services.AddScoped<IAdAuthentication, AdAuthentication>();
+builder.Services.AddHttpClient<TelegramClient>(http => { http.Timeout = TimeSpan.FromSeconds(15); http.MaxResponseContentBufferSize = 65536; }).RemoveAllLoggers();
+builder.Services.AddHostedService<TelegramWorker>();
 builder.Services.AddHostedService<TaskExpiryService>();
 builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.FromSeconds(20); http.MaxResponseContentBufferSize = 2_097_152; });
 var app = builder.Build();
@@ -85,6 +92,10 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
+    // Existing deployments use EnsureCreated; add the outbox without changing existing tables.
+    string timestamp = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT";
+    string outboxSql = "CREATE TABLE IF NOT EXISTS \"TelegramDeliveries\" (\"TicketId\" INTEGER PRIMARY KEY REFERENCES \"Tickets\"(\"Id\") ON DELETE CASCADE, \"Attempts\" INTEGER NOT NULL, \"State\" TEXT NOT NULL, \"NextAttemptAt\" " + timestamp + " NOT NULL, \"SentAt\" " + timestamp + " NULL, \"LastError\" TEXT NOT NULL)";
+    await db.Database.ExecuteSqlRawAsync(outboxSql);
     await db.Computers.ExecuteUpdateAsync(s => s.SetProperty(c => c.IsOnline, false).SetProperty(c => c.ConnectionId, (string?)null));
     if (!await db.Users.AnyAsync())
         db.Users.Add(new PanelUser { Username = "admin", FullName = "Супер администратор", Role = Roles.SuperAdmin,
@@ -125,5 +136,6 @@ app.Use(async (context, next) =>
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
+app.MapIntegrationApi();
 await app.RunAsync();
 public partial class Program { }

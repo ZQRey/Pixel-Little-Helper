@@ -19,6 +19,9 @@ $start.Environment['Database__Provider'] = 'Sqlite'
 $start.Environment['ConnectionStrings__Database'] = "Data Source=$testRoot\helper.db"
 $start.Environment['Jwt__SigningKey'] = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
 $start.Environment['Glpi__SettingsFile'] = Join-Path $testRoot 'glpi-settings.json'
+$start.Environment['Integrations__SettingsFile'] = Join-Path $testRoot 'integrations.json'
+$start.Environment['ClientUpdates__Directory'] = Join-Path $testRoot 'client-updates'
+$start.Environment['Telegram__ApiBaseUrl'] = $mockUrl
 $start.Environment['Glpi__BaseUrl'] = "$mockUrl/apirest.php"
 $start.Environment['Glpi__AppToken'] = 'mock-app'; $start.Environment['Glpi__UserToken'] = 'mock-user'; $start.Environment['Glpi__ServiceUserId'] = '99'
 $server = [Diagnostics.Process]::Start($start)
@@ -30,7 +33,7 @@ try {
         Start-Sleep -Milliseconds 200
     }
     if (-not $ready) { throw 'Server did not start' }
-    & $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') $serverUrl $mockUrl (Join-Path $testRoot 'glpi-settings.json')
+    & $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') $serverUrl $mockUrl (Join-Path $testRoot 'glpi-settings.json') (Join-Path $testRoot 'integrations.json') (Join-Path $serverRoot '..\LitleHelperClient\artifacts\release-1.2.0')
     if ($LASTEXITCODE -ne 0) { throw 'Integration checks failed' }
 } finally {
     if (-not $server.HasExited) { $server.Kill(); $server.WaitForExit() }

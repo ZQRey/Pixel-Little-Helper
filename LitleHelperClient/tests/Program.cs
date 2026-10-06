@@ -12,6 +12,15 @@ string temp = Path.Combine(Path.GetTempPath(), "PixelHelper.Tests-" + Guid.NewGu
 Directory.CreateDirectory(temp);
 try
 {
+    string manifestPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "release-1.2.0", "PixelHelper.update.json"));
+    if (File.Exists(manifestPath))
+    {
+        var manifest = JsonSerializer.Deserialize<PixelHelper.Updates.ClientUpdateManifest>(File.ReadAllText(manifestPath), Settings.Json)!;
+        Check(manifest.Valid(), "client accepts trusted signed update manifest");
+        Check(!(manifest with { Sha256 = new string('0', 64) }).Valid(), "client rejects altered update checksum");
+        Check(!(manifest with { Signature = "invalid" }).Valid(), "client rejects unsigned or invalid update manifest");
+        Check(!(manifest with { Size = PixelHelper.Updates.ClientUpdateManifest.MaximumSize + 1 }).Valid(), "client refuses oversized MSI update");
+    }
     var installedSettings = new Settings { ServerUrl = "http://old-server:5000", ClientToken = "test-key", X = 42, HubUrl = "https://explicit.example/helperHub" };
     Settings.ApplyInstalledServer(installedSettings, "https://new-server.example:5443/team/");
     Check(installedSettings.ServerUrl == "https://new-server.example:5443/team" && installedSettings.ClientToken == "test-key" && installedSettings.X == 42 && installedSettings.HubUrl == "https://explicit.example/helperHub", "installed server replaces saved address without changing user settings or explicit hub");

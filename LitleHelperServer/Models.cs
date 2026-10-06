@@ -36,6 +36,7 @@ public class ActionButton
 }
 public class PanelUser
 {
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public string AuthSource => PasswordHash == "!AD" ? "AD" : "Local";
     public int Id { get; set; }
     public string Username { get; set; } = "";
     [JsonIgnore] public string PasswordHash { get; set; } = "";
@@ -72,6 +73,7 @@ public class TicketRecord
 }
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
+    public DbSet<TelegramDelivery> TelegramDeliveries => Set<TelegramDelivery>();
     public DbSet<Computer> Computers => Set<Computer>();
     public DbSet<ActionButton> Buttons => Set<ActionButton>();
     public DbSet<PanelUser> Users => Set<PanelUser>();
@@ -79,6 +81,8 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<TicketRecord> Tickets => Set<TicketRecord>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        b.Entity<TelegramDelivery>().HasKey(x => x.TicketId);
+        b.Entity<TelegramDelivery>().HasOne(x => x.Ticket).WithOne().HasForeignKey<TelegramDelivery>(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<Computer>().HasIndex(x => x.MachineName).IsUnique();
         b.Entity<PanelUser>().HasIndex(x => x.Username).IsUnique();
         b.Entity<AuditLog>().HasIndex(x => x.TaskId).IsUnique();

@@ -160,3 +160,5 @@ msiexec /x PixelHelper.msi /qn /norestart /l*v uninstall.log
 Настоящий локальный Kestrel/SQLite, отдельная БД artifacts/test-*, имитаторы агента и GLPI. Реальные команды на чужих ПК/HelpDesk-заявки не отправляются. Проверяются роли, обязательный пароль, ключи, инвентарь, доставка/аудит, обновление меню и собственные тикеты. Клиентские тесты выполняют только echo/Write-Output, чтение WMI/реестра и WPF hit-testing.
 
 Источники: [SignalR authentication](https://learn.microsoft.com/en-us/aspnet/core/signalr/authn-and-authz?view=aspnetcore-8.0), [SignalR .NET client](https://learn.microsoft.com/en-us/aspnet/core/signalr/dotnet-client?view=aspnetcore-8.0), [Npgsql](https://www.npgsql.org/efcore/). Результаты — `../VERIFICATION.md`.
+
+Для подключения Windows-клиента получите ключ ПК в панели и укажите http://172.16.16.61:5000 в настройках или в MSI SERVERURL. SSH-ключ доступа к GitHub/серверу, JWT-ключ панели и ключ регистрации ПК имеют разные назначения: SSH-ключ не нужно передавать клиенту или контейнеру.

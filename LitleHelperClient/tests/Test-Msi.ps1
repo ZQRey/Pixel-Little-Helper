@@ -18,6 +18,12 @@ function Check([bool]$Passed, [string]$Description) {
     Write-Host "PASS $Description"
 }
 $secure = @(Rows 'SELECT `Value` FROM `Property` WHERE `Property` = ''SecureCustomProperties''')
+if (@(Rows 'SELECT `Name` FROM `ServiceInstall`').Count -gt 0) {
+    $service = @(Rows 'SELECT `Name`, `ServiceType`, `StartType`, `Arguments` FROM `ServiceInstall` WHERE `Name` = ''PixelHelperUpdater''')
+    Check ($service.Count -eq 1 -and $service[0][1] -eq '16' -and $service[0][2] -eq '2' -and $service[0][3] -eq '--update-service') 'updater installed as automatic own-process Windows service'
+    $control = @(Rows 'SELECT `Event`, `Wait` FROM `ServiceControl` WHERE `Name` = ''PixelHelperUpdater''')
+    Check ($control.Count -eq 1 -and ([int]$control[0][0] -band 163) -eq 163 -and $control[0][1] -eq '1') 'MSI starts, stops during upgrades and removes updater service'
+}
 Check ($secure[0][0].Split(';') -contains 'SERVERURL') 'SERVERURL reaches elevated execute sequence'
 $registry = @(Rows 'SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry` WHERE `Name` = ''ServerUrl''')
 Check ($registry.Count -eq 1 -and $registry[0][0] -eq '2' -and $registry[0][3] -eq '[SERVERURL]') 'address persisted in HKLM by MSI component'

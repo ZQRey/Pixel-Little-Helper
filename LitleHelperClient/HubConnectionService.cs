@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.SignalR.Client;
+using System.Net.Http;
+using System.Net.Http.Json;
 
 namespace PixelHelper;
 
@@ -11,13 +13,18 @@ public sealed class HubConnectionService : IAsyncDisposable
     private readonly SemaphoreSlim inventoryLock = new(1, 1);
     private Task? loop;
     private bool registered;
+    private bool registrationSent;
     public bool IsOnline => registered && connection.State == HubConnectionState.Connected;
     public event Action<bool>? OnlineChanged;
     public event Action<List<ActionButton>>? ButtonsUpdated;
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
-        string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "http://helper-server" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
+        if (settings.EnsureClientKey())
+        {
+            settings.Save(); // Persist before sending; retry after restart uses the same identity.
+        }
+        string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "http://helper.gp1.loc" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) throw new ArgumentException("Неверный адрес хаба");
         connection = new HubConnectionBuilder().WithUrl(uri, options =>
         {
@@ -43,7 +50,20 @@ public sealed class HubConnectionService : IAsyncDisposable
         {
             try
             {
-                if (connection.State == HubConnectionState.Disconnected) { await connection.StartAsync(lifetime.Token); await Register(); }
+                if (connection.State == HubConnectionState.Disconnected)
+                {
+                    if (!registrationSent)
+                    {
+                        using var handler = new HttpClientHandler { AllowAutoRedirect = false };
+                        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+                        var endpoint = new Uri(settings.ServerUrl!.TrimEnd('/') + "/api/agents/register");
+                        using var response = await http.PostAsJsonAsync(endpoint, new { machineName = Environment.MachineName, clientKey = settings.ClientToken }, lifetime.Token);
+                        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+                            throw new InvalidOperationException("Компьютер уже зарегистрирован с другим ключом. Обратитесь к администратору.");
+                        response.EnsureSuccessStatusCode(); registrationSent = true;
+                    }
+                    await connection.StartAsync(lifetime.Token); await Register();
+                }
                 else if (connection.State == HubConnectionState.Connected)
                 {
                     if (!registered) await Register(); else await connection.InvokeAsync("Heartbeat", lifetime.Token);

@@ -10,6 +10,31 @@ public static class PanelApi
 {
     public static void MapPanelApi(this WebApplication app)
     {
+        app.MapPost("/api/agents/register", async (AgentRegistrationRequest request, HelperDb db) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.MachineName) || string.IsNullOrWhiteSpace(request.ClientKey)) return Results.BadRequest();
+            string machine = Security.Canonical(request.MachineName);
+            if (!Security.MachineValid(machine) || request.ClientKey.Length is < 32 or > 200 ||
+                request.ClientKey.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('+' or '/' or '=' or '-' or '_')))
+                return Results.BadRequest(new { error = "Неверные данные регистрации клиента." });
+            string hash = Security.KeyHash(request.ClientKey);
+            var computer = await db.Computers.SingleOrDefaultAsync(c => c.MachineName == machine);
+            if (computer == null)
+            {
+                computer = new Computer { MachineName = machine, AgentKeyHash = hash };
+                db.Computers.Add(computer);
+                try { await db.SaveChangesAsync(); }
+                catch (DbUpdateException)
+                {
+                    db.Entry(computer).State = EntityState.Detached;
+                    computer = await db.Computers.SingleOrDefaultAsync(c => c.MachineName == machine);
+                    if (computer == null) throw;
+                }
+            }
+            if (!CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(computer.AgentKeyHash), System.Text.Encoding.ASCII.GetBytes(hash)))
+                return Results.Conflict(new { error = "Компьютер уже зарегистрирован с другим ключом. Обратитесь к администратору." });
+            return Results.Ok(new { registered = true });
+        }).RequireRateLimiting("registration");
         app.MapGet("/api/settings/glpi", (GlpiSettingsStore settings) => Results.Ok(settings.View())).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/glpi", (GlpiSettingsUpdate update, GlpiSettingsStore settings) => { settings.Save(update); return Results.Ok(settings.View()); }).RequireAuthorization("settings.manage");
         app.MapPost("/api/settings/glpi/test", async (GlpiService glpi, CancellationToken token) =>

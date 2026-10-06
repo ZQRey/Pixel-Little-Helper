@@ -352,9 +352,6 @@ public sealed class PetWindow : Window
         {
             var exit = MakeButton("Закрыть помощника"); exit.Click += (_, _) => Close();
             AddBubble(exit, 322, 292, 154, 34);
-            var startup = MakeButton("Отключить автозапуск");
-            startup.Click += (_, _) => { try { Settings.SetStartup(false); ShowNotice("Автозапуск отключён"); } catch (Exception ex) { ShowNotice(ex.Message); } };
-            AddBubble(startup, 322, 334, 154, 42);
         }
         KeepMenuVisible(); UpdateRegion();
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();
@@ -394,7 +391,6 @@ public sealed class PetWindow : Window
         {
             switch (action.Type)
             {
-                case "disable_startup": Settings.SetStartup(false); ShowNotice("Автозапуск отключён"); break;
                 case "exit": Application.Current.Shutdown(); break;
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");

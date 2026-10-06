@@ -22,7 +22,6 @@ public sealed class ApiClient : IDisposable
         new("search", "Поиск файлов и папок", "open_url", "search-ms:"),
         new("dmed", "Открыть DMED", "open_url", "https://krg.dmed.kz"),
         new("eisz", "Открыть EISZ", "open_url", "https://www.eisz.kz"),
-        new("disable-startup", "Отключить автозапуск", "disable_startup"),
         new("exit", "Закрыть помощника", "exit")
     ];
     private Uri Endpoint(string path)

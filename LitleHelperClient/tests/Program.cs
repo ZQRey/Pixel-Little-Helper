@@ -12,6 +12,11 @@ string temp = Path.Combine(Path.GetTempPath(), "PixelHelper.Tests-" + Guid.NewGu
 Directory.CreateDirectory(temp);
 try
 {
+    var fresh = new Settings(); var other = new Settings();
+    Check(fresh.EnsureClientKey() && Convert.FromBase64String(fresh.ClientToken).Length == 48, "client generates cryptographic registration key");
+    string generated = fresh.ClientToken;
+    Check(!fresh.EnsureClientKey() && fresh.ClientToken == generated, "generated registration key reused");
+    other.EnsureClientKey(); Check(other.ClientToken != generated, "independent clients get different keys");
     string manifestPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "release-1.2.0", "PixelHelper.update.json"));
     if (File.Exists(manifestPath))
     {
@@ -24,7 +29,7 @@ try
     var installedSettings = new Settings { ServerUrl = "http://old-server:5000", ClientToken = "test-key", X = 42, HubUrl = "https://explicit.example/helperHub" };
     Settings.ApplyInstalledServer(installedSettings, "https://new-server.example:5443/team/");
     Check(installedSettings.ServerUrl == "https://new-server.example:5443/team" && installedSettings.ClientToken == "test-key" && installedSettings.X == 42 && installedSettings.HubUrl == "https://explicit.example/helperHub", "installed server replaces saved address without changing user settings or explicit hub");
-    foreach (string invalid in new[] { "", "file:///C:/server", "not a URL", "https://user:pass@server", "https://server/?token=secret", "https://server/#fragment" })
+    foreach (string invalid in new[] { "", "file:///C:/server", "not a URL", "http:\\\\172.16.16.61,", "http://172.16.16.61,", "http://helper.gp1.loc ", "https://user:pass@server", "https://server/?token=secret", "https://server/#fragment" })
     {
         Settings.ApplyInstalledServer(installedSettings, invalid);
         Check(installedSettings.ServerUrl == "https://new-server.example:5443/team", "invalid installed address ignored: " + invalid);
@@ -79,8 +84,8 @@ try
     }
     var settings = new Settings { ServerUrl = url };
     using var api = new ApiClient(settings, temp);
-    Check(ApiClient.Defaults().Select(a => a.Id).SequenceEqual(new[] { "search", "dmed", "eisz", "disable-startup", "exit" }), "strict five offline buttons");
-    Check(api.ReadCache().Count == 5, "offline defaults");
+    Check(ApiClient.Defaults().Select(a => a.Id).SequenceEqual(new[] { "search", "dmed", "eisz", "exit" }), "offline menu excludes startup disabling");
+    Check(api.ReadCache().Count == 4, "offline defaults");
     var serving = Serve("[{\"id\":\"test\",\"title\":\"Documents\",\"type\":\"open_path\",\"target\":\"C:\\\\Docs\"}]");
     var actions = await api.GetActionsAsync(CancellationToken.None); await serving;
     Check(actions.Count == 1 && actions[0].Id == "test", "GET actions and deserialization");
@@ -100,7 +105,7 @@ try
     await serving; Check(failed, "failed ticket is not reported as sent");
     listener.Stop();
     File.WriteAllText(Path.Combine(temp, "actions_cache.json"), "broken");
-    Check(api.ReadCache().Count == 5, "corrupt cache fallback");
+    Check(api.ReadCache().Count == 4, "corrupt cache fallback");
     var disabledExecutor = new CommandExecutor(new Settings { EnableAdministrativeCommands = false });
     var processExecutor = new CommandExecutor(new Settings());
     var processesResult = await processExecutor.ExecuteAsync(new("process-list", "processes", ""), _ => Task.CompletedTask, CancellationToken.None);

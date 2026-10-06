@@ -8,11 +8,17 @@ public sealed class Settings
 {
     public double? X { get; set; }
     public double? Y { get; set; }
-    public string? ServerUrl { get; set; } = "http://helper-server";
+    public string? ServerUrl { get; set; } = "http://helper.gp1.loc";
     public string? HubUrl { get; set; }
     public string ClientToken { get; set; } = "";
     public bool EnableAdministrativeCommands { get; set; } = true;
     public bool AllowRemoteCommands { get; set; }
+    internal bool EnsureClientKey()
+    {
+        if (!string.IsNullOrWhiteSpace(ClientToken)) return false;
+        ClientToken = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48));
+        return true;
+    }
     public static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PixelHelper");
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true };
     private const string RegistryPath = @"Software\PixelHelper";
@@ -42,7 +48,8 @@ public sealed class Settings
     }
     internal static void ApplyInstalledServer(Settings settings, string? serverUrl)
     {
-        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) &&
+        if (!string.IsNullOrWhiteSpace(serverUrl) && !serverUrl.Any(c => char.IsWhiteSpace(c) || c is '\\' or ',') &&
+            Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) && uri.HostNameType != UriHostNameType.Unknown &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
             string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment))
             settings.ServerUrl = uri.AbsoluteUri.TrimEnd('/');

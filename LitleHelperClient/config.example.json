@@ -1,7 +1,7 @@
 {
   "x": null,
   "y": null,
-  "serverUrl": "http://helper-server",
+  "serverUrl": "http://helper.gp1.loc",
   "hubUrl": null,
   "clientToken": "",
   "enableAdministrativeCommands": true,

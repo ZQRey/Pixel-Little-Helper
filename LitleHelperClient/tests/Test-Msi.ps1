@@ -37,7 +37,7 @@ $actions = @(Rows 'SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecute
 foreach ($case in @(
     @{ Supplied = 'https://custom.example:5443'; Existing = 'http://old.example:5000'; Expected = 'https://custom.example:5443' },
     @{ Supplied = ''; Existing = 'http://old.example:5000'; Expected = 'http://old.example:5000' },
-    @{ Supplied = ''; Existing = ''; Expected = 'http://helper-server' }
+    @{ Supplied = ''; Existing = ''; Expected = 'http://helper.gp1.loc' }
 )) {
     $session.Property('SERVERURL') = $case.Supplied
     $session.Property('EXISTINGSERVERURL') = $case.Existing
@@ -47,3 +47,14 @@ foreach ($case in @(
     Check ($session.Property('SERVERURL') -eq $case.Expected) "execute sequence chooses $($case.Expected) without UI"
 }
 Write-Host 'MSI checks passed; no installation performed.'
+$conditions = @(Rows 'SELECT `Condition`, `Description` FROM `LaunchCondition`')
+$addressCondition = $conditions | Where-Object { $_[0] -like '*SERVERURL*' } | Select-Object -First 1
+$session.Property('Installed') = ''
+foreach ($url in @('http://helper.gp1.loc','http://172.16.16.61','https://helper.gp1.loc')) {
+    $session.Property('SERVERURL')=$url
+    Check ($session.EvaluateCondition($addressCondition[0]) -eq 1) "installer accepts $url"
+}
+foreach ($url in @('http:\\172.16.16.61,','http://172.16.16.61,','http://helper.gp1.loc ','http://','https://')) {
+    $session.Property('SERVERURL')=$url
+    Check ($session.EvaluateCondition($addressCondition[0]) -eq 0) "installer rejects malformed address $url"
+}

@@ -104,4 +104,5 @@ public record PasswordRequest(string CurrentPassword, string NewPassword);
 public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null);
 public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
+public record AgentRegistrationRequest(string MachineName, string ClientKey);
 public record TicketRequest(string Title, string Description);

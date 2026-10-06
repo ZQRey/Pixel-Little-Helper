@@ -19,6 +19,14 @@ function Check($ok,$message){if(!$ok){throw $message};"PASS $message"}
 $server=[Diagnostics.Process]::Start($start)
 try {
  for($i=0;$i-lt 50;$i++){try{Invoke-RestMethod "$url/health"|Out-Null;break}catch{Start-Sleep -Milliseconds 200}}
+ $agentKey=[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
+ $registration=@{machineName='AUTO-TEST';clientKey=$agentKey}
+ Check ((Call '/agents/register' 'POST' $registration).Status-eq 200) 'new client registers its own key without panel credentials'
+ Check ((Call '/agents/register' 'POST' $registration).Status-eq 200) 'client registration is idempotent'
+ Check ((Call '/agents/register' 'POST' @{machineName='AUTO-TEST';clientKey=[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))}).Status-eq 409) 'another key cannot replace registered computer'
+ Check ((Call '/agents/register' 'POST' $registration).Status-eq 200) 'original client key still valid after attempted replacement'
+ Check ((Call '/agents/register' 'POST' @{machineName='bad/name';clientKey=$agentKey}).Status-eq 400) 'invalid registration name rejected'
+ Check ((Call '/agents/register' 'POST' @{machineName='TEST';clientKey=$null}).Status-eq 400) 'empty registration key rejected'
  $login=Call '/auth/login' 'POST' @{username='admin';password='admin123'};$admin=$login.Data.token
  $changed=Call '/auth/change-password' 'POST' @{currentPassword='admin123';newPassword='Permission-test-123'} $admin;$admin=$changed.Data.token
  $catalog=Call '/permissions' 'GET' $null $admin;Check ($catalog.Status-eq 200 -and $catalog.Data.catalog.'users.manage') 'permission catalog available to super administrator'

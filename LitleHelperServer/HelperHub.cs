@@ -36,8 +36,9 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             if (!user.IsActive || user.MustChangePassword) { Context.Abort(); return; }
             var context = Context;
             sessions.Add(Context.ConnectionId, user.Id, context.Abort);
-            if (user.Role != Roles.User) await Groups.AddToGroupAsync(Context.ConnectionId, "PanelStaff");
-            if (user.Role is Roles.SuperAdmin or Roles.Admin) await Groups.AddToGroupAsync(Context.ConnectionId, "Admin:" + user.Username);
+            if (Access.Can(user, "tickets.all")) await Groups.AddToGroupAsync(Context.ConnectionId, "TicketStaff");
+            if (Access.Can(user, "computers.view")) await Groups.AddToGroupAsync(Context.ConnectionId, "PanelStaff");
+            if (Access.Can(user, "commands.execute")) await Groups.AddToGroupAsync(Context.ConnectionId, "Admin:" + user.Username);
             await Groups.AddToGroupAsync(Context.ConnectionId, "User:" + Security.TicketOwner(Context.User));
         }
         await base.OnConnectedAsync();
@@ -111,7 +112,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
             await db.SaveChangesAsync();
             await Clients.Group("User:" + owner).SendAsync("TicketCreated", ticket);
-            await Clients.Group("PanelStaff").SendAsync("TicketCreated", ticket);
+            await Clients.Group("TicketStaff").SendAsync("TicketCreated", ticket);
             return id;
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or TaskCanceledException)

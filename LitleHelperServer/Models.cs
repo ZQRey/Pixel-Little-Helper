@@ -42,6 +42,14 @@ public class PanelUser
     [JsonIgnore] public string PasswordHash { get; set; } = "";
     public string FullName { get; set; } = "";
     public string Role { get; set; } = Roles.User;
+    [JsonIgnore] public string PermissionOverrides { get; set; } = "{}";
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public Dictionary<string, bool> Permissions
+    {
+        get => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, bool>>(PermissionOverrides)!;
+        set => PermissionOverrides = System.Text.Json.JsonSerializer.Serialize(value);
+    }
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public string[] EffectivePermissions => Access.Effective(this);
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public bool MustChangePassword { get; set; }
@@ -93,7 +101,7 @@ public record MachineInfo(string MachineName, string UserName, string DomainName
 public record CommandEnvelope(string TaskId, string Type, string Payload);
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
-public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password);
+public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null);
 public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
 public record TicketRequest(string Title, string Description);

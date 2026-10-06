@@ -12,13 +12,13 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
         var user = await db.Users.SingleOrDefaultAsync(x => x.Username == principal.Identity!.Name, token);
         if (user == null || !user.IsActive || user.MustChangePassword || !principal.HasClaim("version", user.SecurityVersion.ToString()))
             throw new UnauthorizedAccessException("Требуется повторный вход");
-        bool super = user.Role == Roles.SuperAdmin;
-        if (!super && user.Role != Roles.Admin) throw new UnauthorizedAccessException("Недостаточно прав");
+        bool super = Access.Can(user, "terminal.execute");
+        if (!Access.Can(user, "commands.execute")) throw new UnauthorizedAccessException("Недостаточно прав");
         if (request.Machines.Length is < 1 or > 500 || request.Payload.Length > 8000) throw new ArgumentException("Неверный размер команды");
         string type = request.Type, payload = request.Payload;
         if (type is "cmd" or "powershell")
         {
-            if (!super) throw new UnauthorizedAccessException("Терминал доступен только SuperAdmin");
+            if (!super) throw new UnauthorizedAccessException("Не выдано право CMD / PowerShell");
             if (string.IsNullOrWhiteSpace(payload)) throw new ArgumentException("Введите команду");
         }
         else if (type == "script")

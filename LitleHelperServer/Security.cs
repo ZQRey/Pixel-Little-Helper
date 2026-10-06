@@ -21,7 +21,7 @@ public static class Security
     {
         var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username),
             new Claim(ClaimTypes.Role, user.Role), new Claim("version", user.SecurityVersion.ToString()),
-            new Claim("ticket_owner", user.AuthSource == "AD" ? TicketUser(user.Username) : user.Username) };
+            new Claim("ticket_owner", user.AuthSource == "AD" ? TicketUser(user.Username) : user.Username) }.Concat(user.EffectivePermissions.Select(key => new Claim("permission", key)));
         var token = new JwtSecurityToken(config["Jwt:Issuer"], config["Jwt:Audience"], claims,
             expires: DateTime.UtcNow.AddMinutes(config.GetValue("Jwt:Minutes", 60)),
             signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:SigningKey"]!)), SecurityAlgorithms.HmacSha256));

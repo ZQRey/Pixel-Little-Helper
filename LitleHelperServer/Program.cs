@@ -64,6 +64,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     }).AddScheme<AuthenticationSchemeOptions, AgentAuthenticationHandler>("Agent", _ => { });
 builder.Services.AddAuthorization(options =>
 {
+    foreach (string permission in Access.Catalog.Keys)
+    {
+        string key = permission;
+        options.AddPolicy(key, p => p.AddAuthenticationSchemes("Bearer").RequireAuthenticatedUser().RequireAssertion(c => Access.Can(c.User, key)));
+    }
     options.AddPolicy("Staff", p => p.AddAuthenticationSchemes("Bearer").RequireAuthenticatedUser().RequireRole(Roles.SuperAdmin, Roles.Admin, Roles.Operator));
     options.AddPolicy("Manage", p => p.AddAuthenticationSchemes("Bearer").RequireAuthenticatedUser().RequireRole(Roles.SuperAdmin, Roles.Admin));
     options.AddPolicy("Super", p => p.AddAuthenticationSchemes("Bearer").RequireAuthenticatedUser().RequireRole(Roles.SuperAdmin));
@@ -92,6 +97,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
+    await Access.EnsureSchema(db);
     // Existing deployments use EnsureCreated; add the outbox without changing existing tables.
     string timestamp = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT";
     string outboxSql = "CREATE TABLE IF NOT EXISTS \"TelegramDeliveries\" (\"TicketId\" INTEGER PRIMARY KEY REFERENCES \"Tickets\"(\"Id\") ON DELETE CASCADE, \"Attempts\" INTEGER NOT NULL, \"State\" TEXT NOT NULL, \"NextAttemptAt\" " + timestamp + " NOT NULL, \"SentAt\" " + timestamp + " NULL, \"LastError\" TEXT NOT NULL)";

@@ -12,6 +12,14 @@ string temp = Path.Combine(Path.GetTempPath(), "PixelHelper.Tests-" + Guid.NewGu
 Directory.CreateDirectory(temp);
 try
 {
+    var installedSettings = new Settings { ServerUrl = "http://old-server:5000", ClientToken = "test-key", X = 42, HubUrl = "https://explicit.example/helperHub" };
+    Settings.ApplyInstalledServer(installedSettings, "https://new-server.example:5443/team/");
+    Check(installedSettings.ServerUrl == "https://new-server.example:5443/team" && installedSettings.ClientToken == "test-key" && installedSettings.X == 42 && installedSettings.HubUrl == "https://explicit.example/helperHub", "installed server replaces saved address without changing user settings or explicit hub");
+    foreach (string invalid in new[] { "", "file:///C:/server", "not a URL", "https://user:pass@server", "https://server/?token=secret", "https://server/#fragment" })
+    {
+        Settings.ApplyInstalledServer(installedSettings, invalid);
+        Check(installedSettings.ServerUrl == "https://new-server.example:5443/team", "invalid installed address ignored: " + invalid);
+    }
     var listener = new TcpListener(IPAddress.Loopback, 0);
     listener.Start();
     var url = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/";

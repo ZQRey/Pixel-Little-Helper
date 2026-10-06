@@ -15,6 +15,6 @@ $harvest = Join-Path $output 'PublishedFiles.wxs'
 if ($LASTEXITCODE -ne 0) { throw 'heat failed' }
 & (Join-Path $WixBin 'candle.exe') -nologo -arch x64 "-dPublishDir=$publish" -out "$output\" (Join-Path $projectRoot 'installer\Product.wxs') $harvest
 if ($LASTEXITCODE -ne 0) { throw 'candle failed' }
-& (Join-Path $WixBin 'light.exe') -nologo -out (Join-Path $output 'PixelHelper.msi') (Join-Path $output 'Product.wixobj') (Join-Path $output 'PublishedFiles.wixobj')
+& (Join-Path $WixBin 'light.exe') -nologo -ext WixUIExtension -cultures:ru-ru -out (Join-Path $output 'PixelHelper.msi') (Join-Path $output 'Product.wixobj') (Join-Path $output 'PublishedFiles.wixobj')
 if ($LASTEXITCODE -ne 0) { throw 'light failed' }
 Write-Host "MSI: $output\PixelHelper.msi"

@@ -23,7 +23,17 @@ if (Encoding.UTF8.GetByteCount(builder.Configuration["Jwt:SigningKey"]!) < 32) t
 builder.Services.AddDbContext<HelperDb>(options =>
 {
     string connection = builder.Configuration.GetConnectionString("Database")!;
-    if (builder.Configuration["Database:Provider"] == "Postgres") options.UseNpgsql(connection);
+    if (builder.Configuration["Database:Provider"] == "Postgres")
+    {
+        string? passwordFile = builder.Configuration["Database:PasswordFile"];
+        if (!string.IsNullOrWhiteSpace(passwordFile))
+        {
+            var connectionBuilder = new Npgsql.NpgsqlConnectionStringBuilder(connection)
+            { Password = File.ReadAllText(passwordFile).TrimEnd('\r', '\n') };
+            connection = connectionBuilder.ConnectionString;
+        }
+        options.UseNpgsql(connection);
+    }
     else options.UseSqlite(connection);
 });
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

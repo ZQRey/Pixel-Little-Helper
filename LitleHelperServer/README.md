@@ -4,13 +4,13 @@ ASP.NET Core 8 Web API + SignalR + EF Core. Адаптивная панель HT
 
 ## Docker Compose и PostgreSQL
 
-```powershell
-cd LitleHelperServer
-Copy-Item .env.example .env
-# Замените POSTGRES_PASSWORD и JWT_SIGNING_KEY на уникальные случайные значения.
-# JWT_SIGNING_KEY: минимум 32 байта, рекомендуется 48 случайных байт в Base64.
+```bash
+# Из корня клонированного репозитория (Docker Compose 2.20.3+):
 docker compose up -d --build
+# Также работает из LitleHelperServer.
 ```
+
+Файл .env не обязателен. Одноразовый контейнер init-secrets генерирует пароль PostgreSQL в generated-secrets; сервер создаёт JWT-ключ в server-data. Повторный запуск использует сохранённые значения. Для GLPI или собственных секретов можно заполнить LitleHelperServer/.env по примеру .env.example. POSTGRES_PASSWORD применяется при первой инициализации; смена существующего пароля требует ротации в PostgreSQL.
 
 Панель: `http://localhost:5000`. Первый вход: **admin / admin123**. До обязательной смены пароля остальные API и хаб заблокированы. Пароли: 8–72 символа, максимум 72 байта UTF-8 (ограничение BCrypt). Для нового или сброшенного пароля смена также обязательна.
 
@@ -31,7 +31,7 @@ cd LitleHelperServer
 dotnet run --project LitleHelperServer.csproj
 ```
 
-По умолчанию: `data/helper.db`, порт 5000. При пустом Jwt:SigningKey локальный случайный ключ сохраняется в `data/jwt.key`; сохраняйте его между перезапусками и ограничьте доступ к каталогу. В Compose ключ обязателен через `.env`.
+По умолчанию: `data/helper.db`, порт 5000. При пустом Jwt:SigningKey локальный случайный ключ сохраняется в `data/jwt.key`; сохраняйте его между перезапусками и ограничьте доступ к каталогу. В Compose ключ также генерируется автоматически, если JWT_SIGNING_KEY не задан.
 
 В текущем окружении SDK установлен локально. Из корня двух проектов:
 
@@ -141,11 +141,11 @@ dotnet run --project tests/PixelHelper.Tests.csproj -c Release
 .\tools\build.ps1 -WixBin 'C:\Tools\wix314'
 ```
 
-MSI: `LitleHelperClient/artifacts/release-1.1.0/PixelHelper.msi`; EXE с зависимостями: release-1.1.0/publish. WiX 3.14.1, heat/candle/light. Из корня с локальными инструментами:
+MSI: `LitleHelperClient/artifacts/release-1.1.1/PixelHelper.msi`; EXE с зависимостями: release-1.1.1/publish. WiX 3.14.1, heat/candle/light. Из корня с локальными инструментами:
 
 ```powershell
 .\LitleHelperClient\tools\build.ps1 -Dotnet "$PWD\LitleHelperClient\.tools\dotnet\dotnet.exe" -WixBin "$PWD\LitleHelperClient\.tools\wix"
-msiexec /i PixelHelper.msi /qn /norestart /l*v install.log
+msiexec /i PixelHelper.msi /qn /norestart SERVERURL="http://helper-server:5000" /l*v install.log
 msiexec /x PixelHelper.msi /qn /norestart /l*v uninstall.log
 ```
 

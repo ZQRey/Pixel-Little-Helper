@@ -19,17 +19,33 @@ public sealed class Settings
     private const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public static Settings Load()
     {
+        Settings settings;
         try
         {
             var path = Path.Combine(Folder, "config.json");
             if (!File.Exists(path))
             {
                 var defaults = Path.Combine(AppContext.BaseDirectory, "config.example.json");
-                return File.Exists(defaults) ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(defaults), Json) ?? new() : new();
+                settings = File.Exists(defaults) ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(defaults), Json) ?? new() : new();
             }
-            return JsonSerializer.Deserialize<Settings>(File.ReadAllText(path), Json) ?? new();
+            else settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(path), Json) ?? new();
         }
-        catch (Exception ex) { Log(ex); return new(); }
+        catch (Exception ex) { Log(ex); settings = new(); }
+        try
+        {
+            using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+            using var key = machine.OpenSubKey(RegistryPath);
+            ApplyInstalledServer(settings, key?.GetValue("ServerUrl") as string);
+        }
+        catch (Exception ex) { Log(ex); }
+        return settings;
+    }
+    internal static void ApplyInstalledServer(Settings settings, string? serverUrl)
+    {
+        if (Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+            string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment))
+            settings.ServerUrl = uri.AbsoluteUri.TrimEnd('/');
     }
     public void Save() => AtomicWrite(Path.Combine(Folder, "config.json"), JsonSerializer.Serialize(this, Json));
     public static void AtomicWrite(string path, string value)

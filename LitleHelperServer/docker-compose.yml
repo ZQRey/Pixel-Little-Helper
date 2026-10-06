@@ -1,4 +1,28 @@
+name: pixel-little-helper
 services:
+  init-secrets:
+    image: postgres:16-alpine
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if [ ! -s /secrets/postgres-password ]; then
+          if [ -n "$${POSTGRES_PASSWORD}" ]; then
+            printf '%s' "$${POSTGRES_PASSWORD}" > /secrets/postgres-password
+          else
+            head -c 48 /dev/urandom | base64 | tr -d '\n' > /secrets/postgres-password
+          fi
+        elif [ -n "$${POSTGRES_PASSWORD}" ] && [ "$$(cat /secrets/postgres-password)" != "$${POSTGRES_PASSWORD}" ]; then
+          echo 'POSTGRES_PASSWORD differs from the persisted password; perform database password rotation first.' >&2
+          exit 1
+        fi
+        chmod 755 /secrets
+        chmod 644 /secrets/postgres-password
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - generated-secrets:/secrets
   server:
     build: .
     restart: unless-stopped
@@ -7,26 +31,40 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:5000
       Database__Provider: Postgres
-      ConnectionStrings__Database: Host=db;Database=litlehelper;Username=litlehelper;Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in .env}
+      ConnectionStrings__Database: Host=db;Database=litlehelper;Username=litlehelper
+      Database__PasswordFile: /run/helper-secrets/postgres-password
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-}
       Glpi__BaseUrl: ${GLPI_BASE_URL:-http://glpi.gp1.loc/apirest.php}
       Glpi__AppToken: ${GLPI_APP_TOKEN:-}
       Glpi__UserToken: ${GLPI_USER_TOKEN:-}
       Glpi__ServiceUserId: ${GLPI_SERVICE_USER_ID:-0}
     volumes:
       - server-data:/app/data
+      - generated-secrets:/run/helper-secrets:ro
     depends_on:
       db:
         condition: service_healthy
+      init-secrets:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
   db:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: litlehelper
       POSTGRES_USER: litlehelper
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/helper-secrets/postgres-password
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - generated-secrets:/run/helper-secrets:ro
+    depends_on:
+      init-secrets:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litlehelper -d litlehelper"]
       interval: 5s
@@ -35,3 +73,4 @@ services:
 volumes:
   postgres-data:
   server-data:
+  generated-secrets:

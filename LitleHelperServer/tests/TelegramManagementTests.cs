@@ -45,6 +45,9 @@ public static class TelegramManagementTests
             else if (path.EndsWith("killSession")) result = true;
             else if (path.EndsWith("search/User"))
             {
+                string query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (!query.Contains("[searchtype]=contains") || !query.Contains("[value]=^") || !query.Contains("$&"))
+                    throw new Exception("GLPI login lookup must use anchored text search; equals searches numeric user IDs.");
                 string account = request.RequestUri.Query.Contains("bob") ? "bob" : "alice";
                 result = new { data = new[] { new Dictionary<string, object> { ["2"] = account == "alice" ? 42 : 43 } } };
             }

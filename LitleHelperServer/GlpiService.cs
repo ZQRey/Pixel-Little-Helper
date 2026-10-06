@@ -150,7 +150,9 @@ public class GlpiService(HttpClient http, GlpiSettingsStore store, ILogger<GlpiS
     public static int Number(JsonElement value) => value.ValueKind == JsonValueKind.Number ? value.GetInt32() : int.Parse(value.GetString()!);
     public async Task<int> FindTechnicianAsync(string account, CancellationToken token)
     {
-        var json = await CallAsync(HttpMethod.Get, "search/User?criteria[0][field]=1&criteria[0][searchtype]=equals&criteria[0][value]=" + Uri.EscapeDataString(account) + "&forcedisplay[0]=2&range=0-2", null, token);
+        // GLPI's User login is an itemlink: equals compares the numeric ID.
+        // Anchored text search compares the complete login instead.
+        var json = await CallAsync(HttpMethod.Get, "search/User?criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]=" + Uri.EscapeDataString("^" + account + "$") + "&forcedisplay[0]=2&range=0-2", null, token);
         if (!json.TryGetProperty("data", out var rows) || rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() != 1)
             throw new InvalidOperationException("В GLPI должен существовать ровно один пользователь с логином AD " + account + ".");
         int id = Number(rows[0].GetProperty("2"));

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace LitleHelperServer;
 
@@ -32,8 +33,23 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
             if (payload.Length is < 1 or > 100 || payload.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')))
                 throw new ArgumentException("Неверное имя процесса");
         }
+        else if (type == "kill_pid")
+        {
+            try
+            {
+                using var target = JsonDocument.Parse(payload);
+                if (!target.RootElement.TryGetProperty("pid", out var pid) || !pid.TryGetInt32(out int id) || id <= 4 ||
+                    !target.RootElement.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(name.GetString()) || name.GetString()!.Length > 260 ||
+                    !target.RootElement.TryGetProperty("startTimeUtcTicks", out var started) || started.ValueKind != JsonValueKind.String || !long.TryParse(started.GetString(), out long ticks) || ticks <= 0)
+                    throw new ArgumentException("Неверные данные выбранного процесса");
+            }
+            catch (JsonException) { throw new ArgumentException("Неверные данные выбранного процесса"); }
+        }
+        else if (type == "processes") { payload = ""; }
         else if (type is not ("reboot" or "shutdown" or "inventory")) throw new ArgumentException("Неверный тип команды");
         var machines = request.Machines.Select(Security.Canonical).Distinct().ToArray();
+        if (type is "processes" or "kill_pid" && (machines.Length != 1 || machines.Contains("ALL")))
+            throw new ArgumentException("Выберите один компьютер для работы со списком процессов");
         var computers = machines.Contains("ALL") ? await db.Computers.ToListAsync(token) :
             await db.Computers.Where(c => machines.Contains(c.MachineName)).ToListAsync(token);
         if (computers.Count == 0) throw new ArgumentException("Компьютеры не найдены");

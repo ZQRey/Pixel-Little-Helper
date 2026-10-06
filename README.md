@@ -5,7 +5,7 @@
 
 Начните с [инструкции сервера](LitleHelperServer/README.md): запуск, GLPI, подключение ПК и MSI. [Инструкция клиента](LitleHelperClient/README.md) описывает настройки и ограничения.
 
-Готовый MSI: `LitleHelperClient/artifacts/release-1.1.2/PixelHelper.msi`. Новая публикация размещена отдельно от старого запущенного помощника. Старый каталог `LitleHelperClient/artifacts/publish` не является новым релизом.
+Готовый MSI: `LitleHelperClient/artifacts/release-1.1.3/PixelHelper.msi`. Новая публикация размещена отдельно от старого запущенного помощника. Старый каталог `LitleHelperClient/artifacts/publish` не является новым релизом.
 
 Результаты проверок — [VERIFICATION.md](VERIFICATION.md). `data/`, секреты `.env`, `bin/obj`, `.tools/` и `artifacts/` исключены из Git.
 

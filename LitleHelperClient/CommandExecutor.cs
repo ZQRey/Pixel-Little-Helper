@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace PixelHelper;
 
@@ -14,6 +15,20 @@ public sealed class CommandExecutor(Settings settings)
         await serial.WaitAsync(token);
         try
         {
+            if (task.Type == "processes")
+            {
+                string processJson = JsonSerializer.Serialize(ProcessInspector.Collect(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                return processJson.Length <= 131072 ? (processJson, 0) : ("Список процессов превышает допустимый размер ответа", 122);
+            }
+            if (task.Type == "kill_pid")
+            {
+                ProcessTarget? target;
+                try { target = JsonSerializer.Deserialize<ProcessTarget>(task.Payload, Settings.Json); }
+                catch (JsonException) { return ("Неверные данные выбранного процесса", 87); }
+                if (target == null || target.Pid <= 0 || string.IsNullOrWhiteSpace(target.Name) || !long.TryParse(target.StartTimeUtcTicks, out long startTicks) || startTicks <= 0)
+                    return ("Неверные данные выбранного процесса", 87);
+                return ProcessInspector.Stop(target);
+            }
             if (task.Type == "kill")
             {
                 string name = Path.GetFileNameWithoutExtension(task.Payload);
@@ -84,6 +99,7 @@ public sealed class CommandExecutor(Settings settings)
             finally { outputLock.Dispose(); }
         }
         catch (System.ComponentModel.Win32Exception ex) { return ($"Ошибка доступа/запуска ({ex.NativeErrorCode}): {ex.Message}. Помощник работает с правами текущего пользователя; SYSTEM-служба не установлена.", ex.NativeErrorCode); }
+        catch (ArgumentException) { return ("Процесс уже завершён или параметры неверны. Обновите список процессов.", 87); }
         catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException) { return (ex.Message, 5); }
         finally { serial.Release(); }
     }

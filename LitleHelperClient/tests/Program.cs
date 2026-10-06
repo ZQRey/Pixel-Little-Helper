@@ -93,6 +93,25 @@ try
     File.WriteAllText(Path.Combine(temp, "actions_cache.json"), "broken");
     Check(api.ReadCache().Count == 5, "corrupt cache fallback");
     var disabledExecutor = new CommandExecutor(new Settings { EnableAdministrativeCommands = false });
+    var processExecutor = new CommandExecutor(new Settings());
+    var processesResult = await processExecutor.ExecuteAsync(new("process-list", "processes", ""), _ => Task.CompletedTask, CancellationToken.None);
+    var processes = JsonSerializer.Deserialize<ProcessEntry[]>(processesResult.Output, Settings.Json)!;
+    Check(processesResult.ExitCode == 0 && processes.Any(p => p.Pid == Environment.ProcessId && !p.CanStop), "process list includes current process and prevents stopping helper");
+    var sleeperStart = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+    foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60" }) sleeperStart.ArgumentList.Add(argument);
+    using (var sleeper = System.Diagnostics.Process.Start(sleeperStart)!)
+    try
+    {
+        var entry = ProcessInspector.Collect().Single(p => p.Pid == sleeper.Id);
+        Check(entry.CanStop && entry.StartTimeUtcTicks != null, "owned test process has selectable PID identity");
+        var stale = await processExecutor.ExecuteAsync(new("stale", "kill_pid", JsonSerializer.Serialize(new ProcessTarget(entry.Pid, entry.Name, "1"), Settings.Json)), _ => Task.CompletedTask, CancellationToken.None);
+        Check(stale.ExitCode == 87 && !sleeper.HasExited, "stale process identity rejected without stopping process");
+        var stopped = await processExecutor.ExecuteAsync(new("stop", "kill_pid", JsonSerializer.Serialize(new ProcessTarget(entry.Pid, entry.Name, entry.StartTimeUtcTicks!), Settings.Json)), _ => Task.CompletedTask, CancellationToken.None);
+        Check(stopped.ExitCode == 0 && sleeper.WaitForExit(5000), "selected test process stopped by PID");
+        var gone = await processExecutor.ExecuteAsync(new("gone", "kill_pid", JsonSerializer.Serialize(new ProcessTarget(entry.Pid, entry.Name, entry.StartTimeUtcTicks!), Settings.Json)), _ => Task.CompletedTask, CancellationToken.None);
+        Check(gone.ExitCode != 0, "exited process reports failure rather than hanging task");
+    }
+    finally { if (!sleeper.HasExited) { sleeper.Kill(); sleeper.WaitForExit(); } }
     var denied = await disabledExecutor.ExecuteAsync(new("disabled", "cmd", "echo should-not-run"), _ => Task.CompletedTask, CancellationToken.None);
     Check(denied.ExitCode == 5, "client configuration disables remote execution");
     var executor = new CommandExecutor(new Settings());

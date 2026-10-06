@@ -141,7 +141,7 @@ dotnet run --project tests/PixelHelper.Tests.csproj -c Release
 .\tools\build.ps1 -WixBin 'C:\Tools\wix314'
 ```
 
-MSI: `LitleHelperClient/artifacts/release-1.1.2/PixelHelper.msi`; EXE с зависимостями: release-1.1.2/publish. WiX 3.14.1, heat/candle/light. Из корня с локальными инструментами:
+MSI: `LitleHelperClient/artifacts/release-1.1.3/PixelHelper.msi`; EXE с зависимостями: release-1.1.3/publish. WiX 3.14.1, heat/candle/light. Из корня с локальными инструментами:
 
 ```powershell
 .\LitleHelperClient\tools\build.ps1 -Dotnet "$PWD\LitleHelperClient\.tools\dotnet\dotnet.exe" -WixBin "$PWD\LitleHelperClient\.tools\wix"
@@ -162,3 +162,7 @@ msiexec /x PixelHelper.msi /qn /norestart /l*v uninstall.log
 Источники: [SignalR authentication](https://learn.microsoft.com/en-us/aspnet/core/signalr/authn-and-authz?view=aspnetcore-8.0), [SignalR .NET client](https://learn.microsoft.com/en-us/aspnet/core/signalr/dotnet-client?view=aspnetcore-8.0), [Npgsql](https://www.npgsql.org/efcore/). Результаты — `../VERIFICATION.md`.
 
 Для подключения Windows-клиента получите ключ ПК в панели и укажите http://172.16.16.61 в настройках или в MSI SERVERURL. SSH-ключ доступа к GitHub/серверу, JWT-ключ панели и ключ регистрации ПК имеют разные назначения: SSH-ключ не нужно передавать клиенту или контейнеру.
+
+## Выбор процесса для остановки
+
+В строке онлайн-компьютера нажмите «Процесс». Панель запрашивает актуальный список через клиент 1.1.3+: имя, PID и память. Фильтр ищет по имени или PID; выберите один экземпляр и нажмите «Остановить выбранный процесс». Список можно обновить вручную, после успешной остановки он обновляется автоматически. Действия доступны Admin и SuperAdmin и записываются в аудит. Клиент проверяет PID, имя и точное время запуска, чтобы устаревший выбор не остановил новый процесс с тем же PID. Процессы без доступного времени запуска и сам помощник не выбираются; отсутствие права завершения возвращается как ошибка. Старым клиентам нужен новый MSI. Массовая остановка по имени убрана из веб-панели; прежний тип kill сохранён в API для совместимости.

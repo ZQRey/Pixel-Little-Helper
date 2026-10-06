@@ -85,7 +85,7 @@ try
     agent.On<JsonElement>("ExecuteCommand", async envelope =>
     {
         string taskId = envelope.GetProperty("taskId").GetString()!;
-        delivered.TrySetResult(envelope.GetProperty("type").GetString()!);
+        if (envelope.GetProperty("type").GetString() == "cmd") delivered.TrySetResult("cmd");
         await agent.InvokeAsync("SendExecutionOutput", taskId, "test-stream\n");
         await agent.InvokeAsync("SendExecutionResult", taskId, "test-stream\ntest-completed", 0);
     });
@@ -95,6 +95,18 @@ try
     await agent.InvokeAsync("UpdateHardwareAndSoftware", new { cpuModel = "Test CPU", totalRamBytes = 8589934592L }, new[] { new { name = "Test Software", version = "1.0" } });
     var list = await Json("/computers", admin); int computerId = list[0].GetProperty("id").GetInt32();
     Check(list[0].GetProperty("isOnline").GetBoolean(), "computer online immediately");
+    using var operatorProcesses = await Call("/commands", staffTokens["operator"], new { machines = new[] { "TEST-PC" }, type = "processes", payload = "" });
+    Check(operatorProcesses.StatusCode == HttpStatusCode.Forbidden, "Operator cannot request process list");
+    using var massProcesses = await Call("/commands", admin, new { machines = new[] { "ALL" }, type = "processes", payload = "" });
+    Check(massProcesses.StatusCode == HttpStatusCode.BadRequest, "process listing requires one specific computer");
+    using var invalidPid = await Call("/commands", admin, new { machines = new[] { "TEST-PC" }, type = "kill_pid", payload = "{\"pid\":4,\"name\":\"System\",\"startTimeUtcTicks\":\"1\"}" });
+    Check(invalidPid.StatusCode == HttpStatusCode.BadRequest, "invalid protected process target rejected");
+    var processTasks = await Json("/commands", admin, new { machines = new[] { "TEST-PC" }, type = "processes", payload = "" });
+    string processTaskId = processTasks[0].GetProperty("taskId").GetString()!;
+    using var processTask = await Call("/tasks/" + processTaskId, admin);
+    Check(processTask.IsSuccessStatusCode, "creator can poll process request result");
+    using var otherAdminTask = await Call("/tasks/" + processTaskId, staffTokens["manager"]);
+    Check(otherAdminTask.StatusCode == HttpStatusCode.NotFound, "another Admin cannot read process request result");
     var inventory = await Json($"/computers/{computerId}/inventory", admin);
     Check(inventory.GetProperty("hardware").GetProperty("cpuModel").GetString() == "Test CPU", "inventory persisted");
     foreach (string restricted in new[] { "manager", "operator", "alice" })

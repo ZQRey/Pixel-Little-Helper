@@ -58,6 +58,11 @@ public static class PanelApi
         }).RequireAuthorization("Super");
         app.MapGet("/api/scripts", (IConfiguration config) => Results.Ok(config.GetSection("Scripts").GetChildren().Select(s => new { id = s.Key, title = s["Title"] ?? s.Key }))).RequireAuthorization("Manage");
         app.MapPost("/api/commands", async (CommandRequest request, ClaimsPrincipal p, CommandService service, CancellationToken token) => Results.Ok(await service.SendAsync(p, request, token))).RequireAuthorization("Manage");
+        app.MapGet("/api/tasks/{taskId}", async (string taskId, ClaimsPrincipal p, HelperDb db) =>
+        {
+            var task = await db.AuditLogs.AsNoTracking().SingleOrDefaultAsync(t => t.TaskId == taskId);
+            return task == null || (!p.IsInRole(Roles.SuperAdmin) && task.AdminUsername != p.Identity!.Name) ? Results.NotFound() : Results.Ok(task);
+        }).RequireAuthorization("Manage");
 
         app.MapGet("/api/buttons", async (HelperDb db) => Results.Ok(await db.Buttons.AsNoTracking().OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).ToListAsync())).RequireAuthorization("Manage");
         app.MapPost("/api/buttons", async (ActionButton button, ClaimsPrincipal p, HelperDb db) =>

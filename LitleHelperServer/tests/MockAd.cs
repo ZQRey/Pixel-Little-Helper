@@ -44,6 +44,13 @@ public sealed class MockAd : IAsyncDisposable
         { w.PushSequence(); w.WriteOctetString(Encoding.UTF8.GetBytes(name)); w.PushSetOf(); w.WriteOctetString(Encoding.UTF8.GetBytes(value)); w.PopSetOf(); w.PopSequence(); }
         w.PopSequence(); w.PopSequence(tag); w.PopSequence(); return w.Encode();
     }
+    private static byte[] Referral(int id)
+    {
+        var w = new AsnWriter(AsnEncodingRules.BER); w.PushSequence(); w.WriteInteger(id);
+        var tag = new Asn1Tag(TagClass.Application, 19, true); w.PushSequence(tag);
+        w.WriteOctetString(Encoding.UTF8.GetBytes("ldap://untrusted.invalid/DC=DomainDnsZones,DC=ad,DC=test"));
+        w.PopSequence(tag); w.PopSequence(); return w.Encode();
+    }
     private async Task Handle(TcpClient client)
     {
         using (client) using (var ssl = new SslStream(client.GetStream()))
@@ -67,7 +74,7 @@ public sealed class MockAd : IAsyncDisposable
                         authenticated = user == "alice@ad.test" && password == "AD-test-password";
                         await ssl.WriteAsync(ResultMessage(id, 1, authenticated ? Result.Success : Result.InvalidCredentials), stop.Token);
                     }
-                    else if (op == 3 && authenticated) { await ssl.WriteAsync(Entry(id), stop.Token); await ssl.WriteAsync(ResultMessage(id, 5, Result.Success), stop.Token); }
+                    else if (op == 3 && authenticated) { await ssl.WriteAsync(Entry(id), stop.Token); await ssl.WriteAsync(Referral(id), stop.Token); await ssl.WriteAsync(ResultMessage(id, 5, Result.Success), stop.Token); }
                     else return;
                 }
             }

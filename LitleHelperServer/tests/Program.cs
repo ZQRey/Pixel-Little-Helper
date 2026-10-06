@@ -5,6 +5,24 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 static void Check(bool result, string text) { if (!result) throw new Exception(text); Console.WriteLine("PASS " + text); }
+if (args.FirstOrDefault() == "--ad-referrals")
+{
+    await using var ldap = new MockAd();
+    string file = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "settings.json");
+    var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Integrations:SettingsFile"] = file }).Build();
+    var settings = new LitleHelperServer.IntegrationSettings(configuration, new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider());
+    try
+    {
+        settings.SaveAd(new(true, "localhost", ldap.Port, "ad.test", "AD", "DC=ad,DC=test", ldap.Pem));
+        var auth = new LitleHelperServer.AdAuthentication(settings, Microsoft.Extensions.Logging.Abstractions.NullLogger<LitleHelperServer.AdAuthentication>.Instance);
+        var identity = await auth.AuthenticateAsync(new("AD\\alice", "AD-test-password"), CancellationToken.None);
+        Check(identity.Username == "alice@ad.test", "AD user with subordinate LDAP referral can sign in");
+        try { await auth.AuthenticateAsync(new("alice", "wrong"), CancellationToken.None); throw new Exception("Wrong password accepted"); }
+        catch (UnauthorizedAccessException) { Check(true, "wrong AD password still rejected"); }
+    }
+    finally { Directory.Delete(Path.GetDirectoryName(file)!, true); }
+    return;
+}
 if (args.FirstOrDefault() == "--ad-probe")
 {
     await using var ldap = new MockAd();

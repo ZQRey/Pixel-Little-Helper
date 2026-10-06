@@ -69,12 +69,23 @@ public class AdAuthentication(IntegrationSettings settings, ILogger<AdAuthentica
         {
             await connection.ConnectAsync(options.Host, options.Port, timeout.Token);
             await connection.BindAsync(account + "@" + options.Domain, request.Password, timeout.Token);
+            var constraints = connection.SearchConstraints; constraints.ReferralFollowing = false; connection.Constraints = constraints;
             var results = await connection.SearchAsync(options.BaseDn, LdapConnection.ScopeSub,
                 $"(&(objectCategory=person)(objectClass=user)(sAMAccountName={account}))", ["sAMAccountName", "displayName", "userAccountControl"], false, timeout.Token);
-            if (!await results.HasMoreAsync(timeout.Token)) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
-            var entry = await results.NextAsync(timeout.Token);
+            LdapEntry? entry = null;
+            while (await results.HasMoreAsync(timeout.Token))
+            {
+                LdapEntry candidate;
+                try { candidate = await results.NextAsync(timeout.Token); }
+                // AD returns subordinate naming-context references alongside the user.
+                // Do not follow them or forward the user's password to another server.
+                catch (LdapReferralException) { continue; }
+                if (entry != null) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
+                entry = candidate;
+            }
+            if (entry == null) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
             string actual = entry.Get("sAMAccountName").StringValue.ToLowerInvariant();
-            if (!actual.Equals(account, StringComparison.OrdinalIgnoreCase) || await results.HasMoreAsync(timeout.Token)) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
+            if (!actual.Equals(account, StringComparison.OrdinalIgnoreCase)) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
             int flags = int.Parse(entry.Get("userAccountControl").StringValue);
             if ((flags & 2) != 0) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
             string fullName = entry.GetStringValueOrDefault("displayName", actual) ?? actual;

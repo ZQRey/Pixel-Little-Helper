@@ -116,9 +116,9 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
                 await glpi.UpdateTicketAsync(ticket.GlpiId, status, token);
             }
             await SyncUnlockedAsync(ticket, token);
-            db.AuditLogs.Add(new() { AdminUsername = actor.User.Username, MachineName = ticket.MachineName, CommandType = "telegram_ticket_" + action, CommandPayload = "GLPI #" + ticket.GlpiId, Status = "Completed", Result = "Статус " + ticket.Status });
             if (action == "solve" && Status(ticket.Status) != 5) throw new InvalidOperationException("GLPI сохранил решение, но не подтвердил статус «Выполнена». Проверьте заявку в GLPI.");
             if (action == "status" && Status(ticket.Status) != status) throw new InvalidOperationException("GLPI не подтвердил изменение статуса.");
+            db.AuditLogs.Add(new() { AdminUsername = actor.User.Username, MachineName = ticket.MachineName, CommandType = "telegram_ticket_" + action, CommandPayload = "GLPI #" + ticket.GlpiId, Status = "Completed", Result = "Статус " + ticket.Status });
             await db.SaveChangesAsync(token);
         }
         finally { gate.Semaphore.Release(); }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.1.1" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.1.2" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
     <MediaTemplate EmbedCab="yes" />
@@ -10,7 +10,7 @@
       <RegistrySearch Id="FindServerUrl" Root="HKLM" Key="Software\PixelHelper" Name="ServerUrl" Type="raw" Win64="yes" />
     </Property>
     <SetProperty Id="SERVERURL" Action="UseExistingServerUrl" Value="[EXISTINGSERVERURL]" After="AppSearch">NOT SERVERURL AND EXISTINGSERVERURL</SetProperty>
-    <SetProperty Id="SERVERURL" Action="UseDefaultServerUrl" Value="http://helper-server:5000" After="UseExistingServerUrl">NOT SERVERURL</SetProperty>
+    <SetProperty Id="SERVERURL" Action="UseDefaultServerUrl" Value="http://helper-server" After="UseExistingServerUrl">NOT SERVERURL</SetProperty>
     <Condition Message="Укажите адрес сервера HTTP или HTTPS в параметре SERVERURL.">Installed OR ((SERVERURL &lt;&lt; "http://" OR SERVERURL &lt;&lt; "https://") AND NOT (SERVERURL &gt;&lt; " "))</Condition>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="PixelHelper">

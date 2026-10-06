@@ -12,7 +12,7 @@ docker compose up -d --build
 
 Файл .env не обязателен. Одноразовый контейнер init-secrets генерирует пароль PostgreSQL в generated-secrets; сервер создаёт JWT-ключ в server-data. Повторный запуск использует сохранённые значения. Для GLPI или собственных секретов можно заполнить LitleHelperServer/.env по примеру .env.example. POSTGRES_PASSWORD применяется при первой инициализации; смена существующего пароля требует ротации в PostgreSQL.
 
-Панель: `http://localhost:5000`. Первый вход: **admin / admin123**. До обязательной смены пароля остальные API и хаб заблокированы. Пароли: 8–72 символа, максимум 72 байта UTF-8 (ограничение BCrypt). Для нового или сброшенного пароля смена также обязательна.
+Панель: `http://localhost`. Первый вход: **admin / admin123**. До обязательной смены пароля остальные API и хаб заблокированы. Пароли: 8–72 символа, максимум 72 байта UTF-8 (ограничение BCrypt). Для нового или сброшенного пароля смена также обязательна.
 
 Сервер работает от пользователя контейнера `app`; PostgreSQL не публикует порт наружу. База сохраняется в named volume.
 
@@ -82,7 +82,7 @@ dotnet artifacts/publish/LitleHelperServer.dll
 ```json
 {
   "x": null, "y": null,
-  "serverUrl": "http://helper-server:5000",
+  "serverUrl": "http://helper-server",
   "hubUrl": null,
   "clientToken": "КЛЮЧ-ДЛЯ-ЭТОГО-ПК",
   "enableAdministrativeCommands": true,
@@ -141,11 +141,11 @@ dotnet run --project tests/PixelHelper.Tests.csproj -c Release
 .\tools\build.ps1 -WixBin 'C:\Tools\wix314'
 ```
 
-MSI: `LitleHelperClient/artifacts/release-1.1.1/PixelHelper.msi`; EXE с зависимостями: release-1.1.1/publish. WiX 3.14.1, heat/candle/light. Из корня с локальными инструментами:
+MSI: `LitleHelperClient/artifacts/release-1.1.2/PixelHelper.msi`; EXE с зависимостями: release-1.1.2/publish. WiX 3.14.1, heat/candle/light. Из корня с локальными инструментами:
 
 ```powershell
 .\LitleHelperClient\tools\build.ps1 -Dotnet "$PWD\LitleHelperClient\.tools\dotnet\dotnet.exe" -WixBin "$PWD\LitleHelperClient\.tools\wix"
-msiexec /i PixelHelper.msi /qn /norestart SERVERURL="http://helper-server:5000" /l*v install.log
+msiexec /i PixelHelper.msi /qn /norestart SERVERURL="http://helper-server" /l*v install.log
 msiexec /x PixelHelper.msi /qn /norestart /l*v uninstall.log
 ```
 
@@ -161,4 +161,4 @@ msiexec /x PixelHelper.msi /qn /norestart /l*v uninstall.log
 
 Источники: [SignalR authentication](https://learn.microsoft.com/en-us/aspnet/core/signalr/authn-and-authz?view=aspnetcore-8.0), [SignalR .NET client](https://learn.microsoft.com/en-us/aspnet/core/signalr/dotnet-client?view=aspnetcore-8.0), [Npgsql](https://www.npgsql.org/efcore/). Результаты — `../VERIFICATION.md`.
 
-Для подключения Windows-клиента получите ключ ПК в панели и укажите http://172.16.16.61:5000 в настройках или в MSI SERVERURL. SSH-ключ доступа к GitHub/серверу, JWT-ключ панели и ключ регистрации ПК имеют разные назначения: SSH-ключ не нужно передавать клиенту или контейнеру.
+Для подключения Windows-клиента получите ключ ПК в панели и укажите http://172.16.16.61 в настройках или в MSI SERVERURL. SSH-ключ доступа к GitHub/серверу, JWT-ключ панели и ключ регистрации ПК имеют разные назначения: SSH-ключ не нужно передавать клиенту или контейнеру.

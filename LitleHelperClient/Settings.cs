@@ -8,7 +8,7 @@ public sealed class Settings
 {
     public double? X { get; set; }
     public double? Y { get; set; }
-    public string? ServerUrl { get; set; } = "http://helper-server:5000";
+    public string? ServerUrl { get; set; } = "http://helper-server";
     public string? HubUrl { get; set; }
     public string ClientToken { get; set; } = "";
     public bool EnableAdministrativeCommands { get; set; } = true;

@@ -1,5 +1,5 @@
 param(
-    [string]$ServerUrl = 'http://172.16.16.61:5000',
+    [string]$ServerUrl = 'http://172.16.16.61',
     [Parameter(Mandatory)][string]$AccessFile,
     [Parameter(Mandatory)][string]$ClientExe
 )

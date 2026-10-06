@@ -17,7 +17,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
-        string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "http://helper-server:5000" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
+        string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "http://helper-server" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) throw new ArgumentException("Неверный адрес хаба");
         connection = new HubConnectionBuilder().WithUrl(uri, options =>
         {

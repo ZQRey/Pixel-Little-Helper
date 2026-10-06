@@ -1,7 +1,7 @@
 {
   "x": null,
   "y": null,
-  "serverUrl": "http://helper-server:5000",
+  "serverUrl": "http://helper-server",
   "hubUrl": null,
   "clientToken": "",
   "enableAdministrativeCommands": true,

@@ -10,7 +10,7 @@ public interface IAdAuthentication
     Task<AdIdentity> AuthenticateAsync(LoginRequest request, CancellationToken token);
     Task TestConnectionAsync(CancellationToken token);
 }
-public class AdAuthentication(IntegrationSettings settings) : IAdAuthentication
+public class AdAuthentication(IntegrationSettings settings, ILogger<AdAuthentication> logger) : IAdAuthentication
 {
     public static string Account(string value, AdOptions options)
     {
@@ -80,7 +80,12 @@ public class AdAuthentication(IntegrationSettings settings) : IAdAuthentication
             string fullName = entry.GetStringValueOrDefault("displayName", actual) ?? actual;
             return new(actual + "@" + options.Domain, fullName[..Math.Min(fullName.Length, 150)], actual);
         }
-        catch (LdapException ex) when (ex.ResultCode == LdapException.InvalidCredentials) { throw new UnauthorizedAccessException("Неверный логин или пароль AD."); }
+        catch (LdapException ex) when (ex.ResultCode == LdapException.InvalidCredentials)
+        {
+            var diagnostic = System.Text.RegularExpressions.Regex.Match(ex.LdapErrorMessage ?? "", @"\bdata\s+([0-9a-fA-F]{3,8})\b");
+            logger.LogWarning("AD bind rejected: LDAP {Code}, AD subcode {Subcode}", ex.ResultCode, diagnostic.Success ? diagnostic.Groups[1].Value : "unavailable");
+            throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
+        }
         catch (Exception ex) when (ex is not UnauthorizedAccessException) { throw new InvalidOperationException("AD недоступен. Проверьте LDAPS, сертификат CA и Base DN."); }
     }
 }

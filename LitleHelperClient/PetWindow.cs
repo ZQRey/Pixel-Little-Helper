@@ -43,7 +43,8 @@ public sealed class PetWindow : Window
     private bool superAvailable, announcementVisible;
     private MessengerClient? messenger;
     private MessengerWindow? messengerWindow;
-    private readonly Dictionary<int, int> chatUnread = new();
+    private TrayIcon? tray;
+    private readonly Dictionary<int, long> chatUnread = new();
     private bool refreshingChat;
     private DateTime lastChatSound;
     private int chatUserId;
@@ -69,7 +70,9 @@ public sealed class PetWindow : Window
         Background = null;
         ShowInTaskbar = false;
         ShowActivated = false;
-        Topmost = false;
+        if (settings.DisplayMode is not ("Topmost" or "Normal" or "Background")) settings.DisplayMode = "Background";
+        if (diagnostics) settings.DisplayMode = "Background";
+        Topmost = !diagnostics && settings.DisplayMode == "Topmost";
         Title = "PixelHelper";
         Content = canvas;
         actions = ApiClient.Defaults();
@@ -122,7 +125,8 @@ public sealed class PetWindow : Window
                 admin.Click += (_, _) => OpenSuperAdminWindow();
                 menu.Items.Add(admin);
             }
-            var exit = new MenuItem { Header = "Закрыть помощника" };
+            AddDisplayMenu(menu);
+            var exit = new MenuItem { Header = "Выход" };
             exit.Click += (_, _) => Close();
             menu.Items.Add(exit);
             menu.IsOpen = true;
@@ -137,7 +141,7 @@ public sealed class PetWindow : Window
             if (!diagnostics) React(PetState.Greeting, 3);
             if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
         };
-        LocationChanged += (_, _) => { if (handle != 0) NativeMethods.Bottom(handle); };
+        LocationChanged += (_, _) => ApplyDisplayMode();
         animation.Tick += (_, _) =>
         {
             if (IsTemporary(state) && DateTime.UtcNow >= actionUntil) ChangeState(state == PetState.Yawn ? PetState.Sleep : PetState.Idle);
@@ -147,7 +151,7 @@ public sealed class PetWindow : Window
         inactivity.Tick += (_, _) =>
         {
             AdvanceAnnouncements();
-            NativeMethods.Bottom(handle);
+            ApplyDisplayMode();
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
             else if (!exposed && animation.IsEnabled) animation.Stop();
@@ -168,6 +172,7 @@ public sealed class PetWindow : Window
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
             lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); source?.RemoveHook(Hook);
             messengerWindow?.Close();
+            tray?.Dispose();
             if (messenger != null) await messenger.DisposeAsync();
             ClearRegions(); SavePosition();
             if (hub != null) await hub.DisposeAsync();
@@ -186,13 +191,14 @@ public sealed class PetWindow : Window
         source = HwndSource.FromHwnd(handle);
         source.AddHook(Hook);
         NativeMethods.ToolWindow(handle, true);
-        NativeMethods.Bottom(handle);
+        ApplyDisplayMode();
+        if (!diagnostics) tray = new TrayIcon(handle, sprites.Get(PetState.Idle, 0), () => _ = OpenMessengerAsync(), ShowTrayMenu, peer => _ = OpenMessengerAsync(peer == 0 ? null : peer));
         UpdateRegion();
         if (!diagnostics) hub?.Start();
     }
     private nint Hook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
-        if (message == NativeMethods.WM_WINDOWPOSCHANGING)
+        if (message == NativeMethods.WM_WINDOWPOSCHANGING && settings.DisplayMode == "Background")
         {
             var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
             if ((pos.Flags & NativeMethods.SWP_NOZORDER) == 0)
@@ -213,6 +219,45 @@ public sealed class PetWindow : Window
             return new nint(hit ? 1 : -1);
         }
         return 0;
+    }
+    private void ApplyDisplayMode()
+    {
+        if (handle == 0) return;
+        if (settings.DisplayMode == "Background") NativeMethods.Bottom(handle);
+    }
+    internal void SetDisplayMode(string mode)
+    {
+        if (mode is not ("Topmost" or "Normal" or "Background")) throw new ArgumentException("Неизвестный режим.");
+        settings.DisplayMode = mode; Topmost = mode == "Topmost";
+        NativeMethods.SetWindowPos(handle, mode == "Topmost" ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        ApplyDisplayMode(); if (!diagnostics) settings.Save();
+    }
+    internal void SetAssistantHidden(bool hidden)
+    {
+        settings.AssistantHidden = hidden; if (hidden) { HideBubbles(); Hide(); animation.Stop(); } else { Show(); ApplyDisplayMode(); }
+        if (!diagnostics) settings.Save();
+    }
+    internal void RestoreDisplayPreferences()
+    {
+        if (diagnostics) return;
+        SetDisplayMode(settings.DisplayMode);
+        if (settings.AssistantHidden) SetAssistantHidden(true);
+    }
+    private void AddDisplayMenu(ContextMenu menu)
+    {
+        var modes = new MenuItem { Header = "Отображение помощника" };
+        foreach (var (value, label) in new[] { ("Topmost", "Поверх всех окон"), ("Normal", "Обычный режим"), ("Background", "Фон · под окнами") })
+        { var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = settings.DisplayMode == value }; item.Click += (_, _) => SetDisplayMode(value); modes.Items.Add(item); }
+        menu.Items.Add(modes);
+        var hide = new MenuItem { Header = settings.AssistantHidden ? "Показать помощника" : "Скрыть помощника" }; hide.Click += (_, _) => SetAssistantHidden(!settings.AssistantHidden); menu.Items.Add(hide);
+        var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb }; quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); }; menu.Items.Add(quiet);
+    }
+    private void ShowTrayMenu()
+    {
+        var menu = new ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+        var chat = new MenuItem { Header = "Мессенджер" }; chat.Click += async (_, _) => await OpenMessengerAsync(); menu.Items.Add(chat);
+        if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
+        AddDisplayMenu(menu); menu.Items.Add(new Separator()); var exit = new MenuItem { Header = "Выход" }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
     }
     private void Draw()
     {
@@ -503,22 +548,38 @@ public sealed class PetWindow : Window
             if (chatUserId != messenger.UserId) { chatUserId = messenger.UserId; chatUnread.Clear(); }
             await Task.Delay(1500, lifetime.Token); // Coalesce a burst of messages and read receipts.
             var users = await messenger.UsersAsync();
+            tray?.SetUnread(users.Any(u => u.Unread > 0));
+            var notifications = new List<(string Title, string Text, int Peer)>();
             foreach (var user in users)
             {
-                int previous = chatUnread.GetValueOrDefault(user.Id);
+                long previous = chatUnread.GetValueOrDefault(user.Id);
                 if (settings.ChatDoNotDisturb || !ChatDesktop.Unlocked()) continue;
-                chatUnread[user.Id] = user.Unread;
-                if (user.Unread <= previous || messengerWindow?.ActivePeer == user.Id || settings.ChatDoNotDisturb) continue;
+                long latestId = user.LastId ?? 0;
+                if (user.Unread == 0 || messengerWindow?.ActivePeer == user.Id) { chatUnread[user.Id] = latestId; continue; }
+                if (latestId <= previous || settings.ChatDoNotDisturb) continue;
+                var recent = await messenger.HistoryAsync(user.Id);
+                var last = recent.LastOrDefault(m => (user.IsGroup ? m.SenderId != messenger.UserId : m.RecipientId == messenger.UserId) && m.ReadAt == null);
+                chatUnread[user.Id] = latestId;
+                if (last == null || last.Id <= previous) continue;
                 string text = "Непрочитанных сообщений: " + user.Unread;
                 if (settings.ChatPreview)
                 {
-                    var recent = await messenger.HistoryAsync(user.Id);
-                    var last = recent.LastOrDefault(m => m.RecipientId == messenger.UserId && m.ReadAt == null);
-                    if (last != null) text += "\n" + last.Body[..Math.Min(300, last.Body.Length)];
+                    text += "\n" + (user.IsGroup ? last.SenderName + ": " : "") + last.Body[..Math.Min(300, last.Body.Length)];
                 }
-                if (announcements.Count < 10) ReceiveAnnouncement(new(text, user.FullName, 15, user.Id));
-                if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
+                if (settings.ChatComicNotifications && !settings.AssistantHidden && announcements.Count < 10) ReceiveAnnouncement(new(text, user.FullName, 15, user.Id));
+                notifications.Add((user.FullName, text, user.Id));
+            }
+            if (notifications.Count > 0)
+            {
+                bool play = settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
+                if (settings.ChatWindowsNotifications && tray != null)
+                {
+                    if (notifications.Count == 1) { var notice = notifications[0]; tray.Notify(notice.Title, notice.Text, notice.Peer, play); }
+                    else tray.Notify("Новые сообщения · " + notifications.Count + " чатов", string.Join("\n", notifications.Take(3).Select(n => n.Title)), 0, play);
+                }
+                else if (play)
                 { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
+                if (play) lastChatSound = DateTime.UtcNow;
             }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }

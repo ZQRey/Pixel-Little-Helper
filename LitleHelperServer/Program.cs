@@ -95,6 +95,7 @@ builder.Services.AddScoped<CommandService>();
 builder.Services.AddScoped<AnnouncementService>();
 builder.Services.AddSingleton<PanelSessions>();
 builder.Services.AddSingleton<ChatPresence>();
+builder.Services.AddSingleton<ChatGroupGate>();
 builder.Services.AddSingleton<IMessengerKerberos, MessengerKerberos>();
 builder.Services.AddScoped<IMessengerWindowsDirectory, MessengerWindowsDirectory>();
 builder.Services.AddSingleton<MessengerSettings>();
@@ -124,6 +125,7 @@ using (var scope = app.Services.CreateScope())
     await db.Database.EnsureCreatedAsync();
     await Access.EnsureSchema(db);
     await Messenger.EnsureSchemaAsync(db);
+    await ChatGroups.EnsureSchemaAsync(db);
     await AnnouncementService.EnsureSchemaAsync(db);
     await TicketManagement.EnsureSchemaAsync(db);
     await Branches.EnsureSchemaAsync(db);

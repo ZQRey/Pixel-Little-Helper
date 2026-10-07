@@ -25,6 +25,12 @@ Directory.CreateDirectory(temp);
 try
 {
     var fresh = new Settings(); var other = new Settings();
+    var chatOrder = ChatContact.Ordered(new[] {
+        new ChatContact(1, "Личный чат", "one", true, null, 1, 8, true, DateTime.UtcNow.AddMinutes(-2)),
+        new ChatContact(2, "Прочитанный чат", "two", true, null, 0, 50, true, DateTime.UtcNow),
+        new ChatContact(-3, "Группа", "", true, null, 3, 1, false, DateTime.UtcNow.AddMinutes(-1), "Новый ответ", true)
+    }).ToArray();
+    Check(chatOrder.Select(c => c.Id).SequenceEqual(new[] { -3, 1, 2 }), "unread groups and private chats lead list sorted by message time");
     Check(fresh.EnsureClientKey() && Convert.FromBase64String(fresh.ClientToken).Length == 48, "client generates cryptographic registration key");
     string generated = fresh.ClientToken;
     Check(!fresh.EnsureClientKey() && fresh.ClientToken == generated, "generated registration key reused");
@@ -171,6 +177,13 @@ try
     Check(offlineActions.Select(a => a.Id).SequenceEqual(ApiClient.Defaults().Select(a => a.Id)), "WPF offline menu ignores cached server actions");
     pet.Show(); pet.UpdateLayout();
     Check(pet.ActualWidth == 96 && pet.ActualHeight == 96, "collapsed native window is 96x96");
+    pet.SetDisplayMode("Topmost"); Check(pet.Topmost, "topmost display mode enabled");
+    pet.SetDisplayMode("Normal"); Check(!pet.Topmost, "normal display mode clears topmost");
+    pet.SetDisplayMode("Background");
+    pet.SetAssistantHidden(true); Check(!pet.IsVisible, "helper hides without terminating window"); pet.SetAssistantHidden(false); Check(pet.IsVisible, "helper can be restored from tray action");
+    var trayHandle = new System.Windows.Interop.WindowInteropHelper(pet).Handle;
+    using (var nativeTray = new TrayIcon(trayHandle, new Sprites().Get(PetState.Idle, 0), () => { }, () => { }, _ => { }))
+    { Check(nativeTray.Registered, "native tray icon registered with Explorer"); nativeTray.SetUnread(true); nativeTray.SetUnread(false); }
     Check(pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "robot receives WPF input after canvas translation");
     typeof(PetWindow).GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
@@ -221,13 +234,17 @@ try
     var chatPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "messenger-login-preview.png"));
     var chatPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); chatPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(chatBitmap)); using (var chatImage = File.Create(chatPreview)) chatPng.Save(chatImage);
     typeof(MessengerWindow).GetMethod("MainForm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
-    typeof(MessengerWindow).GetField("contacts", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatContact> { new(1, "Анна Иванова", "anna@gp1.loc", true, "Поликлиника", 2, 1, true), new(2, "Борис Петров", "boris@gp1.loc", true, "Больница", 0, null, false) });
+    typeof(MessengerWindow).GetField("contacts", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatContact> { new(1, "Анна Иванова", "anna@gp1.loc", true, "Поликлиника", 2, 1, true, DateTime.UtcNow.AddMinutes(-2), "Подскажите расписание"), new(2, "Борис Петров", "boris@gp1.loc", true, "Больница", 0, null, false), new(-3, "Отдел информационных технологий", "", true, null, 4, 2, false, DateTime.UtcNow, "Коллеги, обновление установлено", true, 0) });
     typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
     typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, 0, "Добрый день! Подскажите, пожалуйста, как найти расписание приёма?", "first", DateTime.UtcNow, null), new(2, 0, 1, "Здравствуйте! Отправлю вам ссылку на расписание.", "second", DateTime.UtcNow, DateTime.UtcNow) });
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true });
     chatWindow.UpdateLayout();
     Check(((System.Windows.Controls.Grid)chatWindow.Content).ColumnDefinitions.Count == 2, "messenger provides directory and conversation panes");
     var mainBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); mainBitmap.Render(chatWindow); var mainPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); mainPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(mainBitmap)); using (var mainImage = File.Create(chatPreview.Replace("login", "dialogue"))) mainPng.Save(mainImage);
+    typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, -3);
+    typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, обновление установлено. Можно проверить мессенджер.", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Уведомления и групповые чаты работают.", "group2", DateTime.UtcNow, null, "Артём Шпынов") });
+    typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
+    var groupBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); groupBitmap.Render(chatWindow); var groupPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); groupPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(groupBitmap)); using (var groupImage = File.Create(chatPreview.Replace("login", "groups"))) groupPng.Save(groupImage);
     chatWindow.Close(); chatClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });

@@ -39,6 +39,7 @@ public partial class App : Application
         MainWindow.Show();
         // Older updater watchers launch the GUI with SW_HIDE. Restore it without stealing focus.
         NativeMethods.ShowWindow(new System.Windows.Interop.WindowInteropHelper(MainWindow).Handle, 4);
+        ((PetWindow)MainWindow).RestoreDisplayPreferences();
         if (!diagnostics) UpdateRestart.Watch(MainWindow);
         if (diagnostics)
         {

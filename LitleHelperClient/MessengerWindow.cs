@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Markup;
 
 namespace PixelHelper;
 internal sealed class MessengerWindow : Window
@@ -72,12 +73,32 @@ internal sealed class MessengerWindow : Window
         Preference("Звук", settings.ChatSound, value => settings.ChatSound = value);
         Preference("Текст уведомления", settings.ChatPreview, value => settings.ChatPreview = value);
         Preference("Не беспокоить", settings.ChatDoNotDisturb, value => settings.ChatDoNotDisturb = value);
+        Preference("Уведомления Windows", settings.ChatWindowsNotifications, value => settings.ChatWindowsNotifications = value);
+        Preference("Облачко", settings.ChatComicNotifications, value => settings.ChatComicNotifications = value);
         toolbar.Children.Add(Button("Обновить соединение", async (_, _) => await client.SignInWindowsAsync(true)));
+        toolbar.Children.Add(Button("Создать группу", async (_, _) => { var window = new ChatGroupWindow(client) { Owner = this }; if (window.ShowDialog() == true) { peer = window.CreatedPeer; messages.Clear(); pendingId = null; await RefreshAsync(); } }));
+        toolbar.Children.Add(Button("Участники группы", async (_, _) => { if (peer >= 0) { error!.Text = "Выберите групповой чат."; return; } new ChatGroupWindow(client, peer) { Owner = this }.ShowDialog(); await RefreshAsync(); }));
         Grid.SetColumnSpan(toolbar, 2); root.Children.Add(toolbar);
         var left = new DockPanel { Margin = new Thickness(0, 8, 12, 8) };
         search = new TextBox { Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8), ToolTip = "Поиск по имени, логину или филиалу" };
         search.TextChanged += (_, _) => Filter(); DockPanel.SetDock(search, Dock.Top); left.Children.Add(search);
-        users = new ListBox(); users.SelectionChanged += async (_, _) =>
+        users = new ListBox { HorizontalContentAlignment = HorizontalAlignment.Stretch, ItemTemplate = (DataTemplate)XamlReader.Parse("""
+            <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+              <Grid Margin="4,7" Width="225">
+                <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" FontSize="14" Margin="0,0,5,4">
+                  <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><DataTrigger Binding="{Binding HasUnread}" Value="True"><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                </TextBlock>
+                <Border Grid.Column="1" Background="#1678AB" CornerRadius="10" Padding="6,1" VerticalAlignment="Top">
+                  <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasUnread}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
+                  <TextBlock Text="{Binding Unread}" Foreground="White" FontWeight="Bold" FontSize="11"/>
+                </Border>
+                <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" Foreground="#526573" FontSize="12"/>
+                <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{Binding TimeLabel}" Foreground="#7B8993" FontSize="10" Margin="0,4,0,0"/>
+              </Grid>
+            </DataTemplate>
+            """) }; users.SelectionChanged += async (_, _) =>
         {
             if (updating || users.SelectedItem is not ChatContact contact) return;
             if (peer != contact.Id) { peer = contact.Id; input!.Text = ""; pendingId = null; messages.Clear(); }
@@ -104,7 +125,7 @@ internal sealed class MessengerWindow : Window
         if (users == null) return;
         bool wasUpdating = updating; updating = true;
         string term = search?.Text.Trim() ?? "";
-        users.ItemsSource = contacts.Where(u => (u.FullName + " " + u.Username + " " + u.Branch).Contains(term, StringComparison.OrdinalIgnoreCase)).OrderByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastId).ThenBy(u => u.FullName).ToList();
+        users.ItemsSource = ChatContact.Ordered(contacts.Where(u => (u.FullName + " " + u.Username + " " + u.Branch).Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
         users.SelectedItem = contacts.FirstOrDefault(u => u.Id == peer); updating = wasUpdating;
     }
     private async Task RefreshAsync()
@@ -113,7 +134,7 @@ internal sealed class MessengerWindow : Window
         if (!client.SignedIn) { if (!showingLogin) LoginForm(); else if (error != null) error.Text = client.SignInStatus; return; }
         if (users == null || showingLogin) MainForm();
         updating = true;
-        try { contacts = await client.UsersAsync(); Filter(); if (peer != 0) await LoadHistoryAsync(); }
+        try { contacts = await client.UsersAsync(); if (peer < 0 && !contacts.Any(c => c.Id == peer)) { peer = 0; messages.Clear(); history?.Children.Clear(); if (title != null) title.Text = "Группа недоступна"; if (input != null) input.Clear(); pendingId = null; } Filter(); if (peer != 0) await LoadHistoryAsync(); }
         catch (Exception ex) { if (error != null) error.Text = ex.Message; }
         finally { updating = false; }
     }
@@ -125,8 +146,9 @@ internal sealed class MessengerWindow : Window
         try
         {
             var latest = await client.HistoryAsync(selected); if (selected != peer || closing) return;
-            messages = messages.Where(m => m.SenderId == selected || m.RecipientId == selected).Concat(latest).GroupBy(m => m.Id).Select(g => g.Last()).OrderBy(m => m.Id).ToList();
+            messages = messages.Where(m => selected < 0 ? m.RecipientId == selected : m.SenderId == selected || m.RecipientId == selected).Concat(latest).GroupBy(m => m.Id).Select(g => g.Last()).OrderBy(m => m.Id).ToList();
             title!.Text = contacts.FirstOrDefault(u => u.Id == peer)?.FullName ?? "Диалог";
+            bool writable = contacts.FirstOrDefault(u => u.Id == peer)?.IsActive == true; input!.IsEnabled = writable; send!.IsEnabled = writable;
             RenderHistory(scroll!.ScrollableHeight - scroll.VerticalOffset < 5); await MarkReadAsync(); error!.Text = "";
         }
         catch (Exception ex) { if (error != null) error.Text = ex.Message; }
@@ -138,8 +160,10 @@ internal sealed class MessengerWindow : Window
         foreach (var message in messages)
         {
             bool mine = message.SenderId == client.UserId;
-            var panel = new StackPanel(); panel.Children.Add(new TextBlock { Text = message.Body, TextWrapping = TextWrapping.Wrap, FontSize = 14 });
-            panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = 11, Foreground = Brushes.DimGray, Margin = new Thickness(0, 6, 0, 0) });
+            var panel = new StackPanel();
+            if (peer < 0) panel.Children.Add(new TextBlock { Text = message.SenderName ?? "Участник", FontWeight = FontWeights.Bold, Foreground = Brushes.SteelBlue, Margin = new Thickness(0, 0, 0, 5) });
+            panel.Children.Add(new TextBlock { Text = message.Body, TextWrapping = TextWrapping.Wrap, FontSize = 14 });
+            panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? peer < 0 || message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = 11, Foreground = Brushes.DimGray, Margin = new Thickness(0, 6, 0, 0) });
             history.Children.Add(new Border { Child = panel, Background = mine ? Brushes.LightCyan : Brushes.White, CornerRadius = new CornerRadius(12), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = 420, HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
         }
         if (bottom) scroll!.ScrollToEnd();
@@ -147,9 +171,15 @@ internal sealed class MessengerWindow : Window
     private async Task MarkReadAsync()
     {
         if (!IsActive || peer == 0 || messages.Count == 0 || !client.SignedIn) return;
-        var unread = messages.Where(m => m.RecipientId == client.UserId && m.ReadAt == null).ToList();
+        var unread = messages.Where(m => (peer < 0 ? m.SenderId != client.UserId : m.RecipientId == client.UserId) && m.ReadAt == null).ToList();
         if (unread.Count == 0) return;
-        try { await client.ReadAsync(peer, unread.Max(m => m.Id)); messages = messages.Select(m => unread.Any(u => u.Id == m.Id) ? m with { ReadAt = DateTime.UtcNow } : m).ToList(); }
+        int selected = peer; long through = unread.Max(m => m.Id);
+        try
+        {
+            await client.ReadAsync(selected, through);
+            contacts = contacts.Select(c => c.Id == selected && (c.LastId ?? 0) <= through ? c with { Unread = 0 } : c).ToList(); Filter();
+            if (peer == selected) messages = messages.Select(m => unread.Any(u => u.Id == m.Id) ? m with { ReadAt = DateTime.UtcNow } : m).ToList();
+        }
         catch (Exception ex) { if (error != null) error.Text = ex.Message; }
     }
     private async Task SendAsync()
@@ -161,6 +191,6 @@ internal sealed class MessengerWindow : Window
         int target = peer;
         try { await client.SendAsync(target, text, pendingId); if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingId = null; } await LoadHistoryAsync(); }
         catch (Exception ex) { error.Text = ex.Message; }
-        finally { send.IsEnabled = true; }
+        finally { send.IsEnabled = contacts.FirstOrDefault(c => c.Id == peer)?.IsActive == true; }
     }
 }

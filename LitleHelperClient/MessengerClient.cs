@@ -7,11 +7,19 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace PixelHelper;
-public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline)
+public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null)
 {
-    public override string ToString() => FullName + (Unread > 0 ? "  (" + Unread + ")" : "") + "\n" + (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch);
+    public string Label => (IsGroup ? "👥 " : "") + FullName;
+    public string DirectoryLabel => FullName + " (" + Username + ")";
+    public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch) : LastText.Replace('\n', ' ');
+    public string TimeLabel => LastAt?.ToLocalTime().ToString("dd.MM HH:mm") ?? "";
+    public bool HasUnread => Unread > 0;
+    public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : IsOnline ? "● Online" : "○ Offline" : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
+    public static IEnumerable<ChatContact> Ordered(IEnumerable<ChatContact> contacts) => contacts.OrderByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastAt).ThenBy(u => u.FullName);
 }
-public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt);
+public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null);
+internal record ChatMember(int Id, string FullName, string Username, bool IsActive);
+internal record ChatGroupInfo(int Id, string Name, int OwnerId, bool IsClosed, List<ChatMember> Members);
 internal record ChatSession(string Token, int Id, string FullName, string Server);
 internal sealed class MessengerClient : IAsyncDisposable
 {
@@ -109,7 +117,7 @@ internal sealed class MessengerClient : IAsyncDisposable
     private async Task<T> Request<T>(string path, object? body = null)
     {
         using var response = body == null ? await http.GetAsync(path, lifetime.Token) : await http.PostAsJsonAsync(path, body, lifetime.Token);
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden && path == "api/messenger/me")
         {
             session = null; SetToken(); SignInStatus = "Сеанс завершён. Повторяю вход Windows автоматически…"; Changed?.Invoke(); throw new InvalidOperationException(SignInStatus);
         }
@@ -124,6 +132,19 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal Task<List<ChatContact>> UsersAsync() => Request<List<ChatContact>>("api/messenger/users");
     internal Task<List<ChatEntry>> HistoryAsync(int peer, long? before = null) => Request<List<ChatEntry>>("api/messenger/history/" + peer + (before == null ? "" : "?before=" + before));
     internal Task<ChatEntry> SendAsync(int peer, string text, string clientId) => Request<ChatEntry>("api/messenger/send", new { recipientId = peer, body = text, clientId });
+    internal Task<ChatGroupInfo> GroupAsync(int peer) => Request<ChatGroupInfo>("api/messenger/groups/" + -peer);
+    internal Task<JsonElement> CreateGroupAsync(string name, int[] members) => Request<JsonElement>("api/messenger/groups", new { name, members });
+    internal async Task GroupOperationAsync(int peer, string operation, object? body = null)
+    {
+        using var response = await http.PostAsJsonAsync($"api/messenger/groups/{-peer}/{operation}", body ?? new { }, lifetime.Token);
+        if (!response.IsSuccessStatusCode)
+        {
+            string error = "Не удалось изменить группу.";
+            try { using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync()); if (json.RootElement.TryGetProperty("error", out var value)) error = value.GetString() ?? error; } catch (JsonException) { }
+            throw new InvalidOperationException(error);
+        }
+        Changed?.Invoke();
+    }
     internal async Task ReadAsync(int peer, long through)
     {
         using var response = await http.PostAsJsonAsync($"api/messenger/read/{peer}/{through}", new { }, lifetime.Token); response.EnsureSuccessStatusCode();

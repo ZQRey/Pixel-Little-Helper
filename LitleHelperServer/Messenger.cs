@@ -10,6 +10,7 @@ namespace LitleHelperServer;
 
 public class ChatMessage
 {
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public string? SenderName { get; set; }
     public long Id { get; set; }
     public int SenderId { get; set; }
     public int RecipientId { get; set; }
@@ -124,7 +125,7 @@ public static class Messenger
             if (!string.IsNullOrEmpty(verified.ResponseToken)) http.Response.Headers.WWWAuthenticate = "Negotiate " + verified.ResponseToken;
             return Results.Ok(new { token = Token(user, config), user.Id, user.FullName });
         }).RequireRateLimiting("login");
-        app.MapGet("/api/settings/messenger", async (MessengerSettings settings, HelperDb db) => new { settings.Value.Enabled, settings.Value.RetentionDays, storedMessages = await db.ChatMessages.CountAsync() }).RequireAuthorization("settings.manage");
+        app.MapGet("/api/settings/messenger", async (MessengerSettings settings, HelperDb db) => new { settings.Value.Enabled, settings.Value.RetentionDays, storedMessages = await db.ChatMessages.CountAsync() + await db.ChatGroupMessages.CountAsync() }).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/messenger", (ChatOptions request, MessengerSettings settings, ChatPresence presence) =>
         {
             settings.Save(request);
@@ -145,23 +146,26 @@ public static class Messenger
             return Results.Ok(new { token = Token(user, config), user.Id, user.FullName });
         }).RequireRateLimiting("login");
         var api = app.MapGroup("/api/messenger").RequireAuthorization("Panel");
+        ChatGroups.Map(api);
         api.AddEndpointFilter(async (context, next) => context.HttpContext.RequestServices.GetRequiredService<MessengerSettings>().Value.Enabled ? await next(context) : Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403));
         api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName }; });
         api.MapGet("/users", async (HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>
         {
             var me = await UserAsync(db, p);
             var users = await db.Users.AsNoTracking().Where(u => u.Id != me.Id && u.PasswordHash == "!AD" && (u.IsActive || db.ChatMessages.Any(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id)))
-                .OrderBy(u => u.FullName).Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(), unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null), lastId = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).Select(m => (long?)m.Id).Max() }).ToListAsync();
-            return users.Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, u.branch, u.unread, u.lastId, isOnline = presence.Online(u.Id) });
+                .OrderBy(u => u.FullName).Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(), unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null), lastId = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).Select(m => (long?)m.Id).Max(), lastAt = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => (DateTime?)m.SentAt).FirstOrDefault(), lastText = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => m.Body).FirstOrDefault() }).ToListAsync();
+            return users.Select(u => new ChatListItem(u.Id, u.FullName, u.Username, u.IsActive, u.branch, u.unread, u.lastId, presence.Online(u.Id), u.lastAt, u.lastText)).Concat(await ChatGroups.ListAsync(db, me.Id));
         });
         api.MapGet("/history/{peer:int}", async (int peer, long? before, HelperDb db, ClaimsPrincipal p) =>
         {
             var me = await UserAsync(db, p);
-            return (await db.ChatMessages.AsNoTracking().Where(m => (m.SenderId == me.Id && m.RecipientId == peer || m.SenderId == peer && m.RecipientId == me.Id) && (before == null || m.Id < before)).OrderByDescending(m => m.Id).Take(50).ToListAsync()).OrderBy(m => m.Id);
+            if (peer < 0) return await ChatGroups.HistoryAsync(ChatGroups.IdFromPeer(peer), before, db, me.Id);
+            return Results.Ok((await db.ChatMessages.AsNoTracking().Where(m => (m.SenderId == me.Id && m.RecipientId == peer || m.SenderId == peer && m.RecipientId == me.Id) && (before == null || m.Id < before)).OrderByDescending(m => m.Id).Take(50).ToListAsync()).OrderBy(m => m.Id));
         });
-        api.MapPost("/send", async (ChatSend request, HelperDb db, ClaimsPrincipal p, IHubContext<MessengerHub> hub) =>
+        api.MapPost("/send", async (ChatSend request, HelperDb db, ClaimsPrincipal p, IHubContext<MessengerHub> hub, ChatGroupGate gate) =>
         {
             var me = await UserAsync(db, p);
+            if (request.RecipientId < 0) return await ChatGroups.SendAsync(request, db, me.Id, hub, gate);
             if (request.RecipientId == me.Id || !Guid.TryParse(request.ClientId, out _) || string.IsNullOrWhiteSpace(request.Body) || request.Body.Length > 4000 || request.Body.Any(c => char.IsControl(c) && c is not '\n' and not '\r' and not '\t')) throw new ArgumentException("Сообщение: от 1 до 4000 символов, выберите получателя.");
             var recipient = await db.Users.SingleOrDefaultAsync(u => u.Id == request.RecipientId && u.IsActive && u.PasswordHash == "!AD") ?? throw new ArgumentException("Получатель недоступен.");
             string clientId = Guid.Parse(request.ClientId).ToString("N");
@@ -188,6 +192,7 @@ public static class Messenger
         api.MapPost("/read/{peer:int}/{through:long}", async (int peer, long through, HelperDb db, ClaimsPrincipal p, IHubContext<MessengerHub> hub) =>
         {
             var me = await UserAsync(db, p);
+            if (peer < 0) return await ChatGroups.ReadAsync(ChatGroups.IdFromPeer(peer), through, db, me.Id, hub);
             await db.ChatMessages.Where(m => m.SenderId == peer && m.RecipientId == me.Id && m.Id <= through && m.ReadAt == null).ExecuteUpdateAsync(s => s.SetProperty(m => m.ReadAt, DateTime.UtcNow));
             await hub.Clients.Groups("Chat:" + peer, "Chat:" + me.Id).SendAsync("ChatChanged"); return Results.Ok();
         });

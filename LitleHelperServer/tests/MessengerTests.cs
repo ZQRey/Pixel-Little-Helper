@@ -36,6 +36,7 @@ public static class MessengerTests
         builder.Services.AddDbContext<HelperDb>(o => o.UseSqlite("Data Source=" + Path.Combine(folder, "chat.db")));
         builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSignalR();
         builder.Services.AddSingleton<IMessengerKerberos, Kerberos>(); builder.Services.AddSingleton<IMessengerWindowsDirectory, WindowsDirectory>();
+        builder.Services.AddSingleton<ChatGroupGate>();
         builder.Services.AddRateLimiter(o => o.AddPolicy("login", c => RateLimitPartition.GetNoLimiter("test")));
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
         {
@@ -55,6 +56,7 @@ public static class MessengerTests
         {
             var db = scope.ServiceProvider.GetRequiredService<HelperDb>(); await db.Database.EnsureCreatedAsync(); await Messenger.EnsureSchemaAsync(db); await Messenger.EnsureSchemaAsync(db);
             Check(await db.ChatMessages.CountAsync() == 0, "chat schema initialization is idempotent");
+            await ChatGroups.EnsureSchemaAsync(db); await ChatGroups.EnsureSchemaAsync(db);
             db.Users.Add(new() { Username = "admin", FullName = "Local admin", Role = Roles.SuperAdmin, PasswordHash = "local" }); await db.SaveChangesAsync();
         }
         await app.StartAsync(); string address = app.Urls.Single();
@@ -110,6 +112,47 @@ public static class MessengerTests
         for (int i = 0; i < 55; i++) { using var response = await a.PostAsJsonAsync("api/messenger/send", new ChatSend(bob.Id, "Message " + i, Guid.NewGuid().ToString())); response.EnsureSuccessStatusCode(); }
         var page = await b.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id); Check(page.GetArrayLength() == 50, "history is paged while recipient is offline");
         var older = await b.GetFromJsonAsync<JsonElement>($"api/messenger/history/{alice.Id}?before={page[0].GetProperty("id").GetInt64()}"); Check(older.GetArrayLength() == 6, "older history remains accessible");
+        using var created = await a.PostAsJsonAsync("api/messenger/groups", new GroupCreate("Рабочая группа", [bob.Id])); created.EnsureSuccessStatusCode();
+        int groupPeer = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32(), groupId = -groupPeer;
+        Check((await c.GetAsync($"api/messenger/groups/{groupId}")).StatusCode == HttpStatusCode.Forbidden, "non-member cannot inspect a group");
+        Check((await c.GetAsync($"api/messenger/history/{groupPeer}")).StatusCode == HttpStatusCode.Forbidden, "non-member cannot read group history");
+        Check((await b.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(charlie.Id))).StatusCode == HttpStatusCode.Forbidden, "only group creator may invite members");
+        var groupReceived = new TaskCompletionSource<ChatMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        hub.On<ChatMessage>("ChatMessage", m => { if (m.RecipientId == groupPeer) groupReceived.TrySetResult(m); }); await hub.StartAsync();
+        var groupRequest = new ChatSend(groupPeer, "Первое сообщение группы", Guid.NewGuid().ToString());
+        var concurrent = await Task.WhenAll(a.PostAsJsonAsync("api/messenger/send", groupRequest), a.PostAsJsonAsync("api/messenger/send", groupRequest));
+        foreach (var response in concurrent) response.EnsureSuccessStatusCode();
+        var groupMessage = await concurrent[0].Content.ReadFromJsonAsync<ChatMessage>();
+        Check((await concurrent[1].Content.ReadFromJsonAsync<ChatMessage>())!.Id == groupMessage!.Id, "concurrent group retries create one message"); foreach (var response in concurrent) response.Dispose();
+        Check((await groupReceived.Task.WaitAsync(TimeSpan.FromSeconds(10))).SenderName == "Алиса", "group messages deliver through SignalR with sender display name");
+        var groupList = await b.GetFromJsonAsync<JsonElement>("api/messenger/users");
+        Check(groupList.EnumerateArray().Single(u => u.GetProperty("id").GetInt32() == groupPeer).GetProperty("unread").GetInt32() == 1, "group unread counter is per member");
+        (await b.PostAsJsonAsync($"api/messenger/read/{groupPeer}/{groupMessage.Id}", new { })).EnsureSuccessStatusCode();
+        Check((await b.GetFromJsonAsync<JsonElement>("api/messenger/users")).EnumerateArray().Single(u => u.GetProperty("id").GetInt32() == groupPeer).GetProperty("unread").GetInt32() == 0, "group read cursor clears own badge");
+        Check((await c.PostAsJsonAsync($"api/messenger/read/{groupPeer}/{groupMessage.Id}", new { })).StatusCode == HttpStatusCode.Forbidden, "third user cannot mark group messages read");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(charlie.Id))).EnsureSuccessStatusCode();
+        Check((await c.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}")).GetArrayLength() == 0, "new group participant cannot read earlier history");
+        (await a.PostAsJsonAsync("api/messenger/send", new ChatSend(groupPeer, "После приглашения", Guid.NewGuid().ToString()))).EnsureSuccessStatusCode();
+        Check((await c.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}")).GetArrayLength() == 1, "new group participant sees messages from joining");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/remove", new GroupUser(bob.Id))).EnsureSuccessStatusCode();
+        Check((await b.GetAsync($"api/messenger/history/{groupPeer}")).StatusCode == HttpStatusCode.Forbidden, "removed participant loses group history access");
+        Check((await b.PostAsJsonAsync("api/messenger/send", new ChatSend(groupPeer, "Forbidden", Guid.NewGuid().ToString()))).StatusCode == HttpStatusCode.Forbidden, "removed participant cannot send to group");
+        Check(!(await b.GetFromJsonAsync<JsonElement>("api/messenger/users")).EnumerateArray().Any(u => u.GetProperty("id").GetInt32() == groupPeer), "removed group disappears from directory");
+        await hub.StopAsync();
+        for (int i = 0; i < 55; i++) (await a.PostAsJsonAsync("api/messenger/send", new ChatSend(groupPeer, "Group message " + i, Guid.NewGuid().ToString()))).EnsureSuccessStatusCode();
+        var groupPage = await c.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}");
+        Check(groupPage.GetArrayLength() == 50 && (await c.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}?before={groupPage[0].GetProperty("id").GetInt64()}")).GetArrayLength() == 6, "group history pagination respects joining boundary");
+        Check((await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/leave", new { })).StatusCode == HttpStatusCode.BadRequest, "creator must transfer ownership before leaving");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/owner", new GroupUser(charlie.Id))).EnsureSuccessStatusCode();
+        Check((await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(bob.Id))).StatusCode == HttpStatusCode.Forbidden, "former owner cannot invite participants");
+        (await c.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(bob.Id))).EnsureSuccessStatusCode();
+        Check((await b.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}")).GetArrayLength() == 0, "reinvited member does not regain old history");
+        (await c.PostAsJsonAsync($"api/messenger/groups/{groupId}/rename", new GroupUpdate("Новая группа"))).EnsureSuccessStatusCode();
+        (await c.PostAsJsonAsync($"api/messenger/groups/{groupId}/close", new { })).EnsureSuccessStatusCode();
+        Check((await a.PostAsJsonAsync("api/messenger/send", new ChatSend(groupPeer, "Closed", Guid.NewGuid().ToString()))).StatusCode == HttpStatusCode.BadRequest, "closed group rejects messages");
+        Check((await a.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}")).GetArrayLength() == 50, "closed group retains readable history");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/leave", new { })).EnsureSuccessStatusCode();
+        Check((await a.GetAsync($"api/messenger/history/{groupPeer}")).StatusCode == HttpStatusCode.Forbidden, "leaving closed group revokes access");
         using var invalid = await a.PostAsJsonAsync("api/messenger/send", new ChatSend(bob.Id, new string('x', 4001), Guid.NewGuid().ToString())); Check(invalid.StatusCode == HttpStatusCode.BadRequest, "oversized messages rejected");
         using (var scope = app.Services.CreateScope())
         {

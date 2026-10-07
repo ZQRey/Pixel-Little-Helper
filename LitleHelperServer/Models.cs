@@ -91,6 +91,9 @@ public class TicketRecord
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatGroup> ChatGroups => Set<ChatGroup>();
+    public DbSet<ChatGroupMember> ChatGroupMembers => Set<ChatGroupMember>();
+    public DbSet<ChatGroupMessage> ChatGroupMessages => Set<ChatGroupMessage>();
     public DbSet<TelegramBotState> TelegramBotStates => Set<TelegramBotState>();
     public DbSet<TelegramReplySession> TelegramReplySessions => Set<TelegramReplySession>();
     public DbSet<TelegramHandledUpdate> TelegramHandledUpdates => Set<TelegramHandledUpdate>();
@@ -104,6 +107,15 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<Branch> Branches => Set<Branch>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        b.Entity<ChatGroupMember>().HasKey(m => new { m.GroupId, m.UserId });
+        b.Entity<ChatGroup>().HasOne<PanelUser>().WithMany().HasForeignKey(g => g.OwnerId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<ChatGroupMember>().HasOne<ChatGroup>().WithMany().HasForeignKey(m => m.GroupId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<ChatGroupMember>().HasOne<PanelUser>().WithMany().HasForeignKey(m => m.UserId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<ChatGroupMessage>().HasOne<ChatGroup>().WithMany().HasForeignKey(m => m.GroupId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<ChatGroupMessage>().HasOne<PanelUser>().WithMany().HasForeignKey(m => m.SenderId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<ChatGroupMember>().HasIndex(m => m.UserId);
+        b.Entity<ChatGroupMessage>().HasIndex(m => new { m.SenderId, m.ClientId }).IsUnique();
+        b.Entity<ChatGroupMessage>().HasIndex(m => new { m.GroupId, m.Id });
         b.Entity<ChatMessage>().HasIndex(m => new { m.SenderId, m.ClientId }).IsUnique();
         b.Entity<ChatMessage>().HasIndex(m => new { m.RecipientId, m.Id });
         b.Entity<TelegramDelivery>().HasKey(x => x.TicketId);

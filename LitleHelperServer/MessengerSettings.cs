@@ -32,6 +32,7 @@ public class ChatRetentionWorker(IServiceScopeFactory scopes, MessengerSettings 
                 {
                     using var scope = scopes.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<HelperDb>(); var cutoff = DateTime.UtcNow.AddDays(-days);
                     int count = await db.ChatMessages.Where(m => m.SentAt < cutoff).ExecuteDeleteAsync(stoppingToken);
+                    count += await db.ChatGroupMessages.Where(m => m.SentAt < cutoff).ExecuteDeleteAsync(stoppingToken);
                     if (count > 0) logger.LogInformation("Messenger retention removed {Count} messages", count);
                 }
             }

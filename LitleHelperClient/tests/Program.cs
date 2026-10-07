@@ -8,6 +8,14 @@ using PixelHelper;
 
 static void Check(bool result, string message) { if (!result) throw new Exception(message); Console.WriteLine("PASS " + message); }
 
+var robotClicks = new RobotClicks(); var clickTime = DateTime.UtcNow;
+Check(!robotClicks.Register(clickTime,false) && !robotClicks.Register(clickTime.AddMilliseconds(200),false) && robotClicks.Register(clickTime.AddMilliseconds(400),false),"three rapid robot clicks trigger offended reaction");
+Check(!robotClicks.Register(clickTime.AddSeconds(1),false) && !robotClicks.Register(clickTime.AddSeconds(1.2),false) && !robotClicks.Register(clickTime.AddSeconds(1.4),false),"offended reaction cooldown prevents repeated bubbles");
+robotClicks = new RobotClicks(); robotClicks.Register(clickTime,false); robotClicks.Register(clickTime.AddMilliseconds(100),true);
+Check(!robotClicks.Register(clickTime.AddMilliseconds(200),false) && !robotClicks.Register(clickTime.AddMilliseconds(300),false),"drag interrupts click sequence");
+robotClicks = new RobotClicks(); robotClicks.Register(clickTime,false);
+Check(!robotClicks.Register(clickTime.AddSeconds(2),false) && !robotClicks.Register(clickTime.AddSeconds(4),false),"slow individual clicks do not trigger offended reaction");
+
 if (args.Length > 0 && args[0] == "--messenger-windows")
 {
     await using var messenger = new MessengerClient(new Settings { ServerUrl = args.Length > 1 ? args[1] : "https://helper.gp1.loc" });
@@ -265,6 +273,11 @@ try
     var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using(var imageFile=File.Create(preview))png.Save(imageFile);
     typeof(PetWindow).GetField("announcementUntil",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(pet,DateTime.UtcNow.AddSeconds(-1));pet.AdvanceAnnouncements();pet.UpdateLayout();
     Check(pet.ActualWidth==96,"announcement expires and restores compact helper");
+    pet.ReceiveAnnouncement(new("Я ещё развиваюсь… Пожалуйста, не обижай меня", "Твой помощник", 10) { LocalAnimation=PetState.Offended }); pet.UpdateLayout();
+    Check((PetState)petStateField.GetValue(pet)! == PetState.Offended && pet.ActualWidth==500,"offended animation is shown together with comic message");
+    Check(!new Sprites().Get(PetState.Offended,0).Pixels.SequenceEqual(new Sprites().Get(PetState.Offended,1).Pixels),"offended animation has distinct blinking frames");
+    typeof(PetWindow).GetField("announcementUntil",petFlags)!.SetValue(pet,DateTime.UtcNow.AddSeconds(-1));pet.AdvanceAnnouncements();pet.UpdateLayout();
+    Check(pet.ActualWidth==96,"offended comic expires without user action");
     pet.ReceiveAnnouncement(new("Первое", "Администратор", 30));
     for(int n=0;n<10;n++)Check(pet.ReceiveAnnouncement(new("Очередь "+n,"Администратор",30)).Contains("очередь"),"queued notice "+n);
     bool full=false;try{pet.ReceiveAnnouncement(new("Лишнее","Администратор",30));}catch(InvalidOperationException){full=true;}Check(full,"notice queue bounded to ten pending messages");

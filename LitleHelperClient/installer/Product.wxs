@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.21" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.22" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
-    <MediaTemplate EmbedCab="yes" />
+    <MediaTemplate EmbedCab="yes" /><Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" /><Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="SERVERURL" Secure="yes" />
     <Property Id="EXISTINGSERVERURL">
@@ -16,7 +16,7 @@
       <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="PixelHelper">
         <Component Id="MainExecutableComponent" Guid="96F581E4-391C-490F-B3E7-2CD0B03BAC75" Win64="yes">
           <File Id="MainExecutable" Source="$(var.PublishDir)\PixelHelper.exe" KeyPath="yes">
-            <Shortcut Id="StartMenuLink" Directory="StartMenuFolder" Name="PixelHelper" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
+            <Shortcut Id="StartMenuLink" Directory="StartMenuFolder" Name="PixelHelper" Icon="HelperIcon.ico" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
           </File>
           <ServiceInstall Id="InstallUpdater" Name="PixelHelperUpdater" DisplayName="PixelHelper — обновления" Description="Проверка и установка подписанных обновлений клиента PixelHelper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--update-service" />
           <ServiceControl Id="ControlUpdater" Name="PixelHelperUpdater" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
@@ -25,7 +25,7 @@
       </Directory></Directory>
       <Directory Id="CommonAppDataFolder"><Directory Id="ProgramDataShortcut" Name="PixelHelper">
         <Component Id="GlobalShortcut" Guid="6EF29E6E-26B8-49CF-9B6E-6E2AEBDCA86B" Win64="yes">
-          <Shortcut Id="ProgramDataLink" Name="PixelHelper" Target="[INSTALLFOLDER]PixelHelper.exe" WorkingDirectory="INSTALLFOLDER" />
+          <Shortcut Id="ProgramDataLink" Name="PixelHelper" Icon="HelperIcon.ico" Target="[INSTALLFOLDER]PixelHelper.exe" WorkingDirectory="INSTALLFOLDER" />
           <RemoveFolder Id="RemoveShortcutDir" On="uninstall" />
           <RegistryValue Root="HKLM" Key="Software\PixelHelper" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
         </Component>

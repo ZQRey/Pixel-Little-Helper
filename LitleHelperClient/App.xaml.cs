@@ -24,6 +24,8 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        var appIcon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/PixelHelper;component/Assets/PixelHelper.ico")); appIcon.Freeze();
+        EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler((sender,args) => { if (sender is Window window && ReferenceEquals(args.OriginalSource,window) && window.Icon==null) window.Icon=appIcon; }));
         singleton = new Mutex(true, @"Local\PixelHelper-" + Environment.UserName, out bool created);
         if (!created) { Shutdown(); return; }
         DispatcherUnhandledException += (_, args) =>

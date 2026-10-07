@@ -73,6 +73,21 @@ public static class MessengerTests
         }
         var alice = await Login("alice"); var bob = await Login("bob"); var charlie = await Login("charlie");
         Check((await anonymous.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.BadRequest, "Windows SSO requires HTTPS");
+        using(var browser=new HttpClient(new HttpClientHandler { UseCookies=false }) { BaseAddress=new Uri(address) })
+        {
+            browser.DefaultRequestHeaders.Add("X-Forwarded-Proto","https");browser.DefaultRequestHeaders.Add("X-Messenger-Web","1");
+            using var webLogin=await browser.PostAsJsonAsync("api/messenger/web/login",new LoginRequest("alice","valid"));webLogin.EnsureSuccessStatusCode();
+            string cookie=webLogin.Headers.GetValues("Set-Cookie").Single();
+            Check(cookie.Contains("httponly",StringComparison.OrdinalIgnoreCase)&&cookie.Contains("secure",StringComparison.OrdinalIgnoreCase)&&cookie.Contains("samesite=strict",StringComparison.OrdinalIgnoreCase),"web session is Secure, HttpOnly and SameSite Strict");
+            browser.DefaultRequestHeaders.Add("Cookie",cookie.Split(';')[0]);
+            Check((await browser.GetAsync("api/messenger/me")).IsSuccessStatusCode,"web cookie opens same AD messenger account");
+            browser.DefaultRequestHeaders.Remove("X-Messenger-Web");
+            Check(!(await browser.PostAsJsonAsync("api/messenger/read/999/1",new {})).IsSuccessStatusCode,"web mutation without CSRF header rejected");
+            browser.DefaultRequestHeaders.Add("X-Messenger-Web","1");browser.DefaultRequestHeaders.Add("Origin","https://evil.example");
+            Check(!(await browser.PostAsJsonAsync("api/messenger/read/999/1",new {})).IsSuccessStatusCode,"cross-origin web mutation rejected");
+            browser.DefaultRequestHeaders.Remove("Origin");browser.DefaultRequestHeaders.Remove("X-Forwarded-Proto");
+            Check(!(await browser.GetAsync("api/messenger/me")).IsSuccessStatusCode,"web session cannot travel over HTTP");
+        }
         using var windows = new HttpClient { BaseAddress = new Uri(address) }; windows.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
         windows.DefaultRequestHeaders.Add("X-Remote-User", "alice@ad.test");
         using (var challenge = await windows.GetAsync("api/messenger/windows"))
@@ -99,6 +114,17 @@ public static class MessengerTests
         using var sent = await a.PostAsJsonAsync("api/messenger/send", request); sent.EnsureSuccessStatusCode(); var message = await sent.Content.ReadFromJsonAsync<ChatMessage>();
         var delivered = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Check(delivered.Body == request.Body && delivered.SenderId == alice.Id, "real SignalR delivery carries authenticated sender and stored message");
+        (await a.PostAsJsonAsync("api/messenger/preferences/"+bob.Id,new PreferenceUpdate(true,true,true))).EnsureSuccessStatusCode();
+        Check((await a.GetFromJsonAsync<List<ChatPreference>>("api/messenger/preferences"))!.Single().Pinned,"chat pin, favourite and mute persist");
+        Check((await b.GetFromJsonAsync<List<ChatPreference>>("api/messenger/preferences"))!.Count==0,"chat preferences isolated by authenticated user");
+        (await b.PostAsJsonAsync($"api/messenger/reaction/{alice.Id}/{message!.Id}",new ReactionUpdate("👍"))).EnsureSuccessStatusCode();
+        var reactions=await a.GetFromJsonAsync<Dictionary<string,List<ReactionInfo>>>($"api/messenger/extras/{bob.Id}?ids={message.Id}");
+        Check(reactions![message.Id.ToString()].Single().Count==1,"message reaction synchronized between participants");
+        Check((await c.PostAsJsonAsync($"api/messenger/reaction/{alice.Id}/{message.Id}",new ReactionUpdate("👍"))).StatusCode==HttpStatusCode.Forbidden,"third user cannot react to private message");
+        (await b.PostAsJsonAsync($"api/messenger/reaction/{alice.Id}/{message.Id}",new ReactionUpdate("👍"))).EnsureSuccessStatusCode();
+        Check((await a.GetFromJsonAsync<Dictionary<string,List<ReactionInfo>>>($"api/messenger/extras/{bob.Id}?ids={message.Id}"))![message.Id.ToString()].Count==0,"repeated reaction toggles off without duplicate");
+        Check((await b.GetFromJsonAsync<JsonElement>($"api/messenger/search/{alice.Id}?q=helper_wave")).GetArrayLength()==1,"server history search finds available message");
+        Check((await c.GetFromJsonAsync<JsonElement>($"api/messenger/search/{alice.Id}?q=helper_wave")).GetArrayLength()==0,"history search does not expose other conversations");
         Check((await b.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id)).GetArrayLength() == 1, "recipient sees persistent dialogue history");
         Check((await b.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id))[0].GetProperty("body").GetString() == request.Body, "private emoji codes and Unicode survive storage and retrieval");
         Check((await c.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id)).GetArrayLength() == 0, "third user cannot read another dialogue");

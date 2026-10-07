@@ -603,7 +603,7 @@ public sealed class PetWindow : Window
             var notifications = new List<(string Title, string Text, int Peer)>();
             foreach (var user in users)
             {
-                long previous = chatUnread.GetValueOrDefault(user.Id);
+                long previous = chatUnread.GetValueOrDefault(user.Id); if(user.Muted) { chatUnread[user.Id]=user.LastId??0; continue; }
                 if (settings.ChatDoNotDisturb && !settings.ChatUrgentOverridesQuiet || !ChatDesktop.Unlocked()) continue;
                 long latestId = user.LastId ?? 0;
                 if (user.Unread == 0 || messengerWindow?.ActivePeer == user.Id) { chatUnread[user.Id] = latestId; continue; }

@@ -94,6 +94,8 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<ChatFile> ChatFiles => Set<ChatFile>();
     public DbSet<ChatGroupRestriction> ChatGroupRestrictions => Set<ChatGroupRestriction>();
     public DbSet<ChatBroadcast> ChatBroadcasts => Set<ChatBroadcast>();
+    public DbSet<ChatPreference> ChatPreferences => Set<ChatPreference>();
+    public DbSet<ChatReaction> ChatReactions => Set<ChatReaction>();
     public DbSet<ChatGroup> ChatGroups => Set<ChatGroup>();
     public DbSet<ChatGroupMember> ChatGroupMembers => Set<ChatGroupMember>();
     public DbSet<ChatGroupMessage> ChatGroupMessages => Set<ChatGroupMessage>();

@@ -11,33 +11,16 @@ internal sealed class MessengerWindow : Window
 {
     private readonly MessengerClient client;
     private readonly Settings settings;
-    private readonly Grid root = new() { Margin = new Thickness(16) };
+    private readonly Grid root = new() { Margin = new Thickness(12) };
     private Brush surface = Brushes.White, ink = Brushes.Black, muted = Brushes.Gray, incoming = Brushes.White, outgoing = Brushes.LightCyan, accent = Brushes.Teal;
     private void ApplyTheme()
     {
         bool light = settings.ChatTheme == "Light", contrast = settings.ChatTheme == "Contrast";
-        Brush Color(string value) => (Brush)new BrushConverter().ConvertFromString(value)!;
-        Background = Color(light ? "#EDF2F7" : contrast ? "#000000" : settings.ChatTheme == "Dark" ? "#161B22" : "#102738");
-        surface = Color(light ? "#FFFFFF" : contrast ? "#000000" : "#19384A");
-        ink = Color(light ? "#163044" : "#F1F8FC"); muted = Color(light ? "#526879" : contrast ? "#FFFFFF" : "#ABC4D3");
-        incoming = surface; outgoing = Color(light ? "#D3F4EF" : contrast ? "#000000" : "#235762"); accent = Color(contrast ? "#FFFF00" : "#36C7BA");
-        Foreground = ink; FontFamily = new FontFamily("Segoe UI"); FontSize = Math.Clamp(settings.ChatFontSize, 11, 22);
+        Background=MessengerDesign.Brush(settings.ChatTheme,"base");surface=MessengerDesign.Brush(settings.ChatTheme,"raised");ink=MessengerDesign.Brush(settings.ChatTheme,"ink");muted=MessengerDesign.Brush(settings.ChatTheme,"muted");incoming=MessengerDesign.Brush(settings.ChatTheme,"incoming");accent=MessengerDesign.Brush(settings.ChatTheme,"accent");outgoing=contrast?Brushes.Black:new LinearGradientBrush(System.Windows.Media.Color.FromRgb(99,102,241),System.Windows.Media.Color.FromRgb(139,92,246),45);
+        Foreground = ink; FontFamily = new FontFamily("Segoe UI Variable, Segoe UI"); FontSize = Math.Clamp(settings.ChatFontSize, 11, 22);
         var textStyle = new Style(typeof(TextBox)); textStyle.Setters.Add(new Setter(Control.BackgroundProperty, surface)); textStyle.Setters.Add(new Setter(Control.ForegroundProperty, ink)); textStyle.Setters.Add(new Setter(Control.BorderBrushProperty, muted)); textStyle.Setters.Add(new Setter(TextBox.CaretBrushProperty, ink)); textStyle.Setters.Add(new Setter(Control.FontSizeProperty, FontSize)); Resources[typeof(TextBox)] = textStyle;
         var checkStyle = new Style(typeof(CheckBox)); checkStyle.Setters.Add(new Setter(Control.ForegroundProperty, ink)); Resources[typeof(CheckBox)] = checkStyle;
-        Resources[typeof(Button)] = (Style)XamlReader.Parse("""
-            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
-              <Setter Property="Cursor" Value="Hand"/>
-              <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
-                <Border x:Name="Frame" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="7" Padding="{TemplateBinding Padding}">
-                  <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <ControlTemplate.Triggers>
-                  <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Frame" Property="Opacity" Value="0.8"/></Trigger>
-                  <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Frame" Property="Opacity" Value="0.4"/></Trigger>
-                </ControlTemplate.Triggers>
-              </ControlTemplate></Setter.Value></Setter>
-            </Style>
-            """);
+        Resources.MergedDictionaries.Clear(); Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/PixelHelper;component/MessengerControls.xaml",UriKind.Relative) });
     }
     private Brush ChatBackdrop()
     {
@@ -70,23 +53,30 @@ internal sealed class MessengerWindow : Window
     private readonly string clipboardDirectory = Path.Combine(Path.GetTempPath(), "PixelHelper-chat-" + Guid.NewGuid().ToString("N"));
     private WrapPanel? attachmentsPanel;
     private bool sending;
+    private ChatEntry? pendingMessage;
+    private bool pendingFailed;
     private StackPanel? details;
     private bool detailsOpen;
+    private Dictionary<string,List<ReactionInfo>> reactions=[];
+    private string chatFilter = "all";
     internal event Action<HelperEmoji>? EmojiInserted;
     internal int ActivePeer => IsActive ? peer : 0;
     internal MessengerWindow(MessengerClient client, Settings settings)
     {
         this.client = client; this.settings = settings;
-        Title = "Мессенджер · PixelHelper"; Width = 1040; Height = 720; MinWidth = 720; MinHeight = 480;
+        Title = "Мессенджер · PixelHelper"; Width = 1240; Height = 780; MinWidth = 820; WindowStyle = WindowStyle.None; System.Windows.Shell.WindowChrome.SetWindowChrome(this,new System.Windows.Shell.WindowChrome { CaptionHeight=0,ResizeBorderThickness=new Thickness(6),GlassFrameThickness=new Thickness(0),CornerRadius=new CornerRadius(16) }); MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen; Content = root; ApplyTheme();
         client.Changed += OnChanged;
         client.MessageReceived += OnMessage;
+        client.TypingReceived += OnTyping;
         Loaded += async (_, _) => await RefreshAsync();
         Activated += async (_, _) => await MarkReadAsync();
-        Closed += (_, _) => { closing = true; client.Changed -= OnChanged; client.MessageReceived -= OnMessage; try { if (Directory.Exists(clipboardDirectory)) Directory.Delete(clipboardDirectory, true); } catch (IOException ex) { Settings.Log(ex); } };
+        Closed += (_, _) => { closing = true; client.Changed -= OnChanged; client.MessageReceived -= OnMessage; client.TypingReceived -= OnTyping; try { if (Directory.Exists(clipboardDirectory)) Directory.Delete(clipboardDirectory, true); } catch (IOException ex) { Settings.Log(ex); } };
     }
     private void OnChanged() => Dispatcher.BeginInvoke(new Action(async () => { if (!closing) await RefreshAsync(); }));
     private void OnMessage(ChatEntry message) => OnChanged();
+    private DateTime typingSent;
+    private void OnTyping(int id,string name)=>Dispatcher.BeginInvoke(new Action(async()=>{if(id!=peer||title==null)return;title.Text=(contacts.FirstOrDefault(c=>c.Id==peer)?.FullName??"")+" · "+name+" печатает…";await Task.Delay(5000);if(!closing&&id==peer&&title!=null)title.Text=contacts.FirstOrDefault(c=>c.Id==peer)?.FullName??"Диалог";}));
     private Button Button(string text, RoutedEventHandler click)
     {
         var button = new Button { Content = text, Background = surface, Foreground = ink, BorderBrush = accent, Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(3) };
@@ -112,8 +102,8 @@ internal sealed class MessengerWindow : Window
     private void MainForm()
     {
         showingLogin = false; root.Children.Clear(); root.ColumnDefinitions.Clear(); root.RowDefinitions.Clear();
-        root.ColumnDefinitions.Add(new() { Width = new GridLength(280) }); root.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
-        root.ColumnDefinitions.Add(new() { Width = new GridLength(detailsOpen ? 280 : 0) });
+        root.ColumnDefinitions.Add(new() { Width = new GridLength(336) }); root.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new() { Width = new GridLength(detailsOpen ? 320 : 0) });
         root.RowDefinitions.Add(new() { Height = GridLength.Auto }); root.RowDefinitions.Add(new()); root.RowDefinitions.Add(new() { Height = GridLength.Auto }); root.RowDefinitions.Add(new() { Height = GridLength.Auto });
         var toolbar = new WrapPanel();
         toolbar.Children.Add(new TextBlock { Text = client.FullName, FontWeight = FontWeights.Bold, Margin = new Thickness(4, 10, 15, 5) });
@@ -126,7 +116,8 @@ internal sealed class MessengerWindow : Window
         if (client.CanBroadcast) { var broadcast = new MenuItem { Header = "Рассылка пользователям…" }; broadcast.Click += (_,_) => new ChatBroadcastWindow(client,settings) { Owner=this }.ShowDialog(); actionsMenu.Items.Add(broadcast); }
         toolbar.Children.Clear(); var menuButton = Button("☰",(_,_) => { actionsMenu.PlacementTarget=toolbar; actionsMenu.IsOpen=true; }); toolbar.Children.Add(menuButton);
         toolbar.Children.Add(new TextBlock { Text="PixelHelper · " + client.FullName, FontWeight=FontWeights.SemiBold, Margin=new Thickness(12,10,12,8) });
-        toolbar.Children.Add(Button("ⓘ Информация", async (_,_) => { detailsOpen=!detailsOpen; root.ColumnDefinitions[2].Width=new GridLength(detailsOpen ? 280 : 0); await LoadDetailsAsync(); }));
+        toolbar.Children.Add(Button("ⓘ Информация", async (_,_) => { detailsOpen=!detailsOpen; root.ColumnDefinitions[3].Width=new GridLength(detailsOpen ? 320 : 0); await LoadDetailsAsync(); }));
+        toolbar.Children.Add(Button("⌕ Поиск",(_,_)=>SearchHistory()));
         Grid.SetColumnSpan(toolbar, 3); root.Children.Add(toolbar);
         details = new StackPanel { Margin=new Thickness(14,12,10,8) }; var detailsScroll = new ScrollViewer { Content=details, VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=surface }; Grid.SetColumn(detailsScroll,2); Grid.SetRow(detailsScroll,1); Grid.SetRowSpan(detailsScroll,3); root.Children.Add(detailsScroll);
         var left = new DockPanel { Margin = new Thickness(0, 8, 12, 8) };
@@ -138,8 +129,8 @@ internal sealed class MessengerWindow : Window
               <Grid Margin="6,4">
                 <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <Border Grid.RowSpan="3" Width="38" Height="38" CornerRadius="19" Background="#267A90" Margin="0,0,9,0" VerticalAlignment="Center"><TextBlock Text="{Binding Initials}" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold"/></Border>
-                <Ellipse Grid.RowSpan="3" Width="9" Height="9" Margin="27,0,9,4" VerticalAlignment="Bottom" Stroke="{DynamicResource MutedInk}" StrokeThickness="1">
+                <Border Grid.RowSpan="3" Width="48" Height="48" CornerRadius="24" Background="#6366F1" Margin="0,0,9,0" VerticalAlignment="Center"><TextBlock Text="{Binding Initials}" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold"/></Border>
+                <Ellipse Grid.RowSpan="3" Width="9" Height="9" Margin="36,0,9,4" VerticalAlignment="Bottom" Stroke="{DynamicResource MutedInk}" StrokeThickness="1">
                   <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="Fill" Value="#89949E"/><Style.Triggers><DataTrigger Binding="{Binding IsOnline}" Value="True"><Setter Property="Fill" Value="#35C878"/></DataTrigger><DataTrigger Binding="{Binding IsGroup}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
                 </Ellipse>
                 <TextBlock Grid.Column="1" Text="{Binding Label}" ToolTip="{Binding FullName}" TextTrimming="CharacterEllipsis" FontSize="{DynamicResource ContactFont}" Margin="0,0,5,4">
@@ -161,6 +152,8 @@ internal sealed class MessengerWindow : Window
         }; left.Children.Add(users); Grid.SetRow(left, 1); root.Children.Add(left);
         users.PreviewMouseRightButtonDown += (_,e) => { if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(users,source) is ListBoxItem item) users.SelectedItem=item.DataContext; };
         var contactMenu = new ContextMenu { Background=surface, Foreground=ink }; var invite = new MenuItem { Header="Добавить в группу…" }; contactMenu.Items.Add(invite); users.ContextMenu=contactMenu;
+        foreach(var (label,kind) in new[]{("Закрепить / открепить","pin"),("Избранное / убрать","favourite"),("Без звука / включить","mute")})
+        {var item=new MenuItem { Header=label };item.Click+=async(_,_)=>{if(users.SelectedItem is not ChatContact c)return;try{await client.PreferenceAsync(c.Id,kind=="pin"?!c.Pinned:c.Pinned,kind=="favourite"?!c.Favourite:c.Favourite,kind=="mute"?!c.Muted:c.Muted);await RefreshAsync();}catch(Exception ex){error!.Text=ex.Message;}};contactMenu.Items.Add(item);}
         contactMenu.Opened += async (_,_) =>
         {
             invite.Items.Clear(); invite.IsEnabled=users.SelectedItem is ChatContact { IsGroup:false, IsActive:true };
@@ -183,23 +176,25 @@ internal sealed class MessengerWindow : Window
         var composer = new DockPanel(); send = Button("Отправить", async (_, _) => await SendAsync()); DockPanel.SetDock(send, Dock.Right); composer.Children.Add(send);
         var emojiButton = Button("Эмодзи", (_, _) => ShowEmojiPicker()); DockPanel.SetDock(emojiButton, Dock.Left); composer.Children.Add(emojiButton);
         var fileButton = Button("📎", (_, _) => ChooseFiles()); fileButton.ToolTip = "Прикрепить файлы (до 50 МБ каждый)"; DockPanel.SetDock(fileButton, Dock.Left); composer.Children.Add(fileButton);
-        input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxLength = 4000, MinHeight = 75, MaxHeight = 130, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8) };
+        input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxLength = 4000, MinHeight = 48, MaxHeight = 130, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8) };
         input.KeyDown += async (_, e) => { if (e.Key == Key.Enter && Keyboard.Modifiers != ModifierKeys.Shift) { e.Handled = true; await SendAsync(); } }; composer.Children.Add(input);
         input.PreviewKeyDown += (_, e) => { if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && !sending && input.IsEnabled) { try { if (Clipboard.ContainsImage()) { e.Handled = true; PasteImage(); } else if (Clipboard.ContainsFileDropList()) { e.Handled = true; AddFiles(Clipboard.GetFileDropList().Cast<string>()); } } catch (Exception ex) { error!.Text = "Не удалось вставить вложение: " + ex.Message; } } };
         var composerPanel = new StackPanel(); composerPanel.Children.Add(composer);
         attachmentsPanel = new WrapPanel { MaxHeight = 110 }; composerPanel.Children.Add(new ScrollViewer { Content = attachmentsPanel, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); RenderPendingFiles();
         var preview = new ContentControl { MaxHeight = 64, Margin = new Thickness(0, 4, 0, 0), ClipToBounds = true, Visibility = Visibility.Collapsed };
         input.ToolTip = "Фирменные эмодзи показываются в предпросмотре и в отправленном сообщении.";
+        input.TextChanged+=async(_,_)=>{if(peer!=0&&input.Text.Length>0&&DateTime.UtcNow-typingSent>TimeSpan.FromSeconds(2)){typingSent=DateTime.UtcNow;await client.TypingAsync(peer);}};
         input.TextChanged += (_, _) => { preview.Visibility = HelperEmojis.Parse(input.Text).Any() ? Visibility.Visible : Visibility.Collapsed; if (preview.Visibility == Visibility.Visible) preview.Content = HelperEmojis.Render(input.Text, 28, settings.AnimatedChatEmojis); };
         composerPanel.Children.Add(preview); Grid.SetColumn(composerPanel, 1); Grid.SetRow(composerPanel, 2); root.Children.Add(composerPanel);
         error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4) }; Grid.SetRow(error, 3); Grid.SetColumnSpan(error, 2); root.Children.Add(error);
+        AddChrome(toolbar);
     }
     private void Filter()
     {
         if (users == null) return;
         bool wasUpdating = updating; updating = true;
         string term = search?.Text.Trim() ?? "";
-        users.ItemsSource = ChatContact.Ordered(contacts.Where(u => (u.FullName + " " + u.Username + " " + u.Branch).Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
+        users.ItemsSource = ChatContact.Ordered(contacts.Where(u => (chatFilter == "all" || chatFilter == "favourite" && u.Favourite || chatFilter == "unread" && u.Unread > 0 || chatFilter == "groups" && u.IsGroup || chatFilter == "personal" && !u.IsGroup) && (u.FullName + " " + u.Username + " " + u.Branch).Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
         users.SelectedItem = contacts.FirstOrDefault(u => u.Id == peer); updating = wasUpdating;
     }
     private async Task RefreshAsync()
@@ -222,6 +217,7 @@ internal sealed class MessengerWindow : Window
         try
         {
             var latest = await client.HistoryAsync(selected); if (selected != peer || closing) return;
+            reactions=await client.ReactionsAsync(selected,latest.Select(m=>m.Id));if(selected!=peer||closing)return;
             messages = messages.Where(m => selected < 0 ? m.RecipientId == selected : m.SenderId == selected || m.RecipientId == selected).Concat(latest).GroupBy(m => m.Id).Select(g => g.Last()).OrderBy(m => m.Id).ToList();
             title!.Text = contacts.FirstOrDefault(u => u.Id == peer)?.FullName ?? "Диалог";
             bool writable = contacts.FirstOrDefault(u => u.Id == peer)?.IsActive == true; input!.IsEnabled = writable && !sending; send!.IsEnabled = writable && !sending;
@@ -235,25 +231,54 @@ internal sealed class MessengerWindow : Window
         history!.Children.Clear();
         if (messages.Count == 0) history.Children.Add(new TextBlock { Text = "Начните переписку", Foreground = muted, Margin = new Thickness(12) });
         DateTime? date = null;
-        foreach (var message in messages)
+        foreach (var message in messages.Concat(pendingMessage != null && pendingMessage.RecipientId==peer ? new[]{pendingMessage} : Array.Empty<ChatEntry>()))
         {
             var day = message.SentAt.ToLocalTime().Date;
             if (date != day) { history.Children.Add(new TextBlock { Text=day.ToString("dd MMMM"), HorizontalAlignment=HorizontalAlignment.Center, Foreground=muted, FontSize=Math.Max(11,FontSize-2), Margin=new Thickness(0,10,0,10) }); date=day; }
             bool mine = message.SenderId == client.UserId;
             var panel = new StackPanel();
+            if(message.Id==0){panel.Children.Add(new TextBlock {Text=message.Body,TextWrapping=TextWrapping.Wrap});panel.Children.Add(new TextBlock {Text=pendingFailed?"Ошибка · повторите отправку":"Отправляется…",FontSize=11,Foreground=Brushes.White});history.Children.Add(new Border {Child=panel,Background=outgoing,CornerRadius=new CornerRadius(16),Padding=new Thickness(12),Margin=new Thickness(4),MaxWidth=500,HorizontalAlignment=HorizontalAlignment.Right});continue;}
+            var reactionMenu=new ContextMenu();foreach(string emoji in new[]{"👍","❤️","😊","🎉","😔","👋"}){var item=new MenuItem{Header=emoji};item.Click+=async(_,_)=>{try{await client.ReactAsync(peer,message.Id,emoji);await LoadHistoryAsync();}catch(Exception ex){error!.Text=ex.Message;}};reactionMenu.Items.Add(item);}panel.ContextMenu=reactionMenu;
+            var chips=new WrapPanel();foreach(var reaction in reactions.GetValueOrDefault(message.Id.ToString())??[])chips.Children.Add(Button(reaction.Emoji+" "+reaction.Count,async(_,_)=>{try{await client.ReactAsync(peer,message.Id,reaction.Emoji);await LoadHistoryAsync();}catch(Exception ex){error!.Text=ex.Message;}}));panel.Children.Add(chips);
             if (message.IsUrgent) panel.Children.Add(new TextBlock { Text="⚠ СРОЧНО", Foreground=Brushes.Orange, FontWeight=FontWeights.Bold, Margin=new Thickness(0,0,0,6) });
-            if (peer < 0) panel.Children.Add(new TextBlock { Text = message.SenderName ?? "Участник", FontWeight = FontWeights.Bold, Foreground = accent, Margin = new Thickness(0, 0, 0, 5) });
-            var body = HelperEmojis.Render(message.Body, Math.Max(32, FontSize * 2.3), settings.AnimatedChatEmojis); body.FontSize = FontSize; body.Foreground = ink; panel.Children.Add(body);
+            if (peer < 0) panel.Children.Add(new TextBlock { Text = message.SenderName ?? "Участник", FontWeight = FontWeights.Bold, Foreground = mine && settings.ChatTheme != "Contrast" ? Brushes.White : accent, Margin = new Thickness(0, 0, 0, 5) });
+            var body = HelperEmojis.Render(message.Body, Math.Max(32, FontSize * 2.3), settings.AnimatedChatEmojis); body.FontSize = FontSize; body.Foreground = mine && settings.ChatTheme!="Contrast" ? Brushes.White : ink; panel.Children.Add(body);
             foreach (var attachment in message.Attachments ?? [])
             {
                 var file = Button("", async (_, _) => await OpenFileAsync(attachment)); file.Content = new TextBlock { Text = (attachment.IsImage ? "▧ " : "📎 ") + attachment.Label, TextWrapping = TextWrapping.Wrap }; file.HorizontalContentAlignment = HorizontalAlignment.Left; file.ToolTip = attachment.IsImage ? "Просмотр изображения и скачивание" : "Скачать файл"; panel.Children.Add(file);
             }
             if (message.IsUrgent && message.RecipientId == client.UserId && message.AcknowledgedAt == null) panel.Children.Add(Button("Ознакомился",async (_,_) => { try { await client.AcknowledgeAsync(message.Id); await LoadHistoryAsync(); } catch(Exception ex) { error!.Text=ex.Message; } }));
             if (message.AcknowledgedAt != null) panel.Children.Add(new TextBlock { Text="✓ Ознакомление подтверждено", Foreground=accent, FontSize=Math.Max(11,FontSize-2) });
-            panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? peer < 0 || message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = Math.Max(11, FontSize - 2), Foreground = muted, Margin = new Thickness(0, 6, 0, 0) });
-            history.Children.Add(new Border { Child = panel, Background = mine ? outgoing : incoming, BorderBrush = muted, BorderThickness = new Thickness(settings.ChatTheme == "Contrast" ? 1 : 0), CornerRadius = new CornerRadius(12), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = Math.Max(180, (scroll is { ActualWidth: > 0 } ? scroll.ActualWidth : ActualWidth - 320) * .85), HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
+            panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? peer < 0 || message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = Math.Max(11, FontSize - 2), Foreground = mine && settings.ChatTheme!="Contrast" ? Brushes.White : muted, Margin = new Thickness(0, 6, 0, 0) });
+            history.Children.Add(new Border { Child = panel, Background = mine ? outgoing : incoming, BorderBrush = muted, BorderThickness = new Thickness(settings.ChatTheme == "Contrast" ? 1 : 0), CornerRadius = mine ? new CornerRadius(16,16,5,16) : new CornerRadius(16,16,16,5), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = Math.Max(180, (scroll is { ActualWidth: > 0 } ? scroll.ActualWidth : ActualWidth - 320) * .85), HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
         }
         if (bottom) scroll!.ScrollToEnd();
+    }
+    private void AddChrome(WrapPanel toolbar)
+    {
+        // Shift existing conversation components; the narrow activity bar is a separate fourth zone.
+        root.ColumnDefinitions.Insert(0,new ColumnDefinition { Width=new GridLength(68) });
+        foreach(UIElement child in root.Children) Grid.SetColumn(child,Grid.GetColumn(child)+1);
+        var dock=new DockPanel { Background=surface,Margin=new Thickness(0,0,10,0),LastChildFill=false };
+        var top=new StackPanel(); var initials=string.Concat(client.FullName.Split(' ',StringSplitOptions.RemoveEmptyEntries).Take(2).Select(n=>n[0]));
+        top.Children.Add(new Border { CornerRadius=new CornerRadius(22),Background=outgoing,Width=44,Height=44,Margin=new Thickness(0,8,0,22),Child=new TextBlock { Text=initials,Foreground=Brushes.White,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center } });
+        foreach(var (value,icon,label) in new[] { ("all","☷","Все чаты"),("personal","♙","Личные"),("groups","♟","Рабочие группы"),("unread","◉","Непрочитанные"),("favourite","☆","Избранное") })
+        {
+            var nav=Button(icon,(_,_)=>{ chatFilter=value; Filter(); });nav.Width=46;nav.Height=46;nav.FontSize=22;nav.BorderThickness=new Thickness(0);nav.ToolTip=label;top.Children.Add(nav);
+        }
+        DockPanel.SetDock(top,Dock.Top);dock.Children.Add(top);
+        var bottom=new StackPanel();bottom.Children.Add(Button("◐",(_,_)=>{settings.ChatTheme=settings.ChatTheme=="Light"?"Dark":"Light";settings.Save();var draft=input?.Text;ApplyTheme();MainForm();input!.Text=draft??"";Filter();RenderHistory(false);title!.Text=contacts.FirstOrDefault(c=>c.Id==peer)?.FullName??"Выберите диалог";}));
+        bottom.Children.Add(Button("⚙",(_,_)=>{new MessengerPreferences(settings){Owner=this}.ShowDialog();ApplyTheme();var draft=input?.Text;MainForm();input!.Text=draft??"";Filter();RenderHistory(false);}));DockPanel.SetDock(bottom,Dock.Bottom);dock.Children.Add(bottom);
+        Grid.SetRowSpan(dock,4);root.Children.Add(dock);
+        toolbar.MouseLeftButtonDown+=(_,e)=>{if(e.ClickCount==2)WindowState=WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized;else if(e.LeftButton==MouseButtonState.Pressed)DragMove();};
+        var caption=new StackPanel { Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right };caption.Children.Add(Button("—",(_,_)=>WindowState=WindowState.Minimized));caption.Children.Add(Button("□",(_,_)=>WindowState=WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized));caption.Children.Add(Button("×",(_,_)=>Close()));
+        root.Children.Remove(toolbar);var header=new DockPanel();DockPanel.SetDock(caption,Dock.Right);header.Children.Add(caption);header.Children.Add(toolbar);Grid.SetColumn(header,1);Grid.SetColumnSpan(header,3);root.Children.Add(header);
+    }
+    private void SearchHistory()
+    {
+        if(peer==0)return;int selected=peer;var dialog=new Window {Title="Поиск по переписке",Width=560,Height=540,Owner=this,WindowStartupLocation=WindowStartupLocation.CenterOwner};MessengerDialog.Apply(dialog,settings);
+        var panel=new DockPanel {Margin=new Thickness(20)};var text=new TextBox {Padding=new Thickness(12),ToolTip="Фраза от двух символов"};DockPanel.SetDock(text,Dock.Top);panel.Children.Add(text);var results=new ListBox {Margin=new Thickness(0,12,0,0)};panel.Children.Add(results);dialog.Content=panel;long revision=0;
+        text.TextChanged+=async(_,_)=>{long current=++revision;await Task.Delay(200);if(current!=revision)return;try{results.Items.Clear();if(text.Text.Trim().Length<2)return;var rows=await client.SearchAsync(selected,text.Text);if(current!=revision)return;foreach(var row in rows)results.Items.Add(new TextBlock {Text=row.SentAt.ToLocalTime().ToString("dd.MM HH:mm")+" · "+row.Body,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,4,0,4)});}catch(Exception ex){if(current==revision)results.Items.Add(ex.Message);}};dialog.ShowDialog();
     }
     private async Task LoadDetailsAsync()
     {
@@ -302,7 +327,7 @@ internal sealed class MessengerWindow : Window
     }
     private async Task MarkReadAsync()
     {
-        if (!IsActive || peer == 0 || messages.Count == 0 || !client.SignedIn) return;
+        if (!IsActive || peer == 0 || messages.Count == 0 || !client.SignedIn || scroll?.ScrollableHeight-scroll?.VerticalOffset>100) return;
         var unread = messages.Where(m => (peer < 0 ? m.SenderId != client.UserId : m.RecipientId == client.UserId) && m.ReadAt == null).ToList();
         if (unread.Count == 0) return;
         int selected = peer; long through = unread.Max(m => m.Id);
@@ -323,9 +348,10 @@ internal sealed class MessengerWindow : Window
         catch (IOException ex) { error!.Text = ex.Message; return; }
         if (pendingId == null || pendingText != signature || pendingPeer != peer) { pendingId = Guid.NewGuid().ToString("N"); pendingText = signature; pendingPeer = peer; }
         sending = true; send.IsEnabled = false; input.IsEnabled = false; users!.IsEnabled = false; error!.Text = "Отправляется…";
+        pendingMessage=new ChatEntry(0,client.UserId,peer,text.Length>0?text:"Вложения: "+string.Join(", ",pendingFiles.Select(Path.GetFileName)),pendingId,DateTime.UtcNow,null);pendingFailed=false;RenderHistory(true);
         int target = peer;
-        try { if (pendingFiles.Count == 0) await client.SendAsync(target, text, pendingId); else await client.SendFilesAsync(target, text, pendingId, pendingFiles.ToArray()); if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingFiles.Clear(); RenderPendingFiles(); pendingId = null; } await LoadHistoryAsync(); }
-        catch (Exception ex) { error.Text = ex.Message; }
+        try { if (pendingFiles.Count == 0) await client.SendAsync(target, text, pendingId); else await client.SendFilesAsync(target, text, pendingId, pendingFiles.ToArray()); pendingMessage=null;if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingFiles.Clear(); RenderPendingFiles(); pendingId = null; } await LoadHistoryAsync(); }
+        catch (Exception ex) { pendingFailed=true;error.Text = ex.Message;RenderHistory(true); }
         finally { sending = false; users!.IsEnabled = true; input.IsEnabled = send.IsEnabled = contacts.FirstOrDefault(c => c.Id == peer)?.IsActive == true; }
     }
     private void ChooseFiles()

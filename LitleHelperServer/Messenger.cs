@@ -36,6 +36,14 @@ public class ChatPresence
 [Authorize(AuthenticationSchemes = "Bearer")]
 public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence presence, MessengerSettings settings) : Hub
 {
+    public async Task Typing(int peer)
+    {
+        if(!settings.Value.Enabled)return;
+        if(Context.Items.TryGetValue("typing",out var last)&&last is DateTime date&&DateTime.UtcNow-date<TimeSpan.FromSeconds(2))return;
+        Context.Items["typing"]=DateTime.UtcNow;var me=await Messenger.UserAsync(db,Context.User!);await ChatExtras.ValidatePeer(db,me.Id,peer);
+        var users=peer<0?await db.ChatGroupMembers.Where(m=>m.GroupId==-peer&&m.UserId!=me.Id&&!db.ChatGroupRestrictions.Any(r=>r.GroupId==m.GroupId&&r.UserId==m.UserId&&r.EndsAt>DateTime.UtcNow)).Select(m=>m.UserId).ToListAsync():new List<int>{peer};
+        await Clients.Groups(users.Select(u=>"Chat:"+u)).SendAsync("Typing",new {peer=peer<0?peer:me.Id,userId=me.Id,me.FullName,until=DateTime.UtcNow.AddSeconds(5)});
+    }
     public override async Task OnConnectedAsync()
     {
         if (!settings.Value.Enabled) throw new HubException("Мессенджер отключён администратором.");
@@ -83,9 +91,9 @@ public static class Messenger
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ChatMessages_SenderId_ClientId\" ON \"ChatMessages\" (\"SenderId\", \"ClientId\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatMessages_RecipientId_Id\" ON \"ChatMessages\" (\"RecipientId\", \"Id\")");
         await ChatFiles.EnsureSchemaAsync(db);
-        await ChatBroadcasts.EnsureSchemaAsync(db);
+        await ChatBroadcasts.EnsureSchemaAsync(db); await ChatExtras.EnsureSchemaAsync(db);
     }
-    private static string Token(PanelUser user, IConfiguration config)
+    internal static string Token(PanelUser user, IConfiguration config)
     {
         var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, Roles.User), new Claim("version", user.SecurityVersion.ToString()), new Claim("messenger", "1") };
         return new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(config["Jwt:Issuer"], config["Jwt:Audience"], claims, expires: DateTime.UtcNow.AddHours(8), signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(config["Jwt:SigningKey"]!)), SecurityAlgorithms.HmacSha256)));
@@ -112,6 +120,7 @@ public static class Messenger
     }
     public static void MapMessenger(this WebApplication app)
     {
+        MessengerWeb.Map(app);
         app.MapGet("/api/messenger/windows", async (HttpContext http, IMessengerKerberos kerberos, IMessengerWindowsDirectory directory, HelperDb db, IConfiguration config, MessengerSettings settings, CancellationToken cancellation) =>
         {
             http.Response.Headers.CacheControl = "no-store";
@@ -155,6 +164,7 @@ public static class Messenger
         ChatGroups.Map(api);
         ChatFiles.Map(api);
         ChatBroadcasts.Map(api);
+        ChatExtras.Map(api);
         api.AddEndpointFilter(async (context, next) => context.HttpContext.RequestServices.GetRequiredService<MessengerSettings>().Value.Enabled ? await next(context) : Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403));
         api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName }; });
         api.MapGet("/users", async (HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>

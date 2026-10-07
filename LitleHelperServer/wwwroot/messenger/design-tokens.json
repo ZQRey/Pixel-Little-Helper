@@ -1,0 +1,9 @@
+{
+  "dark": { "base":"#0a0d14", "surface":"#101521", "raised":"#181f2f", "ink":"#eef1fa", "muted":"#a6adc0", "accent":"#8183ff", "incoming":"#181f2f", "success":"#10b981" },
+  "light": { "base":"#f0f2f7", "surface":"#ffffff", "raised":"#ffffff", "ink":"#20263b", "muted":"#5b647b", "accent":"#5657d2", "incoming":"#ffffff", "success":"#10b981" },
+  "contrast": { "base":"#000000", "surface":"#000000", "raised":"#000000", "ink":"#ffffff", "muted":"#ffffff", "accent":"#ffff00", "incoming":"#000000", "success":"#00ff00" },
+  "gradient": ["#6366f1","#8b5cf6"],
+  "layout": { "dock":68, "dialogs":336, "drawer":320, "avatar":48, "panelRadius":20, "bubbleRadius":16 },
+  "spacing": [4,8,12,16,24,32],
+  "motion": { "interactionMs":160, "drawerMs":200 }
+}

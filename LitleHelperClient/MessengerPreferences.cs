@@ -8,6 +8,7 @@ internal sealed class MessengerPreferences : Window
     internal MessengerPreferences(Settings settings)
     {
         Title = "Оформление и уведомления"; Width = 440; Height = 650; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        MessengerDialog.Apply(this,settings);
         var panel = new StackPanel { Margin = new Thickness(20) }; Content = new ScrollViewer { Content = panel };
         ComboBox Choice(string label, string[] labels, int selected)
         {

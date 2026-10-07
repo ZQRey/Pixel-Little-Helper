@@ -69,7 +69,7 @@ public static class ChatGroups
         if (await db.ChatGroupRestrictions.AnyAsync(r => r.GroupId == group && r.UserId == user && r.EndsAt > DateTime.UtcNow)) throw new UnauthorizedAccessException("Доступ к группе временно отключён.");
         return member;
     }
-    private static IQueryable<ChatGroupMessage> Visible(HelperDb db, ChatGroupMember member) => db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == member.GroupId && m.Id > member.JoinedAfterId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == member.UserId && m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt));
+    internal static IQueryable<ChatGroupMessage> Visible(HelperDb db, ChatGroupMember member) => db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == member.GroupId && m.Id > member.JoinedAfterId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == member.UserId && m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt));
     private static async Task<ChatGroup> Owner(HelperDb db, int group, int user)
     {
         await Member(db, group, user);

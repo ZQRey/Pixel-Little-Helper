@@ -7,16 +7,16 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace PixelHelper;
-public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null)
+public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false)
 {
-    public string Label => (IsGroup ? "👥 " : "") + FullName;
+    public string Label => (Pinned ? "📌 " : "") + (IsGroup ? "👥 " : "") + FullName + (Muted ? " · ◌" : "");
     public string DirectoryLabel => FullName + " (" + Username + ")";
     public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch) : HelperEmojis.PlainText(LastText).Replace('\n', ' ');
     public string TimeLabel => LastAt?.ToLocalTime().ToString("dd.MM HH:mm") ?? "";
     public bool HasUnread => Unread > 0;
     public string Initials => string.Concat(FullName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(n => char.ToUpperInvariant(n[0])));
     public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : IsOnline ? "● Online" : "○ Offline" : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
-    public static IEnumerable<ChatContact> Ordered(IEnumerable<ChatContact> contacts) => contacts.OrderByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastAt).ThenBy(u => u.FullName);
+    public static IEnumerable<ChatContact> Ordered(IEnumerable<ChatContact> contacts) => contacts.OrderByDescending(u => u.Pinned).ThenByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastAt).ThenBy(u => u.FullName);
 }
 public record ChatAttachment(string Id, string Name, long Size)
 {
@@ -24,13 +24,16 @@ public record ChatAttachment(string Id, string Name, long Size)
     public string Label => Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
 }
 public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null);
-internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null)
+internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false)
 {
     public string Label => (IsOnline ? "● " : "○ ") + FullName;
     public string Detail => SuspendedUntil != null ? "Отключён до " + SuspendedUntil.Value.ToLocalTime().ToString("dd.MM HH:mm") : Username;
 }
 internal record ChatGroupInfo(int Id, string Name, int OwnerId, bool IsClosed, List<ChatMember> Members);
 internal record ChatSession(string Token, int Id, string FullName, string Server);
+internal record ChatPreference(int Peer,bool Pinned,bool Favourite,bool Muted);
+internal record ReactionInfo(string Emoji,int Count,bool Mine);
+internal record ChatSearchResult(long Id,string Body,DateTime SentAt);
 internal sealed class MessengerClient : IAsyncDisposable
 {
     private readonly HttpClient http;
@@ -52,6 +55,9 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal string SignInStatus { get; private set; } = "Подключение под текущей учётной записью Windows…";
     internal event Action<ChatEntry>? MessageReceived;
     internal event Action? Changed;
+    internal event Action<int,string>? TypingReceived;
+    internal async Task TypingAsync(int peer)
+    {try{if(connection?.State==HubConnectionState.Connected)await connection.InvokeAsync("Typing",peer,lifetime.Token);}catch(Exception ex){Settings.Log(ex);}}
     internal MessengerClient(Settings settings)
     {
         var uri = new Uri(settings.ServerUrl ?? "https://helper.gp1.loc");
@@ -123,6 +129,7 @@ internal sealed class MessengerClient : IAsyncDisposable
                 connection.ServerTimeout=TimeSpan.FromSeconds(25); connection.HandshakeTimeout=TimeSpan.FromSeconds(10); connection.KeepAliveInterval=TimeSpan.FromSeconds(10);
                 connection.On<ChatEntry>("ChatMessage", message => MessageReceived?.Invoke(message));
                 connection.On("ChatChanged", () => Changed?.Invoke());
+                connection.On<JsonElement>("Typing",m=>TypingReceived?.Invoke(m.GetProperty("peer").GetInt32(),m.GetProperty("fullName").GetString()??""));
                 connection.Reconnected += _ => { Changed?.Invoke(); return Task.CompletedTask; };
                 connection.Closed += _ => { Changed?.Invoke(); return Task.CompletedTask; };
             }
@@ -145,7 +152,16 @@ internal sealed class MessengerClient : IAsyncDisposable
         }
         return (await response.Content.ReadFromJsonAsync<T>(Settings.Json, lifetime.Token))!;
     }
-    internal Task<List<ChatContact>> UsersAsync() => Request<List<ChatContact>>("api/messenger/users");
+    internal async Task<List<ChatContact>> UsersAsync()
+    {
+        var users=await Request<List<ChatContact>>("api/messenger/users");
+        var preferences=await Request<List<ChatPreference>>("api/messenger/preferences");
+        return users.Select(c=>{var p=preferences.FirstOrDefault(p=>p.Peer==c.Id);return c with { Pinned=p?.Pinned??false,Favourite=p?.Favourite??false,Muted=p?.Muted??false };}).ToList();
+    }
+    internal Task<ChatPreference> PreferenceAsync(int peer,bool pinned,bool favourite,bool muted)=>Request<ChatPreference>("api/messenger/preferences/"+peer,new {pinned,favourite,muted});
+    internal Task<Dictionary<string,List<ReactionInfo>>> ReactionsAsync(int peer,IEnumerable<long> ids)=>Request<Dictionary<string,List<ReactionInfo>>>("api/messenger/extras/"+peer+"?ids="+string.Join(",",ids.TakeLast(100)));
+    internal Task<object> ReactAsync(int peer,long id,string emoji)=>Request<object>("api/messenger/reaction/"+peer+"/"+id,new{emoji});
+    internal Task<List<ChatSearchResult>> SearchAsync(int peer,string phrase)=>Request<List<ChatSearchResult>>("api/messenger/search/"+peer+"?q="+Uri.EscapeDataString(phrase));
     internal Task<List<ChatEntry>> HistoryAsync(int peer, long? before = null) => Request<List<ChatEntry>>("api/messenger/history/" + peer + (before == null ? "" : "?before=" + before));
     internal Task<ChatEntry> SendAsync(int peer, string text, string clientId) => Request<ChatEntry>("api/messenger/send", new { recipientId = peer, body = text, clientId });
     internal async Task AcknowledgeAsync(long id) { using var response = await http.PostAsJsonAsync("api/messenger/ack/" + id, new { }, lifetime.Token); response.EnsureSuccessStatusCode(); Changed?.Invoke(); }

@@ -120,7 +120,6 @@ public sealed class PetWindow : Window
         {
             if (!diagnostics && !Settings.FirstRunCompleted) ShowFirstPrompt();
             animation.Start(); inactivity.Start(); refresh.Start();
-            if (!diagnostics) hub?.Start();
             if (!diagnostics) React(PetState.Greeting, 3);
             await Task.CompletedTask;
         };
@@ -173,6 +172,7 @@ public sealed class PetWindow : Window
         NativeMethods.ToolWindow(handle, true);
         NativeMethods.Bottom(handle);
         UpdateRegion();
+        if (!diagnostics) hub?.Start();
     }
     private nint Hook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {

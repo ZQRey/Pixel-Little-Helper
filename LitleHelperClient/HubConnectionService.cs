@@ -45,7 +45,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         connection.Reconnected += async _ => { try { await Register(); } catch (Exception ex) { Settings.Log(ex); Offline(); } };
     }
     private void Offline() { registered = false; SuperAdminAvailable?.Invoke(false); OnlineChanged?.Invoke(false); }
-    public void Start() => loop ??= ConnectLoop();
+    public void Start() => loop ??= Task.Run(ConnectLoop);
     private async Task ConnectLoop()
     {
         if (string.IsNullOrWhiteSpace(settings.ClientToken)) { Offline(); return; }
@@ -87,7 +87,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         var buttons = await connection.InvokeAsync<List<ActionButton>>("RegisterComputer", machine, lifetime.Token);
         registered = true; OnlineChanged?.Invoke(true); ButtonsUpdated?.Invoke(buttons);
         // Inventory does not block button availability or the WPF dispatcher.
-        await SendInventory();
+        _ = SendInventory();
     }
     public async Task RefreshButtons()
     {
@@ -104,7 +104,8 @@ public sealed class HubConnectionService : IAsyncDisposable
             await connection.InvokeAsync("UpdateHardwareAndSoftware", snapshot.Hardware, snapshot.Software, lifetime.Token);
             return true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Settings.Log(ex); return false; }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return false; }
+        catch (Exception ex) { Settings.Log(ex); return false; }
         finally { inventoryLock.Release(); }
     }
     private async Task RunTask(CommandEnvelope task)

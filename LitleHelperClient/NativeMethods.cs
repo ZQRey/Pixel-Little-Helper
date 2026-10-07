@@ -22,6 +22,7 @@ internal static class NativeMethods
     internal static extern bool SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] internal static extern bool GetCursorPos(out POINT point);
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(nint hwnd, out RECT rect);
+    [DllImport("user32.dll")] internal static extern bool ShowWindow(nint hwnd, int command);
     [DllImport("user32.dll")] internal static extern nint WindowFromPoint(POINT point);
     [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] private static extern nint GetShellWindow();

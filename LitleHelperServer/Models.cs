@@ -36,6 +36,7 @@ public class ActionButton
 }
 public class PanelUser
 {
+    [JsonIgnore] public string AdObjectId { get; set; } = "";
     [System.ComponentModel.DataAnnotations.Schema.NotMapped] public string AuthSource => PasswordHash == "!AD" ? "AD" : "Local";
     public int Id { get; set; }
     public string Username { get; set; } = "";
@@ -89,6 +90,7 @@ public class TicketRecord
 }
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<TelegramBotState> TelegramBotStates => Set<TelegramBotState>();
     public DbSet<TelegramReplySession> TelegramReplySessions => Set<TelegramReplySession>();
     public DbSet<TelegramHandledUpdate> TelegramHandledUpdates => Set<TelegramHandledUpdate>();
@@ -102,10 +104,13 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<Branch> Branches => Set<Branch>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        b.Entity<ChatMessage>().HasIndex(m => new { m.SenderId, m.ClientId }).IsUnique();
+        b.Entity<ChatMessage>().HasIndex(m => new { m.RecipientId, m.Id });
         b.Entity<TelegramDelivery>().HasKey(x => x.TicketId);
         b.Entity<TelegramDelivery>().HasOne(x => x.Ticket).WithOne().HasForeignKey<TelegramDelivery>(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
         b.Entity<Computer>().HasIndex(x => x.MachineName).IsUnique();
         b.Entity<PanelUser>().HasIndex(x => x.Username).IsUnique();
+        b.Entity<PanelUser>().HasIndex(x => x.AdObjectId).IsUnique().HasFilter("\"AdObjectId\" <> ''");
         b.Entity<AuditLog>().HasIndex(x => x.TaskId).IsUnique();
         b.Entity<TicketRecord>().HasIndex(x => x.Username);
     }

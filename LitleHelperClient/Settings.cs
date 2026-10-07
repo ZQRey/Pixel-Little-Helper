@@ -15,6 +15,9 @@ public sealed class Settings
     public bool AllowRemoteCommands { get; set; }
     public int? TicketBranchId { get; set; }
     public string TicketRoom { get; set; } = "";
+    public bool ChatSound { get; set; } = true;
+    public bool ChatPreview { get; set; } = true;
+    public bool ChatDoNotDisturb { get; set; }
     internal bool EnsureClientKey()
     {
         if (!string.IsNullOrWhiteSpace(ClientToken)) return false;

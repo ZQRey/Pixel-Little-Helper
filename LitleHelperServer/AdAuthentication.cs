@@ -4,7 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace LitleHelperServer;
 
-public record AdIdentity(string Username, string FullName, string AccountName);
+public record AdIdentity(string Username, string FullName, string AccountName, string ObjectId = "");
 public interface IAdAuthentication
 {
     Task<AdIdentity> AuthenticateAsync(LoginRequest request, CancellationToken token);
@@ -71,7 +71,7 @@ public class AdAuthentication(IntegrationSettings settings, ILogger<AdAuthentica
             await connection.BindAsync(account + "@" + options.Domain, request.Password, timeout.Token);
             var constraints = connection.SearchConstraints; constraints.ReferralFollowing = false; connection.Constraints = constraints;
             var results = await connection.SearchAsync(options.BaseDn, LdapConnection.ScopeSub,
-                $"(&(objectCategory=person)(objectClass=user)(sAMAccountName={account}))", ["sAMAccountName", "displayName", "userAccountControl"], false, timeout.Token);
+                $"(&(objectCategory=person)(objectClass=user)(sAMAccountName={account}))", ["sAMAccountName", "displayName", "userAccountControl", "objectGUID"], false, timeout.Token);
             LdapEntry? entry = null;
             while (await results.HasMoreAsync(timeout.Token))
             {
@@ -89,7 +89,9 @@ public class AdAuthentication(IntegrationSettings settings, ILogger<AdAuthentica
             int flags = int.Parse(entry.Get("userAccountControl").StringValue);
             if ((flags & 2) != 0) throw new UnauthorizedAccessException("Неверный логин или пароль AD.");
             string fullName = entry.GetStringValueOrDefault("displayName", actual) ?? actual;
-            return new(actual + "@" + options.Domain, fullName[..Math.Min(fullName.Length, 150)], actual);
+            var guidBytes = entry.GetBytesValueOrDefault("objectGUID", []);
+            string objectId = guidBytes is { Length: 16 } ? new Guid(guidBytes.Select(b => unchecked((byte)b)).ToArray()).ToString("N") : "";
+            return new(actual + "@" + options.Domain, fullName[..Math.Min(fullName.Length, 150)], actual, objectId);
         }
         catch (LdapException ex) when (ex.ResultCode == LdapException.InvalidCredentials)
         {

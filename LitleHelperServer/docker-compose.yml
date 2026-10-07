@@ -54,6 +54,7 @@ services:
       - "5000"
     environment:
       ASPNETCORE_URLS: http://+:5000
+      ReverseProxy__Enabled: "true"
       Database__Provider: Postgres
       ConnectionStrings__Database: Host=db;Database=litlehelper;Username=litlehelper
       Database__PasswordFile: /run/helper-secrets/postgres-password

@@ -9,6 +9,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Server build failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Tests build failed' }
 & $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') --telegram-management
 if ($LASTEXITCODE -ne 0) { throw 'Telegram management checks failed' }
+& $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') --messenger
+if ($LASTEXITCODE -ne 0) { throw 'Messenger checks failed' }
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $serverPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $mockPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $serverUrl = "http://127.0.0.1:$serverPort"
@@ -22,6 +24,7 @@ $start.Environment['ConnectionStrings__Database'] = "Data Source=$testRoot\helpe
 $start.Environment['Jwt__SigningKey'] = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
 $start.Environment['Glpi__SettingsFile'] = Join-Path $testRoot 'glpi-settings.json'
 $start.Environment['Integrations__SettingsFile'] = Join-Path $testRoot 'integrations.json'
+$start.Environment['Messenger__SettingsFile'] = Join-Path $testRoot 'messenger.json'
 $start.Environment['ClientUpdates__Directory'] = Join-Path $testRoot 'client-updates'
 $start.Environment['Telegram__ApiBaseUrl'] = $mockUrl
 $start.Environment['Glpi__BaseUrl'] = "$mockUrl/apirest.php"

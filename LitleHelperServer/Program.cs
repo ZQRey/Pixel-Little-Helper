@@ -11,6 +11,14 @@ using System.Text;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    // Kestrel is exposed only inside Docker; nginx overwrites the scheme header.
+    options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("172.16.0.0"), 12));
+    options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("10.0.0.0"), 8));
+    options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("192.168.0.0"), 16));
+});
 Directory.CreateDirectory("data");
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine("data", "dataprotection")));
 if (string.IsNullOrWhiteSpace(builder.Configuration["Jwt:SigningKey"]))
@@ -49,7 +57,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             OnMessageReceived = context =>
             {
-                if (context.Request.Path.StartsWithSegments("/helperHub")) context.Token = context.Request.Query["access_token"];
+                if (context.Request.Path.StartsWithSegments("/helperHub") || context.Request.Path.StartsWithSegments("/messengerHub")) context.Token = context.Request.Query["access_token"];
                 return Task.CompletedTask;
             },
             OnTokenValidated = async context =>
@@ -86,6 +94,9 @@ builder.Services.AddSignalR(options => { options.MaximumReceiveMessageSize = 1_5
 builder.Services.AddScoped<CommandService>();
 builder.Services.AddScoped<AnnouncementService>();
 builder.Services.AddSingleton<PanelSessions>();
+builder.Services.AddSingleton<ChatPresence>();
+builder.Services.AddSingleton<MessengerSettings>();
+builder.Services.AddHostedService<ChatRetentionWorker>();
 builder.Services.AddSingleton<GlpiSettingsStore>();
 builder.Services.AddSingleton<IntegrationSettings>();
 builder.Services.AddSingleton<ClientReleases>();
@@ -104,11 +115,13 @@ builder.Services.AddHostedService<TicketSyncWorker>();
 builder.Services.AddHostedService<TaskExpiryService>();
 builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.FromSeconds(20); http.MaxResponseContentBufferSize = 2_097_152; });
 var app = builder.Build();
+if (builder.Configuration.GetValue<bool>("ReverseProxy:Enabled")) app.UseForwardedHeaders();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
     await Access.EnsureSchema(db);
+    await Messenger.EnsureSchemaAsync(db);
     await AnnouncementService.EnsureSchemaAsync(db);
     await TicketManagement.EnsureSchemaAsync(db);
     await Branches.EnsureSchemaAsync(db);
@@ -144,6 +157,8 @@ app.Use(async (context, next) =>
 app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRouting(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
 app.Use(async (context, next) =>
 {
+    if (context.User.HasClaim("messenger", "1") && !context.Request.Path.StartsWithSegments("/api/messenger") && !context.Request.Path.StartsWithSegments("/messengerHub"))
+    { context.Response.StatusCode = 403; return; }
     if (context.User.Identity?.IsAuthenticated == true && !context.User.IsInRole("Agent") &&
         context.Request.Path != "/api/auth/me" && context.Request.Path != "/api/auth/change-password")
     {
@@ -160,5 +175,6 @@ app.MapPanelApi();
 app.MapIntegrationApi();
 app.MapAnnouncementApi();
 app.MapBranchApi();
+app.MapMessenger();
 await app.RunAsync();
 public partial class Program { }

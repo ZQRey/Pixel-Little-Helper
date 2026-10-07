@@ -41,6 +41,12 @@ public sealed class PetWindow : Window
     private TicketWindow? ticket;
     private SuperAdminWindow? superWindow;
     private bool superAvailable, announcementVisible;
+    private MessengerClient? messenger;
+    private MessengerWindow? messengerWindow;
+    private readonly Dictionary<int, int> chatUnread = new();
+    private bool refreshingChat;
+    private DateTime lastChatSound;
+    private int chatUserId;
     private double rapidDistance;
     private DateTime motionStarted;
     private NativeMethods.POINT previousDragPoint;
@@ -69,6 +75,13 @@ public sealed class PetWindow : Window
         actions = ApiClient.Defaults();
         if (!diagnostics)
         {
+            try
+            {
+                messenger = new MessengerClient(settings);
+                messenger.Changed += () => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
+                messenger.MessageReceived += _ => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
+            }
+            catch (Exception ex) { Settings.Log(ex); }
             try
             {
                 hub = new HubConnectionService(settings);
@@ -120,6 +133,7 @@ public sealed class PetWindow : Window
         {
             
             animation.Start(); inactivity.Start(); refresh.Start();
+            if (!diagnostics && messenger != null) _ = messenger.StartAsync();
             if (!diagnostics) React(PetState.Greeting, 3);
             if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
         };
@@ -153,6 +167,8 @@ public sealed class PetWindow : Window
         {
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
             lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); source?.RemoveHook(Hook);
+            messengerWindow?.Close();
+            if (messenger != null) await messenger.DisposeAsync();
             ClearRegions(); SavePosition();
             if (hub != null) await hub.DisposeAsync();
             lifetime.Dispose();
@@ -336,7 +352,7 @@ public sealed class PetWindow : Window
         Focusable = false, SnapsToDevicePixels = true,
         ContentTemplate = WrappingTemplate()
     };
-    private static readonly Style AssistantButtonStyle = (Style)System.Windows.Markup.XamlReader.Parse("""
+    internal static readonly Style AssistantButtonStyle = (Style)System.Windows.Markup.XamlReader.Parse("""
         <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
           <Setter Property="Foreground" Value="#183655"/>
           <Setter Property="Background" Value="#F0F8FF"/>
@@ -395,6 +411,7 @@ public sealed class PetWindow : Window
     {
         HideBubbles(); Expand(); menuOpen = true; Wake();
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
+        if (!diagnostics) visibleActions.Add(new("messenger", "Мессенджер", "messenger"));
         int rows = (visibleActions.Count + 1) / 2;
         for (int i = 0; i < visibleActions.Count; i++)
         {
@@ -454,10 +471,59 @@ public sealed class PetWindow : Window
         var scroll = new ScrollViewer { Content = new TextBlock { Text = notice.Text, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.MidnightBlue, FontSize = 14 }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Grid.SetRow(scroll, 1); panel.Children.Add(scroll);
         var close = MakeButton("Закрыть"); close.Margin = new Thickness(0, 8, 0, 0); close.Click += (_, _) => { HideBubbles(); ShowNextAnnouncement(); }; Grid.SetRow(close, 2); panel.Children.Add(close);
+        if (notice.ChatPeerId is int peer)
+        {
+            close.Content = "Открыть переписку";
+            close.Click += async (_, _) => await OpenMessengerAsync(peer);
+        }
         AddBubble(new Border { Background = Brushes.AliceBlue, BorderBrush = Brushes.SteelBlue, BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(14), Child = panel }, 70, 48, 360, 216);
         var tail = new System.Windows.Shapes.Polygon { Fill = Brushes.AliceBlue, Stroke = Brushes.SteelBlue, StrokeThickness = 2, Points = new PointCollection { new(0, 0), new(22, 0), new(11, 22) } };
         AddBubble(tail, SpriteLeft + 36, 262, 22, 22);
         announcementUntil = DateTime.UtcNow.AddSeconds(notice.DurationSeconds); KeepMenuVisible(); UpdateRegion();
+    }
+    private async Task OpenMessengerAsync(int? peer = null)
+    {
+        if (messenger == null) throw new InvalidOperationException("Мессенджер недоступен. Проверьте HTTPS сервера.");
+        if (messengerWindow == null)
+        {
+            messengerWindow = new MessengerWindow(messenger, settings);
+            messengerWindow.Closed += (_, _) => messengerWindow = null;
+            messengerWindow.Show();
+        }
+        if (messengerWindow.WindowState == WindowState.Minimized) messengerWindow.WindowState = WindowState.Normal;
+        messengerWindow.Activate();
+        if (peer != null && messenger.SignedIn) await messengerWindow.OpenPeerAsync(peer.Value);
+    }
+    private async Task CheckChatAsync()
+    {
+        if (refreshingChat || messenger?.SignedIn != true || lifetime.IsCancellationRequested) return;
+        refreshingChat = true;
+        try
+        {
+            if (chatUserId != messenger.UserId) { chatUserId = messenger.UserId; chatUnread.Clear(); }
+            await Task.Delay(1500, lifetime.Token); // Coalesce a burst of messages and read receipts.
+            var users = await messenger.UsersAsync();
+            foreach (var user in users)
+            {
+                int previous = chatUnread.GetValueOrDefault(user.Id);
+                if (settings.ChatDoNotDisturb || !ChatDesktop.Unlocked()) continue;
+                chatUnread[user.Id] = user.Unread;
+                if (user.Unread <= previous || messengerWindow?.ActivePeer == user.Id || settings.ChatDoNotDisturb) continue;
+                string text = "Непрочитанных сообщений: " + user.Unread;
+                if (settings.ChatPreview)
+                {
+                    var recent = await messenger.HistoryAsync(user.Id);
+                    var last = recent.LastOrDefault(m => m.RecipientId == messenger.UserId && m.ReadAt == null);
+                    if (last != null) text += "\n" + last.Body[..Math.Min(300, last.Body.Length)];
+                }
+                if (announcements.Count < 10) ReceiveAnnouncement(new(text, user.FullName, 15, user.Id));
+                if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
+                { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
+            }
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception ex) { Settings.Log(ex); }
+        finally { refreshingChat = false; }
     }
     private async Task RefreshActions()
     {
@@ -478,6 +544,7 @@ public sealed class PetWindow : Window
         {
             switch (action.Type)
             {
+                case "messenger": return OpenMessengerAsync();
                 case "exit": Application.Current.Shutdown(); break;
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");

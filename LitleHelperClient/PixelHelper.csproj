@@ -6,18 +6,20 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>PixelHelper</AssemblyName>
-    <Version>1.2.10</Version>
+    <Version>1.2.11</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <DebugType>none</DebugType>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
     <Compile Include="..\LitleHelperServer\ClientUpdateManifest.cs" Link="ClientUpdateManifest.cs" />
     <EmbeddedResource Include="UpdatePublicKey.pem" LogicalName="PixelHelper.UpdatePublicKey" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.31" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="artifacts\**\*.cs" />
     <InternalsVisibleTo Include="PixelHelper.Tests" />
     <Resource Include="Assets\*.png" Exclude="Assets\preview.png" />
     <None Update="config.example.json" CopyToOutputDirectory="PreserveNewest" />

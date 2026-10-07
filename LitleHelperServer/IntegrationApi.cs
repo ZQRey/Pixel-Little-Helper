@@ -27,20 +27,9 @@ public static class IntegrationApi
             AdIdentity identity;
             try { identity = await ad.AuthenticateAsync(request, token); }
             catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
-            var user = await db.Users.SingleOrDefaultAsync(x => x.Username == identity.Username, token);
-            if (user != null && (user.AuthSource != "AD" || !user.IsActive)) return Results.Unauthorized();
-            if (user == null)
-            {
-                user = new PanelUser { Username = identity.Username, FullName = identity.FullName, PasswordHash = "!AD", Role = Roles.User };
-                db.Users.Add(user);
-                try { await db.SaveChangesAsync(token); }
-                catch (DbUpdateException)
-                {
-                    db.Entry(user).State = EntityState.Detached;
-                    user = await db.Users.SingleOrDefaultAsync(x => x.Username == identity.Username, token);
-                    if (user == null || user.AuthSource != "AD" || !user.IsActive) return Results.Unauthorized();
-                }
-            }
+            PanelUser user;
+            try { user = await Messenger.ResolveAdUserAsync(identity, db, token); }
+            catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
             return Results.Ok(new { token = Security.Token(user, config), user });
         }).RequireRateLimiting("login");
         app.MapGet("/api/settings/telegram", async (IntegrationSettings settings, HelperDb db, TelegramBotHealth health) => Results.Ok(new

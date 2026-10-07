@@ -21,6 +21,7 @@ internal sealed class UpdateService : ServiceBase
     protected override void OnStart(string[] args)
     {
         stop = new(); _ = Task.Run(() => Loop(stop.Token));
+        _ = Task.Run(() => SessionLauncher.RunAsync(stop.Token));
     }
     protected override void OnStop() => stop?.Cancel();
     private static async Task Loop(CancellationToken token)

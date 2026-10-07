@@ -18,6 +18,8 @@ function Check([bool]$Passed, [string]$Description) {
     Write-Host "PASS $Description"
 }
 $secure = @(Rows 'SELECT `Value` FROM `Property` WHERE `Property` = ''SecureCustomProperties''')
+$startup = @(@(Rows 'SELECT `Root`, `Key`, `Value`, `Component_` FROM `Registry` WHERE `Name` = ''PixelHelper''') | Where-Object { $_[1] -eq 'Software\Microsoft\Windows\CurrentVersion\Run' })
+Check ($startup.Count -eq 1 -and $startup[0][0] -eq '2' -and $startup[0][2] -eq '"[INSTALLFOLDER]PixelHelper.exe"' -and $startup[0][3] -eq 'MachineStartup') 'machine startup points to installed GUI with quoted path'
 if (@(Rows 'SELECT `Name` FROM `ServiceInstall`').Count -gt 0) {
     $service = @(Rows 'SELECT `Name`, `ServiceType`, `StartType`, `Arguments` FROM `ServiceInstall` WHERE `Name` = ''PixelHelperUpdater''')
     Check ($service.Count -eq 1 -and $service[0][1] -eq '16' -and $service[0][2] -eq '2' -and $service[0][3] -eq '--update-service') 'updater installed as automatic own-process Windows service'

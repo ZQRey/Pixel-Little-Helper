@@ -156,7 +156,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         var identity = await directory.FindAsync(id, token);
         var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Username == identity.Username && u.PasswordHash == "!AD", token);
         if (user == null || !user.IsActive || !Access.Can(user, "tickets.manage") || !Access.Can(user, "tickets.all"))
-            throw new UnauthorizedAccessException("Войдите в Control Center через AD. Администратор должен выдать права просмотра всех заявок и управления заявками.");
+            throw new UnauthorizedAccessException("Сначала войдите в Control Center через Active Directory. Затем супер администратор должен открыть «Пользователи» → вашу учётную запись → «Редактировать», назначить роль «Администратор» или «Оператор» (либо права «Просмотр всех заявок» и «Создание заявок и изменение статуса») и филиал. Отдельной кнопки подтверждения нет. После сохранения повторите /start.");
         return new(user, await glpi.FindTechnicianAsync(identity.AccountName, token));
     }
     private static object Button(string text, string data) => new { text, callback_data = data };

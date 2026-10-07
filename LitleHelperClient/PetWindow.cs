@@ -34,7 +34,7 @@ public sealed class PetWindow : Window
     private DateTime lastInteraction = DateTime.UtcNow;
     private DateTime actionUntil;
     private List<AssistantAction> actions;
-    private bool menuOpen, firstPrompt, mouseDown, dragging, wokeOnDown, previousLeft;
+    private bool menuOpen, mouseDown, dragging, wokeOnDown, previousLeft;
     private NativeMethods.POINT dragStart;
     private double startLeft, startTop;
     private bool refreshing;
@@ -100,7 +100,7 @@ public sealed class PetWindow : Window
         robot.MouseRightButtonUp += (_, e) =>
         {
             e.Handled = true;
-            if (firstPrompt || mouseDown) return;
+            if (mouseDown) return;
             Wake(); HideBubbles();
             var menu = new ContextMenu { PlacementTarget = robot, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
             if (hub?.IsOnline == true && superAvailable)
@@ -118,10 +118,10 @@ public sealed class PetWindow : Window
         SourceInitialized += InitializeNative;
         Loaded += async (_, _) =>
         {
-            if (!diagnostics && !Settings.FirstRunCompleted) ShowFirstPrompt();
+            
             animation.Start(); inactivity.Start(); refresh.Start();
             if (!diagnostics) React(PetState.Greeting, 3);
-            await Task.CompletedTask;
+            if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
         };
         LocationChanged += (_, _) => { if (handle != 0) NativeMethods.Bottom(handle); };
         animation.Tick += (_, _) =>
@@ -137,7 +137,7 @@ public sealed class PetWindow : Window
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
             else if (!exposed && animation.IsEnabled) animation.Stop();
-            if (!menuOpen && !firstPrompt && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn) &&
+            if (!menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
                 React(PetState.Yawn, 2);
         };
@@ -304,7 +304,7 @@ public sealed class PetWindow : Window
         if (!mouseDown) return;
         bool wasDragged = dragging;
         EndDrag();
-        if (!wasDragged && !wokeOnDown && !firstPrompt)
+        if (!wasDragged && !wokeOnDown)
         {
             if (menuOpen) HideBubbles(); else ShowMenu();
         }
@@ -391,34 +391,6 @@ public sealed class PetWindow : Window
         Left = Math.Clamp(Left, bounds.Left, Math.Max(bounds.Left, bounds.Right - Width));
         Top = Math.Clamp(Top, bounds.Top, Math.Max(bounds.Top, bounds.Bottom - Height));
     }
-    private void ShowFirstPrompt()
-    {
-        Expand();
-        firstPrompt = true;
-        var panel = new StackPanel { Margin = new Thickness(8) };
-        panel.Children.Add(new TextBlock { Text = "Оставить меня на рабочем столе для быстрого доступа к документам?", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.MidnightBlue });
-        var choices = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
-        foreach (bool yes in new[] { true, false })
-        {
-            var button = MakeButton(yes ? "Да" : "Нет"); button.Margin = new Thickness(8, 6, 8, 0);
-            button.Click += (_, _) =>
-            {
-                try { Settings.CompleteFirstRun(yes); }
-                catch (Exception ex)
-                {
-                    Settings.Log(ex);
-                    ((TextBlock)panel.Children[0]).Text = "Не удалось сохранить настройку: " + ex.Message;
-                    return;
-                }
-                firstPrompt = false; HideBubbles();
-                if (!yes) Close();
-            };
-            choices.Children.Add(button);
-        }
-        panel.Children.Add(choices);
-        AddBubble(new Border { Background = Brushes.AliceBlue, BorderBrush = Brushes.SteelBlue, BorderThickness = new Thickness(2), Child = panel }, 110, 156, 280, 120);
-        KeepMenuVisible(); UpdateRegion();
-    }
     private void ShowMenu()
     {
         HideBubbles(); Expand(); menuOpen = true; Wake();
@@ -443,7 +415,6 @@ public sealed class PetWindow : Window
     }
     private void HideBubbles()
     {
-        if (firstPrompt) return;
         announcementVisible = false;
         outsideClick.Stop();
         foreach (var bubble in bubbles) canvas.Children.Remove(bubble);
@@ -451,7 +422,6 @@ public sealed class PetWindow : Window
     }
     private void ShowNotice(string text)
     {
-        if (firstPrompt) return;
         HideBubbles(); Expand(); menuOpen = true;
         var button = MakeButton(text + "\n[Закрыть]");
         button.Click += (_, _) => HideBubbles();
@@ -463,17 +433,17 @@ public sealed class PetWindow : Window
         if (string.IsNullOrWhiteSpace(notice.Text) || notice.Text.Length > 1000 || notice.DurationSeconds is < 10 or > 300) throw new ArgumentException("Неверное сообщение");
         if (announcements.Count >= 10) throw new InvalidOperationException("Очередь сообщений помощника заполнена");
         announcements.Enqueue(notice);
-        if (!announcementVisible && !firstPrompt && !mouseDown) { ShowNextAnnouncement(); return "Сообщение показано в облачке помощника"; }
+        if (!announcementVisible && !mouseDown) { ShowNextAnnouncement(); return "Сообщение показано в облачке помощника"; }
         return "Сообщение принято в очередь показа";
     }
     internal void AdvanceAnnouncements()
     {
         if (announcementVisible && DateTime.UtcNow >= announcementUntil) HideBubbles();
-        if (!announcementVisible && announcements.Count > 0 && !firstPrompt && !mouseDown) ShowNextAnnouncement();
+        if (!announcementVisible && announcements.Count > 0 && !mouseDown) ShowNextAnnouncement();
     }
     private void ShowNextAnnouncement()
     {
-        if (announcements.Count == 0 || firstPrompt) return;
+        if (announcements.Count == 0) return;
         var notice = announcements.Dequeue(); HideBubbles(); Expand(); Wake(); menuOpen = true; announcementVisible = true;
         React(PetState.Notice, 3);
         var panel = new Grid { Margin = new Thickness(12) };

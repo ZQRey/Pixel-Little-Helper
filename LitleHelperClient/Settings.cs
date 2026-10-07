@@ -67,6 +67,19 @@ public sealed class Settings
     {
         get { using var key = Registry.CurrentUser.OpenSubKey(RegistryPath); return key?.GetValue("FirstRunCompleted") is int v && v == 1; }
     }
+    internal static void PrepareStartup()
+    {
+        try
+        {
+            using var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+            using var run = machine.OpenSubKey(RunPath);
+            if (string.Equals(run?.GetValue("PixelHelper") as string, '"' + Environment.ProcessPath + '"', StringComparison.OrdinalIgnoreCase))
+                SetStartup(false); // Remove the legacy per-user entry only after MSI provided machine startup.
+            using var key = Registry.CurrentUser.CreateSubKey(RegistryPath);
+            key.SetValue("FirstRunCompleted", 1, RegistryValueKind.DWord);
+        }
+        catch (Exception ex) { Log(ex); }
+    }
     public static void CompleteFirstRun(bool startup)
     {
         using var key = Registry.CurrentUser.CreateSubKey(RegistryPath);

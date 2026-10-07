@@ -11,13 +11,13 @@ WHITE = "#e4f7ff"
 LIGHT = "#ffffff"
 SCREEN = "#193e5c"
 CYAN = "#7cf4ed"
-STATES = [("idle", 4), ("sleep", 2), ("drag", 2), ("action", 2)] + [(s, 2) for s in ("greeting", "success", "error", "notice", "yawn", "wake", "busy", "dizzy", "lookleft", "lookright", "lookup", "lookdown")]
+STATES = [("idle", 4), ("sleep", 2), ("drag", 2), ("action", 2)] + [(s, 2) for s in ("greeting", "success", "error", "notice", "yawn", "wake", "busy", "dizzy", "lookleft", "lookright", "lookup", "lookdown", "joy", "sad", "surprise", "laugh", "think", "celebrate")]
 
 
 def sprite(state: str, frame: int) -> Image.Image:
     image = Image.new("RGBA", (48, 48))
     d = ImageDraw.Draw(image)
-    bob = (0, 1, 0, -1)[frame] if state == "idle" else 0
+    bob = (0, 1, 0, -1)[frame] if state == "idle" else -frame * 2 if state in ("joy", "laugh", "celebrate") else 0
 
     def box(x0, y0, x1, y1, fill):
         d.rectangle((x0, y0 + bob, x1, y1 + bob), fill=fill)
@@ -131,6 +131,43 @@ def sprite(state: str, frame: int) -> Image.Image:
             for x, y in ((4 + frame * 3, 4), (40 - frame * 3, 2)):
                 line([(x - 2, y), (x + 2, y)], WHITE)
                 line([(x, y - 2), (x, y + 2)], CYAN)
+        elif state in ("joy", "laugh", "celebrate"):
+            box(16, 12, 30, 22, SCREEN)
+            for x in (17, 26):
+                line([(x, 16), (x + 1, 14), (x + 2, 14), (x + 3, 16)], CYAN)
+            if state == "laugh":
+                box(21, 18, 25, 22, CYAN)
+                box(22, 21, 24, 22, "#ff9cb4")
+                box(15, 18, 16, 19, WHITE)
+                box(30, 18, 31, 19, WHITE)
+            else:
+                line([(20, 19), (21, 21), (25, 21), (27, 19)], CYAN)
+            if state == "celebrate":
+                for x, y, color in ((3, 7, "#ffb85c"), (43, 8, "#ff9cb4"), (7, 19, CYAN), (41, 25, WHITE)):
+                    line([(x - 2, y + frame), (x + 2, y + frame)], color)
+                    line([(x, y - 2 + frame), (x, y + 2 + frame)], color)
+        elif state == "sad":
+            box(16, 12, 30, 22, SCREEN)
+            for x in (17, 26):
+                line([(x, 15 + frame), (x + 3, 17 + frame)], CYAN)
+            line([(21, 22), (22, 20), (24, 20), (25, 22)], CYAN)
+            box(29, 19 + frame, 29, 20 + frame, WHITE)
+        elif state == "surprise":
+            box(16, 12, 30, 22, SCREEN)
+            for x in (17, 26):
+                box(x, 13, x + 2, 17, CYAN)
+            d.rectangle((22, 19 + bob, 24, 22 + bob), outline=CYAN)
+            line([(24, 5), (24, 2)], EDGE, 2)
+            box(23, 0, 25, 1, WHITE if frame else CYAN)
+        elif state == "think":
+            box(16, 12, 30, 22, SCREEN)
+            line([(17, 15), (20, 14)], CYAN)
+            box(27, 14, 28, 17, CYAN)
+            line([(21, 21), (25, 21)], CYAN)
+            line([(36, 29), (32, 26), (31, 23)], INK, 4)
+            line([(36, 29), (32, 26), (31, 23)], WHITE, 2)
+            line([(40, 5), (41, 3), (44, 3), (45, 5), (43, 7)], CYAN)
+            box(43, 9 + frame, 43, 9 + frame, WHITE)
     return image
 
 

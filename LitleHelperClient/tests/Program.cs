@@ -25,6 +25,17 @@ Directory.CreateDirectory(temp);
 try
 {
     var fresh = new Settings(); var other = new Settings();
+    var emojiMessage = new ChatEntry(1, 9, 2, "Привет :helper_wave: :helper_joy: :helper_party: :helper_thanks: 😄 :helper_unknown:", "emoji-guid", DateTime.UtcNow, null);
+    Check(HelperEmojis.Parse(emojiMessage.Body).Count() == 4, "only known helper emoji codes parsed alongside Unicode and unknown codes");
+    Check(HelperEmojis.PlainText(emojiMessage.Body).Contains("[Привет]") && HelperEmojis.PlainText(emojiMessage.Body).Contains(":helper_unknown:"), "notification emoji labels preserve unknown codes");
+    var emojiFile = Path.Combine(temp, "emoji-seen.json"); var emojiQueue = new EmojiReactions(emojiFile);
+    Check(emojiQueue.Incoming("server:user2", emojiMessage, true) && emojiQueue.Count == 3, "incoming message schedules at most three emoji reactions");
+    Check(!emojiQueue.Incoming("server:user2", emojiMessage, true), "repeated message delivery does not repeat reaction");
+    Check(!new EmojiReactions(emojiFile).Incoming("server:user2", emojiMessage, true), "reaction deduplication survives client restart");
+    Check(new EmojiReactions(emojiFile).Incoming("server:user3", emojiMessage, true), "emoji state remains isolated by authenticated user");
+    emojiQueue.Clear(); for (int i = 0; i < 20; i++) emojiQueue.Insert(HelperEmojis.All[0]); Check(emojiQueue.Count == 9, "emoji reaction queue bounded during bursts");
+    emojiQueue.Clear(); emojiQueue.Insert(HelperEmojis.All[0], DateTime.UtcNow.AddMinutes(-1)); Check(emojiQueue.Take(DateTime.UtcNow) == null, "stale deferred emoji reactions expire");
+    var quietQueue = new EmojiReactions(); Check(!quietQueue.Incoming("quiet", emojiMessage, false) && quietQueue.Count == 0 && !quietQueue.Incoming("quiet", emojiMessage, true), "suppressed reactions are not replayed when notifications resume");
     var chatOrder = ChatContact.Ordered(new[] {
         new ChatContact(1, "Личный чат", "one", true, null, 1, 8, true, DateTime.UtcNow.AddMinutes(-2)),
         new ChatContact(2, "Прочитанный чат", "two", true, null, 0, 50, true, DateTime.UtcNow),
@@ -184,6 +195,17 @@ try
     var trayHandle = new System.Windows.Interop.WindowInteropHelper(pet).Handle;
     using (var nativeTray = new TrayIcon(trayHandle, new Sprites().Get(PetState.Idle, 0), () => { }, () => { }, _ => { }))
     { Check(nativeTray.Registered, "native tray icon registered with Explorer"); nativeTray.SetUnread(true); nativeTray.SetUnread(false); }
+    var petFlags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var petSettings = (Settings)typeof(PetWindow).GetField("settings", petFlags)!.GetValue(pet)!; petSettings.EmojiReactions = true; petSettings.ChatDoNotDisturb = false;
+    var petStateField = typeof(PetWindow).GetField("state", petFlags)!; var advanceEmoji = typeof(PetWindow).GetMethod("AdvanceEmoji", petFlags)!;
+    pet.InsertEmojiReaction(HelperEmojis.All[1]); Check((PetState)petStateField.GetValue(pet)! == PetState.Joy, "inserting emoji starts matching helper animation");
+    pet.React(PetState.Error, 4); pet.InsertEmojiReaction(HelperEmojis.All[5]); Check((PetState)petStateField.GetValue(pet)! == PetState.Error, "important error animation takes priority over emoji");
+    typeof(PetWindow).GetField("actionUntil", petFlags)!.SetValue(pet, DateTime.UtcNow.AddSeconds(-1)); advanceEmoji.Invoke(pet, null); Check((PetState)petStateField.GetValue(pet)! == PetState.Laugh, "deferred emoji plays when important animation ends");
+    typeof(PetWindow).GetField("emojiUntil", petFlags)!.SetValue(pet, DateTime.UtcNow.AddSeconds(-1)); advanceEmoji.Invoke(pet, null); Check((PetState)petStateField.GetValue(pet)! == PetState.Idle, "helper returns to idle after emoji reaction");
+    typeof(PetWindow).GetMethod("ChangeState", petFlags)!.Invoke(pet, new object[] { PetState.Sleep }); pet.InsertEmojiReaction(HelperEmojis.All[0]);
+    typeof(PetWindow).GetField("emojiUntil", petFlags)!.SetValue(pet, DateTime.UtcNow.AddSeconds(-1)); advanceEmoji.Invoke(pet, null); Check((PetState)petStateField.GetValue(pet)! == PetState.Sleep, "sleeping helper returns to sleep after emoji");
+    petSettings.ChatDoNotDisturb = true; pet.InsertEmojiReaction(HelperEmojis.All[1]); Check((PetState)petStateField.GetValue(pet)! == PetState.Sleep, "do not disturb suppresses emoji animation"); petSettings.ChatDoNotDisturb = false;
+    typeof(PetWindow).GetMethod("ChangeState", petFlags)!.Invoke(pet, new object[] { PetState.Idle });
     Check(pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "robot receives WPF input after canvas translation");
     typeof(PetWindow).GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
@@ -234,6 +256,11 @@ try
     var chatPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "messenger-login-preview.png"));
     var chatPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); chatPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(chatBitmap)); using (var chatImage = File.Create(chatPreview)) chatPng.Save(chatImage);
     typeof(MessengerWindow).GetMethod("MainForm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
+    var composerField = (System.Windows.Controls.TextBox)typeof(MessengerWindow).GetField("input", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    composerField.Text = "До после"; composerField.Select(3, 0); int insertedEmojis = 0; chatWindow.EmojiInserted += _ => insertedEmojis++;
+    chatWindow.InsertEmoji(HelperEmojis.All[0]); Check(composerField.Text == "До :helper_wave:после" && insertedEmojis == 1, "emoji inserted at caret with one immediate reaction event");
+    var renderedEmoji = HelperEmojis.Render("Текст :helper_wave: :helper_party: 😄 :helper_unknown:");
+    Check(renderedEmoji.Inlines.OfType<System.Windows.Documents.InlineUIContainer>().Count() == 2, "known emoji displayed inline as robot images");
     typeof(MessengerWindow).GetField("contacts", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatContact> { new(1, "Анна Иванова", "anna@gp1.loc", true, "Поликлиника", 2, 1, true, DateTime.UtcNow.AddMinutes(-2), "Подскажите расписание"), new(2, "Борис Петров", "boris@gp1.loc", true, "Больница", 0, null, false), new(-3, "Отдел информационных технологий", "", true, null, 4, 2, false, DateTime.UtcNow, "Коллеги, обновление установлено", true, 0) });
     typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
     typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, 0, "Добрый день! Подскажите, пожалуйста, как найти расписание приёма?", "first", DateTime.UtcNow, null), new(2, 0, 1, "Здравствуйте! Отправлю вам ссылку на расписание.", "second", DateTime.UtcNow, DateTime.UtcNow) });
@@ -242,7 +269,7 @@ try
     Check(((System.Windows.Controls.Grid)chatWindow.Content).ColumnDefinitions.Count == 2, "messenger provides directory and conversation panes");
     var mainBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); mainBitmap.Render(chatWindow); var mainPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); mainPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(mainBitmap)); using (var mainImage = File.Create(chatPreview.Replace("login", "dialogue"))) mainPng.Save(mainImage);
     typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, -3);
-    typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, обновление установлено. Можно проверить мессенджер.", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Уведомления и групповые чаты работают.", "group2", DateTime.UtcNow, null, "Артём Шпынов") });
+    typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, привет! :helper_wave: :helper_joy:", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Обновление работает :helper_thanks: :helper_party:", "group2", DateTime.UtcNow, null, "Артём Шпынов") });
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
     var groupBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); groupBitmap.Render(chatWindow); var groupPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); groupPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(groupBitmap)); using (var groupImage = File.Create(chatPreview.Replace("login", "groups"))) groupPng.Save(groupImage);
     chatWindow.Close(); chatClient.DisposeAsync().AsTask().GetAwaiter().GetResult();

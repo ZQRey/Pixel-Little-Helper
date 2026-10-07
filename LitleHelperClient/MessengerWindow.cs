@@ -22,6 +22,7 @@ internal sealed class MessengerWindow : Window
     private bool updating, closing, showingLogin;
     private string? pendingId, pendingText;
     private int pendingPeer;
+    internal event Action<HelperEmoji>? EmojiInserted;
     internal int ActivePeer => IsActive ? peer : 0;
     internal MessengerWindow(MessengerClient client, Settings settings)
     {
@@ -75,6 +76,8 @@ internal sealed class MessengerWindow : Window
         Preference("Не беспокоить", settings.ChatDoNotDisturb, value => settings.ChatDoNotDisturb = value);
         Preference("Уведомления Windows", settings.ChatWindowsNotifications, value => settings.ChatWindowsNotifications = value);
         Preference("Облачко", settings.ChatComicNotifications, value => settings.ChatComicNotifications = value);
+        Preference("Реакции эмодзи", settings.EmojiReactions, value => settings.EmojiReactions = value);
+        Preference("Входящие реакции", settings.IncomingEmojiReactions, value => settings.IncomingEmojiReactions = value);
         toolbar.Children.Add(Button("Обновить соединение", async (_, _) => await client.SignInWindowsAsync(true)));
         toolbar.Children.Add(Button("Создать группу", async (_, _) => { var window = new ChatGroupWindow(client) { Owner = this }; if (window.ShowDialog() == true) { peer = window.CreatedPeer; messages.Clear(); pendingId = null; await RefreshAsync(); } }));
         toolbar.Children.Add(Button("Участники группы", async (_, _) => { if (peer >= 0) { error!.Text = "Выберите групповой чат."; return; } new ChatGroupWindow(client, peer) { Owner = this }.ShowDialog(); await RefreshAsync(); }));
@@ -115,9 +118,14 @@ internal sealed class MessengerWindow : Window
         history = new StackPanel(); scroll = new ScrollViewer { Content = history, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; right.Children.Add(scroll);
         Grid.SetColumn(right, 1); Grid.SetRow(right, 1); root.Children.Add(right);
         var composer = new DockPanel(); send = Button("Отправить", async (_, _) => await SendAsync()); DockPanel.SetDock(send, Dock.Right); composer.Children.Add(send);
+        var emojiButton = Button("Эмодзи", (_, _) => ShowEmojiPicker()); DockPanel.SetDock(emojiButton, Dock.Left); composer.Children.Add(emojiButton);
         input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxLength = 4000, Height = 75, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8) };
         input.KeyDown += async (_, e) => { if (e.Key == Key.Enter && Keyboard.Modifiers != ModifierKeys.Shift) { e.Handled = true; await SendAsync(); } }; composer.Children.Add(input);
-        Grid.SetColumn(composer, 1); Grid.SetRow(composer, 2); root.Children.Add(composer);
+        var composerPanel = new StackPanel(); composerPanel.Children.Add(composer);
+        var preview = new ContentControl { MaxHeight = 64, Margin = new Thickness(0, 4, 0, 0), ClipToBounds = true, Visibility = Visibility.Collapsed };
+        input.ToolTip = "Фирменные эмодзи показываются в предпросмотре и в отправленном сообщении.";
+        input.TextChanged += (_, _) => { preview.Visibility = HelperEmojis.Parse(input.Text).Any() ? Visibility.Visible : Visibility.Collapsed; if (preview.Visibility == Visibility.Visible) preview.Content = HelperEmojis.Render(input.Text, 24); };
+        composerPanel.Children.Add(preview); Grid.SetColumn(composerPanel, 1); Grid.SetRow(composerPanel, 2); root.Children.Add(composerPanel);
         error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4) }; Grid.SetRow(error, 3); Grid.SetColumnSpan(error, 2); root.Children.Add(error);
     }
     private void Filter()
@@ -162,11 +170,31 @@ internal sealed class MessengerWindow : Window
             bool mine = message.SenderId == client.UserId;
             var panel = new StackPanel();
             if (peer < 0) panel.Children.Add(new TextBlock { Text = message.SenderName ?? "Участник", FontWeight = FontWeights.Bold, Foreground = Brushes.SteelBlue, Margin = new Thickness(0, 0, 0, 5) });
-            panel.Children.Add(new TextBlock { Text = message.Body, TextWrapping = TextWrapping.Wrap, FontSize = 14 });
+            panel.Children.Add(HelperEmojis.Render(message.Body));
             panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? peer < 0 || message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = 11, Foreground = Brushes.DimGray, Margin = new Thickness(0, 6, 0, 0) });
             history.Children.Add(new Border { Child = panel, Background = mine ? Brushes.LightCyan : Brushes.White, CornerRadius = new CornerRadius(12), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = 420, HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
         }
         if (bottom) scroll!.ScrollToEnd();
+    }
+    private void ShowEmojiPicker()
+    {
+        if (input?.IsEnabled != true) return;
+        var menu = new ContextMenu { PlacementTarget = input, Placement = System.Windows.Controls.Primitives.PlacementMode.Top };
+        foreach (var emoji in HelperEmojis.All)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            var image = new Image { Source = HelperEmojis.Image(emoji), Width = 32, Height = 32, Margin = new Thickness(0, 0, 10, 0) }; RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
+            panel.Children.Add(image); panel.Children.Add(new TextBlock { Text = emoji.Name, VerticalAlignment = VerticalAlignment.Center });
+            var item = new MenuItem { Header = panel }; item.Click += (_, _) => InsertEmoji(emoji); menu.Items.Add(item);
+        }
+        menu.IsOpen = true;
+    }
+    internal void InsertEmoji(HelperEmoji emoji)
+    {
+        if (input == null || !input.IsEnabled) return;
+        if (input.Text.Length - input.SelectionLength + emoji.Code.Length > 4000) { error!.Text = "Сообщение не должно превышать 4000 символов."; return; }
+        int index = input.SelectionStart; input.SelectedText = emoji.Code; input.CaretIndex = index + emoji.Code.Length; input.Focus();
+        EmojiInserted?.Invoke(emoji);
     }
     private async Task MarkReadAsync()
     {

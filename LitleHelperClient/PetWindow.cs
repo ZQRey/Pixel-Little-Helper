@@ -44,6 +44,10 @@ public sealed class PetWindow : Window
     private MessengerClient? messenger;
     private MessengerWindow? messengerWindow;
     private TrayIcon? tray;
+    private readonly EmojiReactions emojiReactions;
+    private bool emojiAnimating;
+    private PetState emojiRestore;
+    private DateTime emojiUntil;
     private readonly Dictionary<int, long> chatUnread = new();
     private bool refreshingChat;
     private DateTime lastChatSound;
@@ -63,6 +67,7 @@ public sealed class PetWindow : Window
     public PetWindow(bool diagnostics = false)
     {
         this.diagnostics = diagnostics;
+        emojiReactions = new EmojiReactions(diagnostics ? null : Path.Combine(Settings.Folder, "emoji-seen.json"));
         Width = 500; Height = 400;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -82,7 +87,7 @@ public sealed class PetWindow : Window
             {
                 messenger = new MessengerClient(settings);
                 messenger.Changed += () => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
-                messenger.MessageReceived += _ => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
+                messenger.MessageReceived += message => Dispatcher.BeginInvoke(new Action(async () => { ReceiveEmoji(message); await CheckChatAsync(); }));
             }
             catch (Exception ex) { Settings.Log(ex); }
             try
@@ -144,18 +149,20 @@ public sealed class PetWindow : Window
         LocationChanged += (_, _) => ApplyDisplayMode();
         animation.Tick += (_, _) =>
         {
-            if (IsTemporary(state) && DateTime.UtcNow >= actionUntil) ChangeState(state == PetState.Yawn ? PetState.Sleep : PetState.Idle);
+            AdvanceEmoji();
+            if (!emojiAnimating && IsTemporary(state) && DateTime.UtcNow >= actionUntil) ChangeState(state == PetState.Yawn ? PetState.Sleep : PetState.Idle);
             FollowCursor();
             frame++; AnimatedFrames++; Draw();
         };
         inactivity.Tick += (_, _) =>
         {
             AdvanceAnnouncements();
+            AdvanceEmoji();
             ApplyDisplayMode();
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
             else if (!exposed && animation.IsEnabled) animation.Stop();
-            if (!menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn) &&
+            if (!emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
                 React(PetState.Yawn, 2);
         };
@@ -290,9 +297,29 @@ public sealed class PetWindow : Window
         animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Sleep ? 250 : 100);
         Draw();
     }
-    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy;
+    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate;
     internal void React(PetState value, double seconds)
-    { actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
+    { emojiAnimating = false; actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
+    private bool EmojiAllowed => settings.EmojiReactions && !settings.ChatDoNotDisturb && !settings.AssistantHidden && IsVisible && (diagnostics || ChatDesktop.Unlocked());
+    internal void InsertEmojiReaction(HelperEmoji emoji)
+    { if (EmojiAllowed) { emojiReactions.Insert(emoji); AdvanceEmoji(); } }
+    private void ReceiveEmoji(ChatEntry message)
+    {
+        if (messenger?.SignedIn != true || message.SenderId == messenger.UserId) return;
+        emojiReactions.Incoming(messenger.IdentityContext, message, EmojiAllowed && settings.IncomingEmojiReactions); AdvanceEmoji();
+    }
+    private void AdvanceEmoji()
+    {
+        var now = DateTime.UtcNow;
+        if (!EmojiAllowed) { emojiReactions.Clear(); if (emojiAnimating) { emojiAnimating = false; ChangeState(emojiRestore); } return; }
+        if (mouseDown || state == PetState.Busy || state == PetState.Drag) { emojiAnimating = false; return; }
+        if (emojiAnimating) { if (now < emojiUntil) return; emojiAnimating = false; ChangeState(emojiRestore); }
+        if (IsTemporary(state) && now < actionUntil) return;
+        var emoji = emojiReactions.Take(now); if (emoji == null) return;
+        emojiRestore = state == PetState.Sleep ? PetState.Sleep : PetState.Idle;
+        emojiAnimating = true; emojiUntil = now.AddSeconds(emoji.Seconds); ChangeState(emoji.State);
+        if (!animation.IsEnabled && IsExposed()) animation.Start();
+    }
     private void Wake() { lastInteraction = DateTime.UtcNow; if (state is PetState.Sleep or PetState.Yawn) React(PetState.Wake, 2); }
     private void FollowCursor()
     {
@@ -532,6 +559,7 @@ public sealed class PetWindow : Window
         if (messengerWindow == null)
         {
             messengerWindow = new MessengerWindow(messenger, settings);
+            messengerWindow.EmojiInserted += InsertEmojiReaction;
             messengerWindow.Closed += (_, _) => messengerWindow = null;
             messengerWindow.Show();
         }
@@ -561,10 +589,11 @@ public sealed class PetWindow : Window
                 var last = recent.LastOrDefault(m => (user.IsGroup ? m.SenderId != messenger.UserId : m.RecipientId == messenger.UserId) && m.ReadAt == null);
                 chatUnread[user.Id] = latestId;
                 if (last == null || last.Id <= previous) continue;
+                ReceiveEmoji(last);
                 string text = "Непрочитанных сообщений: " + user.Unread;
                 if (settings.ChatPreview)
                 {
-                    text += "\n" + (user.IsGroup ? last.SenderName + ": " : "") + last.Body[..Math.Min(300, last.Body.Length)];
+                    text += "\n" + (user.IsGroup ? last.SenderName + ": " : "") + HelperEmojis.PlainText(last.Body[..Math.Min(300, last.Body.Length)]);
                 }
                 if (settings.ChatComicNotifications && !settings.AssistantHidden && announcements.Count < 10) ReceiveAnnouncement(new(text, user.FullName, 15, user.Id));
                 notifications.Add((user.FullName, text, user.Id));

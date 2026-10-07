@@ -94,11 +94,12 @@ public static class MessengerTests
         var received = new TaskCompletionSource<ChatMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var hub = new HubConnectionBuilder().WithUrl(address + "/messengerHub", o => o.AccessTokenProvider = () => Task.FromResult<string?>(bob.Token)).Build();
         hub.On<ChatMessage>("ChatMessage", m => received.TrySetResult(m)); await hub.StartAsync();
-        var request = new ChatSend(bob.Id, "Привет, Борис!", Guid.NewGuid().ToString());
+        var request = new ChatSend(bob.Id, "Привет, Борис! :helper_wave: :helper_joy: 😄", Guid.NewGuid().ToString());
         using var sent = await a.PostAsJsonAsync("api/messenger/send", request); sent.EnsureSuccessStatusCode(); var message = await sent.Content.ReadFromJsonAsync<ChatMessage>();
         var delivered = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Check(delivered.Body == request.Body && delivered.SenderId == alice.Id, "real SignalR delivery carries authenticated sender and stored message");
         Check((await b.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id)).GetArrayLength() == 1, "recipient sees persistent dialogue history");
+        Check((await b.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id))[0].GetProperty("body").GetString() == request.Body, "private emoji codes and Unicode survive storage and retrieval");
         Check((await c.GetFromJsonAsync<JsonElement>("api/messenger/history/" + alice.Id)).GetArrayLength() == 0, "third user cannot read another dialogue");
         using var retry = await a.PostAsJsonAsync("api/messenger/send", request); retry.EnsureSuccessStatusCode();
         Check((await retry.Content.ReadFromJsonAsync<ChatMessage>())!.Id == message!.Id, "retry returns original message without duplication");
@@ -119,12 +120,13 @@ public static class MessengerTests
         Check((await b.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(charlie.Id))).StatusCode == HttpStatusCode.Forbidden, "only group creator may invite members");
         var groupReceived = new TaskCompletionSource<ChatMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         hub.On<ChatMessage>("ChatMessage", m => { if (m.RecipientId == groupPeer) groupReceived.TrySetResult(m); }); await hub.StartAsync();
-        var groupRequest = new ChatSend(groupPeer, "Первое сообщение группы", Guid.NewGuid().ToString());
+        var groupRequest = new ChatSend(groupPeer, "Первое сообщение группы :helper_party: :helper_thanks:", Guid.NewGuid().ToString());
         var concurrent = await Task.WhenAll(a.PostAsJsonAsync("api/messenger/send", groupRequest), a.PostAsJsonAsync("api/messenger/send", groupRequest));
         foreach (var response in concurrent) response.EnsureSuccessStatusCode();
         var groupMessage = await concurrent[0].Content.ReadFromJsonAsync<ChatMessage>();
         Check((await concurrent[1].Content.ReadFromJsonAsync<ChatMessage>())!.Id == groupMessage!.Id, "concurrent group retries create one message"); foreach (var response in concurrent) response.Dispose();
         Check((await groupReceived.Task.WaitAsync(TimeSpan.FromSeconds(10))).SenderName == "Алиса", "group messages deliver through SignalR with sender display name");
+        Check((await b.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}"))[0].GetProperty("body").GetString() == groupRequest.Body, "group emoji codes survive storage and retrieval");
         var groupList = await b.GetFromJsonAsync<JsonElement>("api/messenger/users");
         Check(groupList.EnumerateArray().Single(u => u.GetProperty("id").GetInt32() == groupPeer).GetProperty("unread").GetInt32() == 1, "group unread counter is per member");
         (await b.PostAsJsonAsync($"api/messenger/read/{groupPeer}/{groupMessage.Id}", new { })).EnsureSuccessStatusCode();

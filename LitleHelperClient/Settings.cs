@@ -22,6 +22,8 @@ public sealed class Settings
     public bool ChatComicNotifications { get; set; } = true;
     public string DisplayMode { get; set; } = "Background";
     public bool AssistantHidden { get; set; }
+    public bool EmojiReactions { get; set; } = true;
+    public bool IncomingEmojiReactions { get; set; } = true;
     internal bool EnsureClientKey()
     {
         if (!string.IsNullOrWhiteSpace(ClientToken)) return false;

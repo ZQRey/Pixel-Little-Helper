@@ -11,7 +11,7 @@ public record ChatContact(int Id, string FullName, string Username, bool IsActiv
 {
     public string Label => (IsGroup ? "👥 " : "") + FullName;
     public string DirectoryLabel => FullName + " (" + Username + ")";
-    public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch) : LastText.Replace('\n', ' ');
+    public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch) : HelperEmojis.PlainText(LastText).Replace('\n', ' ');
     public string TimeLabel => LastAt?.ToLocalTime().ToString("dd.MM HH:mm") ?? "";
     public bool HasUnread => Unread > 0;
     public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : IsOnline ? "● Online" : "○ Offline" : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
@@ -36,6 +36,7 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal bool SignedIn => session != null;
     internal int UserId => session?.Id ?? 0;
     internal string FullName => session?.FullName ?? "";
+    internal string IdentityContext => server + ":" + UserId;
     internal string SignInStatus { get; private set; } = "Подключение под текущей учётной записью Windows…";
     internal event Action<ChatEntry>? MessageReceived;
     internal event Action? Changed;

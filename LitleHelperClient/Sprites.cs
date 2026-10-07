@@ -4,7 +4,7 @@ using System.Windows.Media.Imaging;
 
 namespace PixelHelper;
 
-internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown }
+internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, Joy, Sad, Surprise, Laugh, Think, Celebrate }
 internal sealed class SpriteFrame
 {
     internal BitmapSource Image { get; }

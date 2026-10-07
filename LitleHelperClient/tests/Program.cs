@@ -8,6 +8,18 @@ using PixelHelper;
 
 static void Check(bool result, string message) { if (!result) throw new Exception(message); Console.WriteLine("PASS " + message); }
 
+if (args.Length > 0 && args[0] == "--messenger-windows")
+{
+    await using var messenger = new MessengerClient(new Settings { ServerUrl = args.Length > 1 ? args[1] : "https://helper.gp1.loc" });
+    await messenger.StartAsync();
+    Check(messenger.SignedIn, messenger.SignInStatus);
+    Console.WriteLine("Windows SSO user: " + messenger.FullName + " (ID " + messenger.UserId + ")");
+    await messenger.SignInWindowsAsync(true);
+    Check(messenger.SignedIn, "Windows SSO renews automatically without a password");
+    Check((await messenger.UsersAsync()).All(u => u.Id != messenger.UserId), "authenticated messenger directory excludes current user");
+    return;
+}
+
 string temp = Path.Combine(Path.GetTempPath(), "PixelHelper.Tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
 try
@@ -203,7 +215,8 @@ try
     var chatClient = new MessengerClient(new Settings { ServerUrl = "http://helper.gp1.loc" });
     var chatWindow = new MessengerWindow(chatClient, new Settings());
     chatWindow.Show(); chatWindow.UpdateLayout(); chatWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-    Check(chatWindow.ActualWidth >= 720 && ((System.Windows.Controls.Grid)chatWindow.Content).Children.Count > 0, "messenger login form is displayed");
+    Check(chatWindow.ActualWidth >= 720 && ((System.Windows.Controls.Grid)chatWindow.Content).Children.Count > 0, "messenger automatic Windows sign-in view is displayed");
+    Check(!((System.Windows.Controls.Grid)chatWindow.Content).Children.OfType<System.Windows.Controls.StackPanel>().SelectMany(p => p.Children.Cast<System.Windows.UIElement>()).Any(c => c is System.Windows.Controls.PasswordBox or System.Windows.Controls.TextBox), "automatic sign-in has no login or password inputs");
     var chatBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); chatBitmap.Render(chatWindow);
     var chatPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "messenger-login-preview.png"));
     var chatPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); chatPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(chatBitmap)); using (var chatImage = File.Create(chatPreview)) chatPng.Save(chatImage);

@@ -45,21 +45,16 @@ internal sealed class MessengerWindow : Window
         showingLogin = true; users = null; peer = 0; contacts.Clear(); messages.Clear(); pendingId = null;
         root.Children.Clear(); root.ColumnDefinitions.Clear(); root.RowDefinitions.Clear();
         var panel = new StackPanel { Width = 360, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
-        panel.Children.Add(new TextBlock { Text = "Вход в мессенджер через AD", FontSize = 22, Margin = new Thickness(0, 0, 0, 20) });
-        panel.Children.Add(new TextBlock { Text = "Логин AD" });
-        var login = new TextBox { Text = Environment.UserName, Margin = new Thickness(0, 6, 0, 12), Padding = new Thickness(8) }; panel.Children.Add(login);
-        panel.Children.Add(new TextBlock { Text = "Пароль AD" });
-        var password = new PasswordBox { Margin = new Thickness(0, 6, 0, 12), Padding = new Thickness(8) }; panel.Children.Add(password);
-        var status = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap }; panel.Children.Add(status);
-        var submit = Button("Войти", async (sender, _) =>
+        panel.Children.Add(new TextBlock { Text = "Автоматический вход Windows", FontSize = 22, Margin = new Thickness(0, 0, 0, 20) });
+        panel.Children.Add(new TextBlock { Text = Environment.UserDomainName + "\\" + Environment.UserName, Margin = new Thickness(0, 0, 0, 12) });
+        error = new TextBlock { Foreground = Brushes.DimGray, TextWrapping = TextWrapping.Wrap, Text = client.SignInStatus }; panel.Children.Add(error);
+        var submit = Button("Повторить подключение", async (sender, _) =>
         {
-            ((Button)sender).IsEnabled = false; status.Text = "Вход…";
-            try { await client.LoginAsync(login.Text, password.Password); password.Clear(); showingLogin = false; await RefreshAsync(); }
-            catch (Exception ex) { status.Text = ex.Message; }
-            finally { password.Clear(); ((Button)sender).IsEnabled = true; }
+            ((Button)sender).IsEnabled = false;
+            try { await client.SignInWindowsAsync(true); await RefreshAsync(); }
+            finally { ((Button)sender).IsEnabled = true; }
         }); panel.Children.Add(submit);
-        password.KeyDown += (_, e) => { if (e.Key == Key.Enter && submit.IsEnabled) submit.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent)); };
-        panel.Children.Add(new TextBlock { Text = "Пароль не сохраняется. Сеанс защищён Windows и доступен только вашему профилю.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = Brushes.DimGray });
+        panel.Children.Add(new TextBlock { Text = "Используется учётная запись, под которой запущен помощник. Ввод пароля не требуется. При восстановлении связи вход повторится автоматически.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = Brushes.DimGray });
         root.Children.Add(panel);
     }
     private void MainForm()
@@ -77,7 +72,7 @@ internal sealed class MessengerWindow : Window
         Preference("Звук", settings.ChatSound, value => settings.ChatSound = value);
         Preference("Текст уведомления", settings.ChatPreview, value => settings.ChatPreview = value);
         Preference("Не беспокоить", settings.ChatDoNotDisturb, value => settings.ChatDoNotDisturb = value);
-        toolbar.Children.Add(Button("Выйти", async (_, _) => { await client.LogoutAsync(); peer = 0; pendingId = null; LoginForm(); }));
+        toolbar.Children.Add(Button("Обновить соединение", async (_, _) => await client.SignInWindowsAsync(true)));
         Grid.SetColumnSpan(toolbar, 2); root.Children.Add(toolbar);
         var left = new DockPanel { Margin = new Thickness(0, 8, 12, 8) };
         search = new TextBox { Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8), ToolTip = "Поиск по имени, логину или филиалу" };
@@ -115,7 +110,7 @@ internal sealed class MessengerWindow : Window
     private async Task RefreshAsync()
     {
         if (closing || updating) return;
-        if (!client.SignedIn) { if (!showingLogin) LoginForm(); return; }
+        if (!client.SignedIn) { if (!showingLogin) LoginForm(); else if (error != null) error.Text = client.SignInStatus; return; }
         if (users == null || showingLogin) MainForm();
         updating = true;
         try { contacts = await client.UsersAsync(); Filter(); if (peer != 0) await LoadHistoryAsync(); }

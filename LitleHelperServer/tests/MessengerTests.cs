@@ -12,6 +12,15 @@ using System.Threading.RateLimiting;
 
 public static class MessengerTests
 {
+    private class Kerberos : IMessengerKerberos
+    {
+        public KerberosIdentity Authenticate(string token) => token is "verified-alice" or "verified-bob"
+            ? new(token[9..] + "@ad.test", null) : throw new System.Security.Authentication.AuthenticationException();
+    }
+    private class WindowsDirectory : IMessengerWindowsDirectory
+    {
+        public Task<AdIdentity> FindAsync(string principal, CancellationToken token) => new Ad().AuthenticateAsync(new LoginRequest(principal.Split('@')[0], "valid"), token);
+    }
     private static void Check(bool ok, string text) { if (!ok) throw new Exception(text); Console.WriteLine("PASS " + text); }
     private class Ad : IAdAuthentication
     {
@@ -26,6 +35,7 @@ public static class MessengerTests
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:SigningKey"] = new string('k', 48), ["Jwt:Issuer"] = "test", ["Jwt:Audience"] = "test", ["Messenger:SettingsFile"] = Path.Combine(folder, "messenger.json") });
         builder.Services.AddDbContext<HelperDb>(o => o.UseSqlite("Data Source=" + Path.Combine(folder, "chat.db")));
         builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSignalR();
+        builder.Services.AddSingleton<IMessengerKerberos, Kerberos>(); builder.Services.AddSingleton<IMessengerWindowsDirectory, WindowsDirectory>();
         builder.Services.AddRateLimiter(o => o.AddPolicy("login", c => RateLimitPartition.GetNoLimiter("test")));
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
         {
@@ -36,6 +46,7 @@ public static class MessengerTests
         await using var app = builder.Build();
         app.Use(async (context, next) =>
         {
+            if (context.Request.Headers["X-Forwarded-Proto"] == "https") context.Request.Scheme = "https"; // Test proxy only.
             try { await next(); }
             catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException) { context.Response.StatusCode = ex is UnauthorizedAccessException ? 403 : 400; }
         });
@@ -58,6 +69,22 @@ public static class MessengerTests
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token); return (http, token, json.GetProperty("id").GetInt32());
         }
         var alice = await Login("alice"); var bob = await Login("bob"); var charlie = await Login("charlie");
+        Check((await anonymous.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.BadRequest, "Windows SSO requires HTTPS");
+        using var windows = new HttpClient { BaseAddress = new Uri(address) }; windows.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
+        windows.DefaultRequestHeaders.Add("X-Remote-User", "alice@ad.test");
+        using (var challenge = await windows.GetAsync("api/messenger/windows"))
+            Check(challenge.StatusCode == HttpStatusCode.Unauthorized && challenge.Headers.WwwAuthenticate.Any(h => h.Scheme == "Negotiate"), "SSO challenges and ignores spoofed identity headers");
+        windows.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Negotiate", "fake");
+        Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Unauthorized, "unverified Kerberos token cannot log in");
+        foreach (var actor in new[] { (Name: "alice", Id: alice.Id), (Name: "bob", Id: bob.Id) })
+        {
+            windows.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Negotiate", "verified-" + actor.Name);
+            using var response = await windows.GetAsync("api/messenger/windows"); response.EnsureSuccessStatusCode();
+            var data = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Check(data.GetProperty("id").GetInt32() == actor.Id, "Windows SSO preserves separate identity for " + actor.Name);
+            var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(data.GetProperty("token").GetString());
+            Check(jwt.Claims.Any(c => c.Type == "messenger" && c.Value == "1"), "Windows SSO token is restricted to messenger");
+        }
         using var a = alice.Http; using var b = bob.Http; using var c = charlie.Http;
         Check((await a.GetAsync("api/settings/messenger")).StatusCode == HttpStatusCode.Forbidden, "messenger session cannot manage server settings");
         var users = await a.GetFromJsonAsync<JsonElement>("api/messenger/users");
@@ -95,8 +122,11 @@ public static class MessengerTests
         }
         using var disabled = await a.PostAsJsonAsync("api/messenger/send", new ChatSend(bob.Id, "Disabled", Guid.NewGuid().ToString())); Check(disabled.StatusCode == HttpStatusCode.BadRequest, "disabled account cannot receive new messages");
         Check((await b.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled account cannot read chat");
+        windows.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Negotiate", "verified-bob");
+        Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "Windows SSO cannot reactivate a disabled panel account");
         var options = app.Services.GetRequiredService<MessengerSettings>(); options.Save(new(false));
         Check((await a.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks chat APIs");
+        Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks Windows SSO");
         Check(new MessengerSettings(builder.Configuration).Value.Enabled == false, "messenger settings survive restart");
         await app.StopAsync();
         Console.WriteLine("ALL MESSENGER CHECKS PASSED");

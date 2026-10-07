@@ -95,6 +95,8 @@ builder.Services.AddScoped<CommandService>();
 builder.Services.AddScoped<AnnouncementService>();
 builder.Services.AddSingleton<PanelSessions>();
 builder.Services.AddSingleton<ChatPresence>();
+builder.Services.AddSingleton<IMessengerKerberos, MessengerKerberos>();
+builder.Services.AddScoped<IMessengerWindowsDirectory, MessengerWindowsDirectory>();
 builder.Services.AddSingleton<MessengerSettings>();
 builder.Services.AddHostedService<ChatRetentionWorker>();
 builder.Services.AddSingleton<GlpiSettingsStore>();

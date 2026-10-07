@@ -105,6 +105,25 @@ public static class Messenger
     }
     public static void MapMessenger(this WebApplication app)
     {
+        app.MapGet("/api/messenger/windows", async (HttpContext http, IMessengerKerberos kerberos, IMessengerWindowsDirectory directory, HelperDb db, IConfiguration config, MessengerSettings settings, CancellationToken cancellation) =>
+        {
+            http.Response.Headers.CacheControl = "no-store";
+            if (!http.Request.IsHttps) return Results.BadRequest(new { error = "Автовход доступен только через HTTPS." });
+            if (!settings.Value.Enabled) return Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403);
+            string header = http.Request.Headers.Authorization.ToString();
+            IResult Challenge()
+            { http.Response.Headers.WWWAuthenticate = "Negotiate"; return Results.Unauthorized(); }
+            if (!header.StartsWith("Negotiate ", StringComparison.OrdinalIgnoreCase) || header.Length > 65536) return Challenge();
+            KerberosIdentity verified;
+            try { verified = kerberos.Authenticate(header[10..]); }
+            catch (Exception ex) when (ex is System.Security.Authentication.AuthenticationException or FormatException or ArgumentException) { return Challenge(); }
+            AdIdentity identity;
+            PanelUser user;
+            try { identity = await directory.FindAsync(verified.Name, cancellation); user = await ResolveAdUserAsync(identity, db, cancellation); }
+            catch (UnauthorizedAccessException) { return Results.Json(new { error = "Учётная запись Windows отключена или недоступна в AD." }, statusCode: 403); }
+            if (!string.IsNullOrEmpty(verified.ResponseToken)) http.Response.Headers.WWWAuthenticate = "Negotiate " + verified.ResponseToken;
+            return Results.Ok(new { token = Token(user, config), user.Id, user.FullName });
+        }).RequireRateLimiting("login");
         app.MapGet("/api/settings/messenger", async (MessengerSettings settings, HelperDb db) => new { settings.Value.Enabled, settings.Value.RetentionDays, storedMessages = await db.ChatMessages.CountAsync() }).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/messenger", (ChatOptions request, MessengerSettings settings, ChatPresence presence) =>
         {

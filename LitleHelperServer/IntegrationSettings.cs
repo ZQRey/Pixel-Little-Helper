@@ -10,13 +10,20 @@ public record TelegramOptions(bool Enabled = false, string BotToken = "", string
 public record TelegramUpdate(bool Enabled, string? BotToken, string ChatId, int ThreadId = 0, bool ClearBotToken = false,
     bool ManagementEnabled = false, string DirectoryLogin = "", string? DirectoryPassword = null, string IdAttribute = "physicalDeliveryOfficeName", bool ClearDirectoryPassword = false);
 public record AdOptions(bool Enabled = false, string Host = "", int Port = 636, string Domain = "", string NetbiosDomain = "", string BaseDn = "", string CaCertificate = "");
+public record GlpiImportOptions(bool Enabled = false, Dictionary<int,int>? LocationBranches = null);
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
 {
     private readonly object gate = new();
     private readonly IDataProtector protector = protection.CreateProtector("LitleHelper.Integrations.v1");
     private string PathName => configuration["Integrations:SettingsFile"] ?? Path.Combine("data", "integrations.json");
-    private record Stored(TelegramOptions Telegram, AdOptions Ad);
+    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null);
+    public GlpiImportOptions GlpiImport() { lock(gate) return ReadStored().GlpiImport ?? new(); }
+    public void SaveGlpiImport(GlpiImportOptions options)
+    {
+        if (options.LocationBranches?.Count>500 || options.LocationBranches?.Any(p=>p.Key<=0 || p.Value<=0)==true) throw new ArgumentException("Проверьте сопоставление местоположений и филиалов.");
+        lock(gate) Write(ReadStored() with { GlpiImport=options });
+    }
     private Stored ReadStored() => File.Exists(PathName) ? JsonSerializer.Deserialize<Stored>(File.ReadAllText(PathName))! : new(new(), new());
     public TelegramOptions Telegram() { lock (gate) { var value = ReadStored().Telegram; return value with { BotToken = value.BotToken.Length == 0 ? "" : protector.Unprotect(value.BotToken), DirectoryPassword = value.DirectoryPassword.Length == 0 ? "" : protector.Unprotect(value.DirectoryPassword) }; } }
     public object TelegramView() { var v = Telegram(); return new { v.Enabled, v.ChatId, v.ThreadId, v.ManagementEnabled, v.DirectoryLogin, v.IdAttribute, hasBotToken = v.BotToken.Length > 0, hasDirectoryPassword = v.DirectoryPassword.Length > 0 }; }

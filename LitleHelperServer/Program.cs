@@ -115,6 +115,9 @@ builder.Services.AddHttpClient<TelegramClient>(http => { http.Timeout = TimeSpan
 builder.Services.AddHostedService<TelegramWorker>();
 builder.Services.AddHostedService<TelegramBotWorker>();
 builder.Services.AddHostedService<TicketSyncWorker>();
+builder.Services.AddSingleton<GlpiImportHealth>();
+builder.Services.AddScoped<GlpiTicketImport>();
+builder.Services.AddHostedService<GlpiImportWorker>();
 builder.Services.AddHostedService<TaskExpiryService>();
 builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.FromSeconds(20); http.MaxResponseContentBufferSize = 2_097_152; });
 var app = builder.Build();

@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace LitleHelperServer;
 
-public class GlpiService(HttpClient http, GlpiSettingsStore store, ILogger<GlpiService> logger)
+public partial class GlpiService(HttpClient http, GlpiSettingsStore store, ILogger<GlpiService> logger)
 {
     private readonly GlpiOptions settings = store.Read();
     private string Base => settings.BaseUrl.TrimEnd('/') + "/";

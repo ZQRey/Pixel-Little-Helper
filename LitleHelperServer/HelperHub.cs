@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace LitleHelperServer;
 
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
-public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings) : Hub
+public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate) : Hub
 {
     public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
@@ -113,6 +113,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         var c = await Agent();
         if (string.IsNullOrWhiteSpace(c.CurrentUser) || string.IsNullOrWhiteSpace(description) || description.Length > 8000 || title.Length > 160)
             throw new HubException("Введите текст проблемы (до 8000 символов)");
+        await ticketGate.Semaphore.WaitAsync(Context.ConnectionAborted);
         try
         {
             string owner = Security.TicketUser(c.CurrentUser);
@@ -132,5 +133,6 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             string message = ex is InvalidOperationException or ArgumentException ? ex.Message : ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Заявка не отправлена." : "Сервер не смог подключиться к GLPI. Проверьте адрес, DNS и сеть в настройках GLPI.";
             throw new HubException(message);
         }
+        finally {ticketGate.Semaphore.Release();}
     }
 }

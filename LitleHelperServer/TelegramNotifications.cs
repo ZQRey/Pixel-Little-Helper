@@ -12,16 +12,30 @@ public class TelegramDelivery
     public DateTime NextAttemptAt { get; set; } = DateTime.UtcNow;
     public DateTime? SentAt { get; set; }
     public string LastError { get; set; } = "";
+    public long GroupMessageId { get; set; }
+    public string GroupChatId { get; set; } = "";
+    public string ButtonState { get; set; } = "";
 }
 public class TelegramClient(HttpClient http, IntegrationSettings settings, IConfiguration configuration)
 {
     public async Task SendAsync(string text, CancellationToken token)
         => await SendToAsync(settings.Telegram().ChatId, text, null, token, settings.Telegram().ThreadId);
     public async Task SendTicketAsync(TicketRecord ticket, CancellationToken token)
+    { await SendTicketTrackedAsync(ticket,token); }
+    public async Task<long> SendTicketTrackedAsync(TicketRecord ticket, CancellationToken token)
     {
         var options = settings.Telegram();
-        object? keyboard = options.ManagementEnabled ? new { inline_keyboard = new[] { new[] { new { text = "Принять", callback_data = "claim:" + ticket.Id } } } } : null;
-        await SendToAsync(options.ChatId, Message(ticket), keyboard, token, options.ThreadId);
+        object? keyboard = options.ManagementEnabled ? TicketKeyboard(ticket) : null;
+        var body=new Dictionary<string,object>{["chat_id"]=options.ChatId,["text"]=Message(ticket),["link_preview_options"]=new {is_disabled=true}};
+        if(options.ThreadId>0)body["message_thread_id"]=options.ThreadId;if(keyboard!=null)body["reply_markup"]=keyboard;
+        var result=await CallAsync("sendMessage",body,token);return result.TryGetProperty("message_id",out var id)?id.GetInt64():0;
+    }
+    internal static string TicketButtonState(TicketRecord ticket)=>TicketManagement.Status(ticket.Status)>=5?"status:"+ticket.Status:ticket.AssignedGlpiUserId>0?"assigned:"+ticket.AssignedGlpiUserId:"claim";
+    private static object TicketKeyboard(TicketRecord ticket)=>new {inline_keyboard=new[]{new[]{new {text=TicketButtonState(ticket)=="claim"?"Принять":ticket.AssignedGlpiUserId>0&&TicketManagement.Status(ticket.Status)<5?"Назначена в GLPI":TicketManagement.StatusName(TicketManagement.Status(ticket.Status)),callback_data=TicketButtonState(ticket)=="claim"?"claim:"+ticket.Id:"claimed"}}}};
+    public async Task SyncTicketButtonAsync(TicketRecord ticket,TelegramDelivery delivery,CancellationToken token)
+    {
+        if(delivery.GroupMessageId==0 || delivery.GroupChatId.Length==0 || !settings.Telegram().ManagementEnabled || delivery.ButtonState==TicketButtonState(ticket))return;
+        await CallAsync("editMessageReplyMarkup",new {chat_id=delivery.GroupChatId,message_id=delivery.GroupMessageId,reply_markup=TicketKeyboard(ticket)},token);delivery.ButtonState=TicketButtonState(ticket);
     }
     public async Task SendToAsync(string chat, string text, object? keyboard, CancellationToken token, int thread = 0)
     {
@@ -85,7 +99,7 @@ public class TelegramWorker(IServiceScopeFactory scopes, IntegrationSettings set
                     foreach (var item in due)
                     {
                         item.Attempts++;
-                        try { await sender.SendTicketAsync(item.Ticket, stoppingToken); item.State = "Sent"; item.SentAt = DateTime.UtcNow; item.LastError = ""; }
+                        try { item.GroupMessageId=await sender.SendTicketTrackedAsync(item.Ticket, stoppingToken); item.GroupChatId=settings.Telegram().ChatId;item.ButtonState=TelegramClient.TicketButtonState(item.Ticket); item.State = "Sent"; item.SentAt = DateTime.UtcNow; item.LastError = ""; }
                         catch (InvalidOperationException ex)
                         {
                             item.LastError = ex.Message; item.State = item.Attempts >= 10 ? "Failed" : "Pending";

@@ -146,6 +146,9 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
         await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"TelegramBotStates\" (\"Id\" TEXT PRIMARY KEY, \"Offset\" BIGINT NOT NULL)");
         await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"TelegramReplySessions\" (\"Id\" BIGINT PRIMARY KEY, \"TicketId\" INTEGER NOT NULL, \"Mode\" TEXT NOT NULL, \"BotKey\" TEXT NOT NULL, \"ExpiresAt\" " + timestamp + " NOT NULL)");
         await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"TelegramHandledUpdates\" (\"Id\" TEXT PRIMARY KEY, \"CreatedAt\" " + timestamp + " NOT NULL)");
+        await ChatBroadcasts.Column(db,"TelegramDeliveries","GroupMessageId","BIGINT NOT NULL DEFAULT 0");
+        await ChatBroadcasts.Column(db,"TelegramDeliveries","GroupChatId","TEXT NOT NULL DEFAULT ''");
+        await ChatBroadcasts.Column(db,"TelegramDeliveries","ButtonState","TEXT NOT NULL DEFAULT ''");
     }
 }
 
@@ -336,7 +339,7 @@ public class TicketSyncWorker(IServiceScopeFactory scopes, ILogger<TicketSyncWor
                 var service = scope.ServiceProvider.GetRequiredService<TicketManagement>();
                 var batch = await db.Tickets.OrderBy(t => t.SyncedAt).Take(30).ToListAsync(token);
                 foreach (var ticket in batch)
-                    try { await service.SyncAsync(ticket, token); } catch (Exception ex) when (ex is not OperationCanceledException) { ticket.SyncedAt = DateTime.UtcNow; await db.SaveChangesAsync(token); logger.LogWarning("GLPI synchronization failed for ticket {Id}: {Type}", ticket.GlpiId, ex.GetType().Name); }
+                    try { await service.SyncAsync(ticket, token); var delivery=await db.TelegramDeliveries.FindAsync([ticket.Id],token);if(delivery!=null&&delivery.State=="Sent"){await scope.ServiceProvider.GetRequiredService<TelegramClient>().SyncTicketButtonAsync(ticket,delivery,token);await db.SaveChangesAsync(token);} } catch (Exception ex) when (ex is not OperationCanceledException) { ticket.SyncedAt = DateTime.UtcNow; await db.SaveChangesAsync(token); logger.LogWarning("GLPI synchronization failed for ticket {Id}: {Type}", ticket.GlpiId, ex.GetType().Name); }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             catch (Exception ex) { logger.LogWarning("Ticket synchronization failed: {Type}", ex.GetType().Name); }

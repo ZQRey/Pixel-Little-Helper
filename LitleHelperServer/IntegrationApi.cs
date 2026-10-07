@@ -6,6 +6,14 @@ public static class IntegrationApi
 {
     public static void MapIntegrationApi(this WebApplication app)
     {
+        app.MapGet("/api/settings/glpi-import", (IntegrationSettings settings,GlpiImportHealth health)=>Results.Ok(new { settings=settings.GlpiImport(),health.LastPollAt,health.LastError,health.LastId,health.Initialized })).RequireAuthorization("settings.manage");
+        app.MapGet("/api/settings/glpi-import/locations",async(GlpiService glpi,CancellationToken token)=>await glpi.ImportLocationsAsync(token)).RequireAuthorization("settings.manage");
+        app.MapPut("/api/settings/glpi-import",async(GlpiImportOptions request,IntegrationSettings settings,HelperDb db,GlpiTicketImport importer,CancellationToken token)=>
+        {
+            if(request.LocationBranches!=null && await db.Branches.CountAsync(b=>request.LocationBranches.Values.Contains(b.Id)&&b.IsActive)!=request.LocationBranches.Values.Distinct().Count())throw new ArgumentException("Выберите действующие филиалы.");
+            bool enabling=request.Enabled&&!settings.GlpiImport().Enabled;settings.SaveGlpiImport(request);if(enabling)await importer.PollAsync(token);return Results.Ok(settings.GlpiImport());
+        }).RequireAuthorization("settings.manage");
+        app.MapPost("/api/settings/glpi-import/check",async(GlpiTicketImport importer,CancellationToken token)=>Results.Ok(new { imported=await importer.PollAsync(token) })).RequireAuthorization("settings.manage");
         app.MapGet("/api/settings/updates", (ClientReleases releases) => Results.Ok(new { enabled = releases.Enabled, latest = releases.Latest() })).RequireAuthorization("updates.manage");
         app.MapPut("/api/settings/updates", (UpdateSwitch request, ClientReleases releases) => { releases.SetEnabled(request.Enabled); return Results.Ok(new { enabled = releases.Enabled, latest = releases.Latest() }); }).RequireAuthorization("updates.manage");
         app.MapPost("/api/settings/updates/upload", async (HttpRequest request, ClientReleases releases, CancellationToken token) =>

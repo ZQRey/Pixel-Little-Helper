@@ -12,6 +12,8 @@ internal sealed class TicketWindow : Window
     private readonly CancellationTokenSource lifetime;
     private HwndSource? source;
     internal event Action<int>? TicketCreated;
+    internal event Action? Submitting;
+    internal event Action? SubmissionFailed;
     internal TicketWindow(Func<string, string, int?, string, CancellationToken, Task<int>> createTicket, Func<CancellationToken, Task<List<TicketBranch>>> getBranches, Settings settings, CancellationToken token)
     {
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -46,6 +48,7 @@ internal sealed class TicketWindow : Window
                 var selected = branch.SelectedItem as TicketBranch;
                 if (branch.Items.Count > 0 && selected == null) throw new ArgumentException("Выберите филиал");
                 if (selected != null && string.IsNullOrWhiteSpace(room.Text)) throw new ArgumentException("Укажите кабинет");
+                Submitting?.Invoke();
                 int id = await createTicket("Заявка от " + Environment.UserName, input.Text.Trim(), selected?.Id, room.Text.Trim(), lifetime.Token);
                 if (lifetime.IsCancellationRequested) return;
                 settings.TicketBranchId = selected?.Id; settings.TicketRoom = room.Text.Trim();
@@ -54,7 +57,7 @@ internal sealed class TicketWindow : Window
                 TicketCreated?.Invoke(id);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
-            catch (Exception ex) { Settings.Log(ex); status.Text = "Не отправлено. " + ex.Message; }
+            catch (Exception ex) { Settings.Log(ex); status.Text = "Не отправлено. " + ex.Message; SubmissionFailed?.Invoke(); }
             finally { if (!lifetime.IsCancellationRequested) send.IsEnabled = true; }
         };
         SourceInitialized += (_, _) =>

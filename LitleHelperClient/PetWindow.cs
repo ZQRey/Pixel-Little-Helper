@@ -41,6 +41,10 @@ public sealed class PetWindow : Window
     private TicketWindow? ticket;
     private SuperAdminWindow? superWindow;
     private bool superAvailable, announcementVisible;
+    private double rapidDistance;
+    private DateTime motionStarted;
+    private NativeMethods.POINT previousDragPoint;
+    private bool dizzyDrag;
     private readonly Queue<ClientNotice> announcements = new();
     private DateTime announcementUntil;
     private readonly bool diagnostics;
@@ -72,7 +76,7 @@ public sealed class PetWindow : Window
                 hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (!online) { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
+                    if (!online) { React(PetState.Error, 4); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
                 }));
                 hub.ButtonsUpdated += buttons => Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -117,12 +121,14 @@ public sealed class PetWindow : Window
             if (!diagnostics && !Settings.FirstRunCompleted) ShowFirstPrompt();
             animation.Start(); inactivity.Start(); refresh.Start();
             if (!diagnostics) hub?.Start();
+            if (!diagnostics) React(PetState.Greeting, 3);
             await Task.CompletedTask;
         };
         LocationChanged += (_, _) => { if (handle != 0) NativeMethods.Bottom(handle); };
         animation.Tick += (_, _) =>
         {
-            if (state == PetState.Action && DateTime.UtcNow >= actionUntil) ChangeState(PetState.Idle);
+            if (IsTemporary(state) && DateTime.UtcNow >= actionUntil) ChangeState(state == PetState.Yawn ? PetState.Sleep : PetState.Idle);
+            FollowCursor();
             frame++; AnimatedFrames++; Draw();
         };
         inactivity.Tick += (_, _) =>
@@ -132,9 +138,9 @@ public sealed class PetWindow : Window
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
             else if (!exposed && animation.IsEnabled) animation.Stop();
-            if (!menuOpen && !firstPrompt && !mouseDown && ticket == null && state != PetState.Sleep &&
+            if (!menuOpen && !firstPrompt && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
-                ChangeState(PetState.Sleep);
+                React(PetState.Yawn, 2);
         };
         refresh.Tick += async (_, _) => await RefreshActions();
         outsideClick.Tick += (_, _) =>
@@ -223,7 +229,17 @@ public sealed class PetWindow : Window
         animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Sleep ? 250 : 100);
         Draw();
     }
-    private void Wake() { lastInteraction = DateTime.UtcNow; if (state == PetState.Sleep) ChangeState(PetState.Idle); }
+    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy;
+    internal void React(PetState value, double seconds)
+    { actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
+    private void Wake() { lastInteraction = DateTime.UtcNow; if (state is PetState.Sleep or PetState.Yawn) React(PetState.Wake, 2); }
+    private void FollowCursor()
+    {
+        if (state is not (PetState.Idle or PetState.LookLeft or PetState.LookRight or PetState.LookUp or PetState.LookDown) || mouseDown || !IsVisible || !NativeMethods.GetCursorPos(out var cursor)) return;
+        var point = PointFromScreen(new Point(cursor.X, cursor.Y));
+        double dx = point.X - RobotX - 48, dy = point.Y - RobotY - 40;
+        ChangeState(Math.Abs(dx) + Math.Abs(dy) > 250 || Math.Abs(dx) + Math.Abs(dy) < 20 ? PetState.Idle : Math.Abs(dx) > Math.Abs(dy) ? (dx < 0 ? PetState.LookLeft : PetState.LookRight) : (dy < 0 ? PetState.LookUp : PetState.LookDown));
+    }
     private bool IsExposed()
     {
         var points = new[] { new Point(RobotX + 36, RobotY + 30), new Point(RobotX + 50, RobotY + 32), new Point(RobotX + 48, RobotY + 65) }
@@ -260,7 +276,9 @@ public sealed class PetWindow : Window
     {
         wokeOnDown = state == PetState.Sleep;
         Wake(); mouseDown = true; dragging = false;
+        dizzyDrag = false; rapidDistance = 0; motionStarted = DateTime.UtcNow;
         NativeMethods.GetCursorPos(out dragStart);
+        previousDragPoint = dragStart;
         startLeft = Left; startTop = Top;
         robot.CaptureMouse(); e.Handled = true;
     }
@@ -276,6 +294,10 @@ public sealed class PetWindow : Window
             startLeft = Left; startTop = Top; dragStart = p; delta = new Vector();
         }
         Left = startLeft + delta.X; Top = startTop + delta.Y;
+        double elapsed = (DateTime.UtcNow - motionStarted).TotalSeconds;
+        if (elapsed > .8) { rapidDistance = 0; motionStarted = DateTime.UtcNow; }
+        rapidDistance += m.Transform(new Vector(p.X - previousDragPoint.X, p.Y - previousDragPoint.Y)).Length; previousDragPoint = p;
+        if (rapidDistance > 600 && !dizzyDrag) { dizzyDrag = true; React(PetState.Dizzy, 5); }
     }
     private void MouseUpRobot(object sender, MouseButtonEventArgs e)
     {
@@ -292,7 +314,8 @@ public sealed class PetWindow : Window
     {
         mouseDown = false; dragging = false;
         robot.ReleaseMouseCapture();
-        ClampPosition(); SavePosition(); Wake(); ChangeState(PetState.Idle);
+        ClampPosition(); SavePosition(); Wake();
+        if (dizzyDrag) React(PetState.Dizzy, 5); else if (state != PetState.Wake) ChangeState(PetState.Idle);
     }
     private void ClampPosition()
     {
@@ -452,6 +475,7 @@ public sealed class PetWindow : Window
     {
         if (announcements.Count == 0 || firstPrompt) return;
         var notice = announcements.Dequeue(); HideBubbles(); Expand(); Wake(); menuOpen = true; announcementVisible = true;
+        React(PetState.Notice, 3);
         var panel = new Grid { Margin = new Thickness(12) };
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -490,7 +514,10 @@ public sealed class PetWindow : Window
                     if (ticket != null) return Task.CompletedTask;
                     ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Left = Left - 135, Top = Math.Max(SystemParameters.VirtualScreenTop, Top - 410) };
                     ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
-                    ticket.Closed += (_, _) => { ticket = null; Wake(); };
+                    ticket.Submitting += () => ChangeState(PetState.Busy);
+                    ticket.SubmissionFailed += () => React(PetState.Error, 4);
+                    ticket.TicketCreated += _ => React(PetState.Success, 4);
+                    ticket.Closed += (_, _) => { ticket = null; Wake(); if (state == PetState.Busy) ChangeState(PetState.Idle); };
                     ticket.Show(); break;
                 case "open_path":
                     var path = Environment.ExpandEnvironmentVariables(action.Target ?? "");

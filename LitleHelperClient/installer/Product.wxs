@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.7" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.8" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
     <MediaTemplate EmbedCab="yes" />

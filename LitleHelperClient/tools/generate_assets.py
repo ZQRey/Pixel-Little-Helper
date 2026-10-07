@@ -11,6 +11,7 @@ WHITE = "#e4f7ff"
 LIGHT = "#ffffff"
 SCREEN = "#193e5c"
 CYAN = "#7cf4ed"
+STATES = [("idle", 4), ("sleep", 2), ("drag", 2), ("action", 2)] + [(s, 2) for s in ("greeting", "success", "error", "notice", "yawn", "wake", "busy", "dizzy", "lookleft", "lookright", "lookup", "lookdown")]
 
 
 def sprite(state: str, frame: int) -> Image.Image:
@@ -81,21 +82,70 @@ def sprite(state: str, frame: int) -> Image.Image:
         # Tiny pixel Z and z, outside the head; alpha remains zero between glyphs.
         for x, y, size in [(36, 2 + frame, 4), (42, 0, 3)]:
             d.line([(x, y), (x + size, y), (x, y + size), (x + size, y + size)], fill=EDGE)
+    if state not in ("idle", "sleep", "drag", "action"):
+        box(16, 12, 30, 22, SCREEN)
+        dx = -2 if state == "lookleft" else 2 if state == "lookright" else 0
+        dy = -2 if state in ("lookup", "notice") else 2 if state == "lookdown" else 0
+        for x in (18, 27):
+            box(x + dx, 14 + dy, x + dx + 1, 17 + dy, CYAN)
+        line([(21, 20), (22, 21), (24, 21), (25, 20)], CYAN)
+        if state in ("greeting", "wake", "success"):
+            box(34, 27, 39, 35, (0, 0, 0, 0))
+            line([(35, 29), (39, 25), (41, 18 + frame * 3)], INK, 4)
+            line([(35, 29), (39, 25), (41, 18 + frame * 3)], BLUE, 2)
+            box(39, 12 + frame * 3, 44, 19 + frame * 3, INK)
+            box(40, 13 + frame * 3, 43, 18 + frame * 3, WHITE)
+        if state == "success":
+            box(16, 12, 24, 22, SCREEN)
+            line([(17, 17), (20, 20), (24, 13)], CYAN, 2)
+            box(40, 10, 41, 14, WHITE)
+        elif state == "error":
+            box(16, 12, 30, 22, SCREEN)
+            line([(20, 14), (21, 13), (25, 13), (26, 14), (26, 16), (23, 18)], CYAN)
+            box(23, 20, 23, 20, CYAN)
+            line([(17, 22), (18, 21), (20, 21)], CYAN)
+            line([(26, 21), (28, 21), (29, 22)], CYAN)
+        elif state == "notice":
+            line([(24, 5), (24, 2)], EDGE, 2)
+            box(23, 0, 25, 1, CYAN if frame else WHITE)
+        elif state == "yawn":
+            box(16, 12, 30, 22, SCREEN)
+            line([(17, 15), (20, 15)], CYAN)
+            line([(26, 15), (29, 15)], CYAN)
+            d.ellipse((21, 17, 25, 22), outline=CYAN)
+        elif state == "wake":
+            line([(12, 29), (7, 24), (5, 15)], INK, 4)
+            line([(12, 29), (7, 24), (5, 15)], WHITE, 2)
+            if frame == 0:
+                box(16, 12, 30, 22, SCREEN)
+                line([(17, 17), (20, 17)], CYAN)
+                line([(26, 17), (29, 17)], CYAN)
+        elif state == "busy":
+            box(16, 12, 30, 22, SCREEN)
+            for n in range(frame + 2):
+                box(18 + n * 5, 17, 19 + n * 5, 18, CYAN)
+        elif state == "dizzy":
+            box(16, 12, 30, 22, SCREEN)
+            for x in (17, 26):
+                line([(x, 14), (x + 3, 14), (x + 3, 18), (x, 18), (x, 16), (x + 1, 16)], CYAN)
+            for x, y in ((4 + frame * 3, 4), (40 - frame * 3, 2)):
+                line([(x - 2, y), (x + 2, y)], WHITE)
+                line([(x, y - 2), (x, y + 2)], CYAN)
     return image
 
 
 def main():
     OUT.mkdir(exist_ok=True)
     frames = []
-    for state, count in [("idle", 4), ("sleep", 2), ("drag", 2), ("action", 2)]:
+    for state, count in STATES:
         for frame in range(count):
             image = sprite(state, frame)
             image.save(OUT / f"{state}_{frame + 1}.png", optimize=True)
             frames.append((state, frame + 1, image))
-    preview = Image.new("RGB", (960, 440), "#eaf1f6")
+    preview = Image.new("RGB", (960, 110 * len(STATES)), "#eaf1f6")
     d = ImageDraw.Draw(preview)
     index = 0
-    for row, (state, count) in enumerate([("idle", 4), ("sleep", 2), ("drag", 2), ("action", 2)]):
+    for row, (state, count) in enumerate(STATES):
         d.text((16, row * 110 + 10), state.upper(), fill=INK)
         for column in range(count):
             _, _, image = frames[index]

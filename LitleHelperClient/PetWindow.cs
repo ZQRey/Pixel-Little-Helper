@@ -19,6 +19,7 @@ public sealed class PetWindow : Window
     private readonly List<FrameworkElement> bubbles = [];
     private readonly Settings settings = Settings.Load();
     private readonly RobotClicks robotClicks = new();
+    private PetState? localNoticeAnimation;
     private HubConnectionService? hub;
     private readonly Sprites sprites = new();
     private readonly CancellationTokenSource lifetime = new();
@@ -300,7 +301,7 @@ public sealed class PetWindow : Window
     {
         if (source?.CompositionTarget == null) return;
         var m = source.CompositionTarget.TransformToDevice;
-        var key = (state, frame % (state == PetState.Idle ? 4 : 2), m.M11, m.M22);
+        var key = (state, frame % Sprites.FrameCount(state), m.M11, m.M22);
         if (!regionCache.TryGetValue(key, out var region))
         {
             region = NativeMethods.BuildRegion(current.Runs(RobotX, RobotY, Scale).Concat(
@@ -318,10 +319,10 @@ public sealed class PetWindow : Window
     {
         if (state == value) return;
         state = value; frame = 0;
-        animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Offended ? 450 : value == PetState.Sleep ? 250 : 100);
+        animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Twirl ? 150 : value == PetState.Offended ? 450 : value == PetState.Sleep ? 250 : 100);
         Draw();
     }
-    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended;
+    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl;
     internal void React(PetState value, double seconds)
     { emojiAnimating = false; actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
     private bool EmojiAllowed => settings.EmojiReactions && !settings.ChatDoNotDisturb && !settings.AssistantHidden && IsVisible && (diagnostics || ChatDesktop.Unlocked());
@@ -416,16 +417,29 @@ public sealed class PetWindow : Window
         if (!mouseDown) return;
         bool wasDragged = dragging;
         EndDrag();
-        if (robotClicks.Register(DateTime.UtcNow,wasDragged))
+        var clickReaction=robotClicks.Register(DateTime.UtcNow,wasDragged);
+        if (clickReaction!=RobotClickReaction.None)
         {
-            if (announcements.Count < 10) ReceiveAnnouncement(new ClientNotice("Я ещё развиваюсь… Пожалуйста, не обижай меня 🥺", "Твой помощник", 10) { LocalAnimation=PetState.Offended });
+            ShowClickReaction(clickReaction);
             e.Handled=true; return;
         }
+        if (!wasDragged && localNoticeAnimation!=null) { e.Handled=true; return; }
         if (!wasDragged && !wokeOnDown)
         {
             if (menuOpen) HideBubbles(); else ShowMenu();
         }
         e.Handled = true;
+    }
+    internal void ShowClickReaction(RobotClickReaction reaction)
+    {
+        if (reaction==RobotClickReaction.None) return;
+        if (localNoticeAnimation!=null) HideBubbles();
+        if (reaction==RobotClickReaction.Offended)
+        {
+            var pending=announcements.Where(n=>n.LocalAnimation!=PetState.Twirl).ToArray(); announcements.Clear(); foreach(var notice in pending) announcements.Enqueue(notice);
+        }
+        if (announcements.Count>=10) return;
+        ReceiveAnnouncement(new ClientNotice(reaction==RobotClickReaction.Greeting ? "Здравствуйте, меня зовут Артёмка. Я ваш персональный помощник." : "Я ещё развиваюсь… Пожалуйста, не обижай меня 🥺", "Артёмка", 10) { LocalAnimation=reaction==RobotClickReaction.Greeting ? PetState.Twirl : PetState.Offended });
     }
     private void EndDrag()
     {
@@ -533,6 +547,7 @@ public sealed class PetWindow : Window
     }
     private void HideBubbles()
     {
+        localNoticeAnimation=null;
         announcementVisible = false;
         outsideClick.Stop();
         foreach (var bubble in bubbles) canvas.Children.Remove(bubble);
@@ -563,7 +578,8 @@ public sealed class PetWindow : Window
     {
         if (announcements.Count == 0) return;
         var notice = announcements.Dequeue(); HideBubbles(); Expand(); Wake(); menuOpen = true; announcementVisible = true;
-        React(notice.LocalAnimation ?? PetState.Notice, notice.LocalAnimation == null ? 3 : 6);
+        localNoticeAnimation=notice.LocalAnimation;
+        React(notice.LocalAnimation ?? PetState.Notice, notice.LocalAnimation == PetState.Twirl ? 1.2 : notice.LocalAnimation == null ? 3 : 6);
         var panel = new Grid { Margin = new Thickness(12) };
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });

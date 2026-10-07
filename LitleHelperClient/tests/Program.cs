@@ -9,13 +9,13 @@ using PixelHelper;
 static void Check(bool result, string message) { if (!result) throw new Exception(message); Console.WriteLine("PASS " + message); }
 
 var robotClicks = new RobotClicks(); var clickTime = DateTime.UtcNow;
-Check(!robotClicks.Register(clickTime,false) && !robotClicks.Register(clickTime.AddMilliseconds(200),false) && robotClicks.Register(clickTime.AddMilliseconds(400),false),"three rapid robot clicks trigger offended reaction");
-Check(!robotClicks.Register(clickTime.AddSeconds(1),false) && !robotClicks.Register(clickTime.AddSeconds(1.2),false) && !robotClicks.Register(clickTime.AddSeconds(1.4),false),"offended reaction cooldown prevents repeated bubbles");
+Check(robotClicks.Register(clickTime,false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(150),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(300),false)==RobotClickReaction.Greeting,"third rapid robot click triggers greeting");
+Check(robotClicks.Register(clickTime.AddMilliseconds(450),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(600),false)==RobotClickReaction.Offended,"fifth rapid robot click replaces greeting with offended reaction");
+Check(robotClicks.Register(clickTime.AddSeconds(1),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddSeconds(1.2),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddSeconds(1.4),false)==RobotClickReaction.None,"offended reaction cooldown prevents repeated bubbles");
 robotClicks = new RobotClicks(); robotClicks.Register(clickTime,false); robotClicks.Register(clickTime.AddMilliseconds(100),true);
-Check(!robotClicks.Register(clickTime.AddMilliseconds(200),false) && !robotClicks.Register(clickTime.AddMilliseconds(300),false),"drag interrupts click sequence");
+Check(robotClicks.Register(clickTime.AddMilliseconds(200),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(300),false)==RobotClickReaction.None,"drag interrupts click sequence");
 robotClicks = new RobotClicks(); robotClicks.Register(clickTime,false);
-Check(!robotClicks.Register(clickTime.AddSeconds(2),false) && !robotClicks.Register(clickTime.AddSeconds(4),false),"slow individual clicks do not trigger offended reaction");
-
+Check(robotClicks.Register(clickTime.AddSeconds(2),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddSeconds(4),false)==RobotClickReaction.None,"slow individual clicks do not trigger reaction");
 if (args.Length > 0 && args[0] == "--messenger-windows")
 {
     await using var messenger = new MessengerClient(new Settings { ServerUrl = args.Length > 1 ? args[1] : "https://helper.gp1.loc" });
@@ -211,7 +211,7 @@ try
     _ = new System.Windows.Application();
     var sprites = new Sprites();
     foreach (var state in Enum.GetValues<PetState>())
-    for (int index = 0; index < (state == PetState.Idle ? 4 : 2); index++)
+    for (int index = 0; index < Sprites.FrameCount(state); index++)
     {
         var frame = sprites.Get(state, index);
         Check(frame.Width == 48 && frame.Height == 48 && !frame.Opaque(0, 47), $"{state} {index}: size and transparent padding");
@@ -273,7 +273,9 @@ try
     var png=new System.Windows.Media.Imaging.PngBitmapEncoder();png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using(var imageFile=File.Create(preview))png.Save(imageFile);
     typeof(PetWindow).GetField("announcementUntil",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(pet,DateTime.UtcNow.AddSeconds(-1));pet.AdvanceAnnouncements();pet.UpdateLayout();
     Check(pet.ActualWidth==96,"announcement expires and restores compact helper");
-    pet.ReceiveAnnouncement(new("Я ещё развиваюсь… Пожалуйста, не обижай меня", "Твой помощник", 10) { LocalAnimation=PetState.Offended }); pet.UpdateLayout();
+    pet.ShowClickReaction(RobotClickReaction.Greeting); pet.UpdateLayout();
+    Check((PetState)petStateField.GetValue(pet)! == PetState.Twirl && Sprites.FrameCount(PetState.Twirl)==8,"greeting starts an eight-frame full turn");
+    pet.ShowClickReaction(RobotClickReaction.Offended); pet.UpdateLayout();
     Check((PetState)petStateField.GetValue(pet)! == PetState.Offended && pet.ActualWidth==500,"offended animation is shown together with comic message");
     Check(!new Sprites().Get(PetState.Offended,0).Pixels.SequenceEqual(new Sprites().Get(PetState.Offended,1).Pixels),"offended animation has distinct blinking frames");
     typeof(PetWindow).GetField("announcementUntil",petFlags)!.SetValue(pet,DateTime.UtcNow.AddSeconds(-1));pet.AdvanceAnnouncements();pet.UpdateLayout();

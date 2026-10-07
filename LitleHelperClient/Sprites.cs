@@ -4,7 +4,7 @@ using System.Windows.Media.Imaging;
 
 namespace PixelHelper;
 
-internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, Joy, Sad, Surprise, Laugh, Think, Celebrate, Offended }
+internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, Joy, Sad, Surprise, Laugh, Think, Celebrate, Offended, Twirl }
 internal sealed class SpriteFrame
 {
     internal BitmapSource Image { get; }
@@ -42,11 +42,12 @@ internal sealed class SpriteFrame
 internal sealed class Sprites
 {
     private readonly Dictionary<PetState, SpriteFrame[]> frames = new();
+    internal static int FrameCount(PetState state) => state == PetState.Idle ? 4 : state == PetState.Twirl ? 8 : 2;
     internal Sprites()
     {
         foreach (var state in Enum.GetValues<PetState>())
         {
-            int count = state == PetState.Idle ? 4 : 2;
+            int count = FrameCount(state);
             frames[state] = Enumerable.Range(1, count).Select(i => new SpriteFrame($"{state.ToString().ToLowerInvariant()}_{i}")).ToArray();
         }
     }

@@ -66,6 +66,10 @@ internal sealed class MessengerWindow : Window
     private bool updating, closing, showingLogin;
     private string? pendingId, pendingText;
     private int pendingPeer;
+    private readonly List<string> pendingFiles = [];
+    private readonly string clipboardDirectory = Path.Combine(Path.GetTempPath(), "PixelHelper-chat-" + Guid.NewGuid().ToString("N"));
+    private WrapPanel? attachmentsPanel;
+    private bool sending;
     internal event Action<HelperEmoji>? EmojiInserted;
     internal int ActivePeer => IsActive ? peer : 0;
     internal MessengerWindow(MessengerClient client, Settings settings)
@@ -77,7 +81,7 @@ internal sealed class MessengerWindow : Window
         client.MessageReceived += OnMessage;
         Loaded += async (_, _) => await RefreshAsync();
         Activated += async (_, _) => await MarkReadAsync();
-        Closed += (_, _) => { closing = true; client.Changed -= OnChanged; client.MessageReceived -= OnMessage; };
+        Closed += (_, _) => { closing = true; client.Changed -= OnChanged; client.MessageReceived -= OnMessage; try { if (Directory.Exists(clipboardDirectory)) Directory.Delete(clipboardDirectory, true); } catch (IOException ex) { Settings.Log(ex); } };
     }
     private void OnChanged() => Dispatcher.BeginInvoke(new Action(async () => { if (!closing) await RefreshAsync(); }));
     private void OnMessage(ChatEntry message) => OnChanged();
@@ -123,22 +127,25 @@ internal sealed class MessengerWindow : Window
             <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
               <Grid Margin="6,4">
                 <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" FontSize="{DynamicResource ContactFont}" Margin="0,0,5,4">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Ellipse Width="9" Height="9" Margin="0,0,7,4" VerticalAlignment="Center">
+                  <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="Fill" Value="#89949E"/><Style.Triggers><DataTrigger Binding="{Binding IsOnline}" Value="True"><Setter Property="Fill" Value="#35C878"/></DataTrigger><DataTrigger Binding="{Binding IsGroup}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
+                </Ellipse>
+                <TextBlock Grid.Column="1" Text="{Binding Label}" ToolTip="{Binding FullName}" TextTrimming="CharacterEllipsis" FontSize="{DynamicResource ContactFont}" Margin="0,0,5,4">
                   <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><DataTrigger Binding="{Binding HasUnread}" Value="True"><Setter Property="FontWeight" Value="Bold"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
                 </TextBlock>
-                <Border Grid.Column="1" Background="#1678AB" CornerRadius="10" Padding="6,1" VerticalAlignment="Top">
+                <Border Grid.Column="2" Background="#1678AB" CornerRadius="10" Padding="6,1" VerticalAlignment="Top">
                   <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasUnread}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
                   <TextBlock Text="{Binding Unread}" Foreground="White" FontWeight="Bold" FontSize="11"/>
                 </Border>
-                <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource MutedInk}" FontSize="{DynamicResource DetailFont}"/>
-                <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Text="{Binding TimeLabel}" Foreground="{DynamicResource MutedInk}" FontSize="10" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource MutedInk}" FontSize="{DynamicResource DetailFont}"/>
+                <TextBlock Grid.Row="2" Grid.ColumnSpan="3" Text="{Binding TimeLabel}" Foreground="{DynamicResource MutedInk}" FontSize="10" Margin="0,4,0,0"/>
               </Grid>
             </DataTemplate>
             """) }; ScrollViewer.SetHorizontalScrollBarVisibility(users, ScrollBarVisibility.Disabled); users.SelectionChanged += async (_, _) =>
         {
             if (updating || users.SelectedItem is not ChatContact contact) return;
-            if (peer != contact.Id) { peer = contact.Id; input!.Text = ""; pendingId = null; messages.Clear(); }
+            if (peer != contact.Id) { peer = contact.Id; input!.Text = ""; pendingId = null; pendingFiles.Clear(); RenderPendingFiles(); messages.Clear(); }
             await LoadHistoryAsync();
         }; left.Children.Add(users); Grid.SetRow(left, 1); root.Children.Add(left);
         var right = new DockPanel { Margin = new Thickness(0, 8, 0, 8) };
@@ -153,9 +160,12 @@ internal sealed class MessengerWindow : Window
         Grid.SetColumn(right, 1); Grid.SetRow(right, 1); root.Children.Add(right);
         var composer = new DockPanel(); send = Button("Отправить", async (_, _) => await SendAsync()); DockPanel.SetDock(send, Dock.Right); composer.Children.Add(send);
         var emojiButton = Button("Эмодзи", (_, _) => ShowEmojiPicker()); DockPanel.SetDock(emojiButton, Dock.Left); composer.Children.Add(emojiButton);
+        var fileButton = Button("📎", (_, _) => ChooseFiles()); fileButton.ToolTip = "Прикрепить файлы (до 50 МБ каждый)"; DockPanel.SetDock(fileButton, Dock.Left); composer.Children.Add(fileButton);
         input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxLength = 4000, MinHeight = 75, MaxHeight = 130, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8) };
         input.KeyDown += async (_, e) => { if (e.Key == Key.Enter && Keyboard.Modifiers != ModifierKeys.Shift) { e.Handled = true; await SendAsync(); } }; composer.Children.Add(input);
+        input.PreviewKeyDown += (_, e) => { if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && !sending && input.IsEnabled) { try { if (Clipboard.ContainsImage()) { e.Handled = true; PasteImage(); } else if (Clipboard.ContainsFileDropList()) { e.Handled = true; AddFiles(Clipboard.GetFileDropList().Cast<string>()); } } catch (Exception ex) { error!.Text = "Не удалось вставить вложение: " + ex.Message; } } };
         var composerPanel = new StackPanel(); composerPanel.Children.Add(composer);
+        attachmentsPanel = new WrapPanel { MaxHeight = 110 }; composerPanel.Children.Add(new ScrollViewer { Content = attachmentsPanel, MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); RenderPendingFiles();
         var preview = new ContentControl { MaxHeight = 64, Margin = new Thickness(0, 4, 0, 0), ClipToBounds = true, Visibility = Visibility.Collapsed };
         input.ToolTip = "Фирменные эмодзи показываются в предпросмотре и в отправленном сообщении.";
         input.TextChanged += (_, _) => { preview.Visibility = HelperEmojis.Parse(input.Text).Any() ? Visibility.Visible : Visibility.Collapsed; if (preview.Visibility == Visibility.Visible) preview.Content = HelperEmojis.Render(input.Text, 28, settings.AnimatedChatEmojis); };
@@ -190,7 +200,7 @@ internal sealed class MessengerWindow : Window
             var latest = await client.HistoryAsync(selected); if (selected != peer || closing) return;
             messages = messages.Where(m => selected < 0 ? m.RecipientId == selected : m.SenderId == selected || m.RecipientId == selected).Concat(latest).GroupBy(m => m.Id).Select(g => g.Last()).OrderBy(m => m.Id).ToList();
             title!.Text = contacts.FirstOrDefault(u => u.Id == peer)?.FullName ?? "Диалог";
-            bool writable = contacts.FirstOrDefault(u => u.Id == peer)?.IsActive == true; input!.IsEnabled = writable; send!.IsEnabled = writable;
+            bool writable = contacts.FirstOrDefault(u => u.Id == peer)?.IsActive == true; input!.IsEnabled = writable && !sending; send!.IsEnabled = writable && !sending;
             RenderHistory(scroll!.ScrollableHeight - scroll.VerticalOffset < 5); await MarkReadAsync(); error!.Text = "";
         }
         catch (Exception ex) { if (error != null) error.Text = ex.Message; }
@@ -205,6 +215,10 @@ internal sealed class MessengerWindow : Window
             var panel = new StackPanel();
             if (peer < 0) panel.Children.Add(new TextBlock { Text = message.SenderName ?? "Участник", FontWeight = FontWeights.Bold, Foreground = accent, Margin = new Thickness(0, 0, 0, 5) });
             var body = HelperEmojis.Render(message.Body, Math.Max(32, FontSize * 2.3), settings.AnimatedChatEmojis); body.FontSize = FontSize; body.Foreground = ink; panel.Children.Add(body);
+            foreach (var attachment in message.Attachments ?? [])
+            {
+                var file = Button("", async (_, _) => await OpenFileAsync(attachment)); file.Content = new TextBlock { Text = (attachment.IsImage ? "▧ " : "📎 ") + attachment.Label, TextWrapping = TextWrapping.Wrap }; file.HorizontalContentAlignment = HorizontalAlignment.Left; file.ToolTip = attachment.IsImage ? "Просмотр изображения и скачивание" : "Скачать файл"; panel.Children.Add(file);
+            }
             panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? peer < 0 || message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = Math.Max(11, FontSize - 2), Foreground = muted, Margin = new Thickness(0, 6, 0, 0) });
             history.Children.Add(new Border { Child = panel, Background = mine ? outgoing : incoming, BorderBrush = muted, BorderThickness = new Thickness(settings.ChatTheme == "Contrast" ? 1 : 0), CornerRadius = new CornerRadius(12), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = Math.Max(280, ActualWidth * .48), HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
         }
@@ -246,13 +260,73 @@ internal sealed class MessengerWindow : Window
     }
     private async Task SendAsync()
     {
-        if (send?.IsEnabled != true || peer == 0 || string.IsNullOrWhiteSpace(input?.Text)) return;
-        string text = input.Text.Trim();
-        if (pendingId == null || pendingText != text || pendingPeer != peer) { pendingId = Guid.NewGuid().ToString("N"); pendingText = text; pendingPeer = peer; }
-        send.IsEnabled = false; error!.Text = "Отправляется…";
+        if (sending || send?.IsEnabled != true || peer == 0 || string.IsNullOrWhiteSpace(input?.Text) && pendingFiles.Count == 0) return;
+        string text = input!.Text.Trim();
+        string signature;
+        try { signature = text + string.Join("|", pendingFiles.Select(path => { var file = new FileInfo(path); return path + ":" + file.Length + ":" + file.LastWriteTimeUtc.Ticks; })); }
+        catch (IOException ex) { error!.Text = ex.Message; return; }
+        if (pendingId == null || pendingText != signature || pendingPeer != peer) { pendingId = Guid.NewGuid().ToString("N"); pendingText = signature; pendingPeer = peer; }
+        sending = true; send.IsEnabled = false; input.IsEnabled = false; users!.IsEnabled = false; error!.Text = "Отправляется…";
         int target = peer;
-        try { await client.SendAsync(target, text, pendingId); if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingId = null; } await LoadHistoryAsync(); }
+        try { if (pendingFiles.Count == 0) await client.SendAsync(target, text, pendingId); else await client.SendFilesAsync(target, text, pendingId, pendingFiles.ToArray()); if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingFiles.Clear(); RenderPendingFiles(); pendingId = null; } await LoadHistoryAsync(); }
         catch (Exception ex) { error.Text = ex.Message; }
-        finally { send.IsEnabled = contacts.FirstOrDefault(c => c.Id == peer)?.IsActive == true; }
+        finally { sending = false; users!.IsEnabled = true; input.IsEnabled = send.IsEnabled = contacts.FirstOrDefault(c => c.Id == peer)?.IsActive == true; }
+    }
+    private void ChooseFiles()
+    {
+        if (sending || peer == 0 || input?.IsEnabled != true) return;
+        var dialog = new Microsoft.Win32.OpenFileDialog { Multiselect = true, Filter = "Все файлы|*.*" };
+        if (dialog.ShowDialog(this) == true) AddFiles(dialog.FileNames);
+    }
+    internal void AddFiles(IEnumerable<string> paths)
+    {
+        if (sending || input?.IsEnabled != true || peer == 0) return;
+        try
+        {
+            var proposed = pendingFiles.Concat(paths).Distinct().ToList();
+            if (proposed.Count > 10 || proposed.Any(p => !File.Exists(p) || new FileInfo(p).Length > 50 * 1024 * 1024) || proposed.Sum(p => new FileInfo(p).Length) > 100 * 1024 * 1024) throw new IOException("Не более 10 файлов: до 50 МБ каждый и до 100 МБ всего.");
+            pendingFiles.Clear(); pendingFiles.AddRange(proposed); pendingId = null; RenderPendingFiles();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { error!.Text = ex.Message; }
+    }
+    private void PasteImage()
+    {
+        var bitmap = Clipboard.GetImage(); if (bitmap == null || peer == 0) return;
+        AttachImage(bitmap);
+    }
+    internal void AttachImage(BitmapSource bitmap)
+    {
+        if (bitmap.PixelWidth * (long)bitmap.PixelHeight > 40_000_000) { error!.Text = "Изображение слишком большое. Прикрепите его как файл."; return; }
+        Directory.CreateDirectory(clipboardDirectory); string path = Path.Combine(clipboardDirectory, "Изображение-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N")[..6] + ".png");
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); using (var file = File.Create(path)) encoder.Save(file); AddFiles([path]);
+    }
+    private void RenderPendingFiles()
+    {
+        if (attachmentsPanel == null) return; attachmentsPanel.Children.Clear();
+        foreach (string path in pendingFiles.ToArray()) { var button = Button(Path.GetFileName(path) + " ×", (_, _) => { if (sending) return; pendingFiles.Remove(path); pendingId = null; RenderPendingFiles(); }); button.ToolTip = "Убрать вложение"; attachmentsPanel.Children.Add(button); }
+    }
+    private async Task SaveFileAsync(ChatAttachment file)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog { FileName = file.Name, Filter = "Все файлы|*.*" };
+        if (dialog.ShowDialog(this) != true) return; await client.DownloadAsync(file, dialog.FileName);
+    }
+    private async Task OpenFileAsync(ChatAttachment file)
+    {
+        try
+        {
+            if (!file.IsImage) { await SaveFileAsync(file); return; }
+            Directory.CreateDirectory(clipboardDirectory); string path = Path.Combine(clipboardDirectory, Guid.NewGuid().ToString("N"));
+            try
+            {
+                await client.DownloadAsync(file, path);
+                var panel = new DockPanel { Margin = new Thickness(12) };
+                var download = Button("Скачать изображение", async (_, _) => { try { await SaveFileAsync(file); } catch (Exception ex) { MessageBox.Show(ex.Message, "Скачивание"); } }); DockPanel.SetDock(download, Dock.Bottom); panel.Children.Add(download);
+                try { BitmapSource image; using (var stream = File.OpenRead(path)) { var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None); var frame = decoder.Frames[0]; if ((long)frame.PixelWidth * frame.PixelHeight > 100_000_000 || frame.PixelWidth == 0 || frame.PixelHeight == 0) throw new NotSupportedException(); stream.Position = 0; var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad; bitmap.StreamSource = stream; double scale = Math.Min(1, Math.Min(1600d / frame.PixelWidth, 1200d / frame.PixelHeight)); bitmap.DecodePixelWidth = Math.Max(1, (int)(frame.PixelWidth * scale)); bitmap.EndInit(); bitmap.Freeze(); image = bitmap; } panel.Children.Add(new ScrollViewer { Content = new Image { Source = image, Stretch = Stretch.Uniform }, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); }
+                catch (Exception ex) when (ex is NotSupportedException or IOException or ArgumentException or FormatException) { panel.Children.Add(new TextBlock { Text = "Предпросмотр этого изображения недоступен. Вы можете скачать оригинал.", TextWrapping = TextWrapping.Wrap }); }
+                new Window { Title = file.Name, Content = panel, Owner = this, Width = 800, Height = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = surface, Foreground = ink }.ShowDialog();
+            }
+            finally { if (File.Exists(path)) File.Delete(path); }
+        }
+        catch (Exception ex) { error!.Text = "Не удалось открыть вложение: " + ex.Message; }
     }
 }

@@ -17,7 +17,12 @@ public record ChatContact(int Id, string FullName, string Username, bool IsActiv
     public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : IsOnline ? "● Online" : "○ Offline" : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
     public static IEnumerable<ChatContact> Ordered(IEnumerable<ChatContact> contacts) => contacts.OrderByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastAt).ThenBy(u => u.FullName);
 }
-public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null);
+public record ChatAttachment(string Id, string Name, long Size)
+{
+    public bool IsImage => new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" }.Contains(Path.GetExtension(Name).ToLowerInvariant());
+    public string Label => Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
+}
+public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null);
 internal record ChatMember(int Id, string FullName, string Username, bool IsActive);
 internal record ChatGroupInfo(int Id, string Name, int OwnerId, bool IsClosed, List<ChatMember> Members);
 internal record ChatSession(string Token, int Id, string FullName, string Server);
@@ -47,6 +52,7 @@ internal sealed class MessengerClient : IAsyncDisposable
         if (uri.Scheme == "http") uri = new UriBuilder(uri) { Scheme = "https", Port = uri.IsDefaultPort ? 443 : uri.Port }.Uri;
         if (uri.Scheme != "https" || uri.UserInfo.Length > 0) throw new ArgumentException("Для мессенджера нужен HTTPS.");
         server = uri.AbsoluteUri.TrimEnd('/') + "/";
+        filesHttp.BaseAddress = new Uri(server);
         http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = new Uri(server), Timeout = TimeSpan.FromSeconds(20) };
         // Dedicated handler: Windows credentials are sent only to this server's SSO endpoint.
         windowsHttp = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseDefaultCredentials = true }) { BaseAddress = new Uri(server), Timeout = TimeSpan.FromSeconds(20) };
@@ -96,7 +102,7 @@ internal sealed class MessengerClient : IAsyncDisposable
         catch (Exception ex) { SignInStatus = ex is InvalidOperationException ? ex.Message : "Нет связи с сервером. Автоматическая повторная попытка через минуту."; Settings.Log(ex); }
         finally { loginLock.Release(); Changed?.Invoke(); }
     }
-    private void SetToken() => http.DefaultRequestHeaders.Authorization = session == null ? null : new AuthenticationHeaderValue("Bearer", session.Token);
+    private void SetToken() { http.DefaultRequestHeaders.Authorization = session == null ? null : new AuthenticationHeaderValue("Bearer", session.Token); filesHttp.DefaultRequestHeaders.Authorization = http.DefaultRequestHeaders.Authorization; }
     private async Task ConnectAsync()
     {
         if (!await connectLock.WaitAsync(0, lifetime.Token)) return;
@@ -133,6 +139,32 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal Task<List<ChatContact>> UsersAsync() => Request<List<ChatContact>>("api/messenger/users");
     internal Task<List<ChatEntry>> HistoryAsync(int peer, long? before = null) => Request<List<ChatEntry>>("api/messenger/history/" + peer + (before == null ? "" : "?before=" + before));
     internal Task<ChatEntry> SendAsync(int peer, string text, string clientId) => Request<ChatEntry>("api/messenger/send", new { recipientId = peer, body = text, clientId });
+    internal async Task<ChatEntry> SendFilesAsync(int peer, string text, string clientId, IEnumerable<string> paths)
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(peer.ToString()), "peer"); form.Add(new StringContent(text), "body"); form.Add(new StringContent(clientId), "clientId");
+        foreach (string path in paths) form.Add(new StreamContent(File.OpenRead(path)), "files", Path.GetFileName(path));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); cancellation.CancelAfter(TimeSpan.FromMinutes(5));
+        using var message = new HttpRequestMessage(HttpMethod.Post, "api/messenger/files/send") { Content = form };
+        using var response = await filesHttp.SendAsync(message, cancellation.Token);
+        if (!response.IsSuccessStatusCode) { string error = "Не удалось отправить вложения. Повторите попытку."; try { var data = await response.Content.ReadFromJsonAsync<JsonElement>(Settings.Json, cancellation.Token); if (data.TryGetProperty("error", out var detail)) error = detail.GetString() ?? error; } catch (JsonException) { } throw new InvalidOperationException(error); }
+        return (await response.Content.ReadFromJsonAsync<ChatEntry>(Settings.Json, cancellation.Token))!;
+    }
+    private readonly HttpClient filesHttp = new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
+    internal async Task DownloadAsync(ChatAttachment file, string destination)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); cancellation.CancelAfter(TimeSpan.FromMinutes(5));
+        using var response = await filesHttp.GetAsync("api/messenger/files/" + Uri.EscapeDataString(file.Id), HttpCompletionOption.ResponseHeadersRead, cancellation.Token); response.EnsureSuccessStatusCode();
+        string temp = destination + "." + Guid.NewGuid().ToString("N") + ".part";
+        try
+        {
+            await using (var source = await response.Content.ReadAsStreamAsync(cancellation.Token))
+            await using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
+            { byte[] buffer = new byte[65536]; long total = 0; int count; while ((count = await source.ReadAsync(buffer, cancellation.Token)) > 0) { total += count; if (total > 50 * 1024 * 1024) throw new InvalidDataException("Файл превышает 50 МБ."); await output.WriteAsync(buffer.AsMemory(0, count), cancellation.Token); } }
+            File.Move(temp, destination, true);
+        }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
+    }
     internal Task<ChatGroupInfo> GroupAsync(int peer) => Request<ChatGroupInfo>("api/messenger/groups/" + -peer);
     internal Task<JsonElement> CreateGroupAsync(string name, int[] members) => Request<JsonElement>("api/messenger/groups", new { name, members });
     internal async Task GroupOperationAsync(int peer, string operation, object? body = null)
@@ -152,6 +184,6 @@ internal sealed class MessengerClient : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        lifetime.Cancel(); if (connection != null) await connection.DisposeAsync(); http.Dispose(); windowsHttp.Dispose();
+        lifetime.Cancel(); if (connection != null) await connection.DisposeAsync(); http.Dispose(); windowsHttp.Dispose(); filesHttp.Dispose();
     }
 }

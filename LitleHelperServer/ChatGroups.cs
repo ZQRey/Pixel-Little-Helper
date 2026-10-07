@@ -79,7 +79,8 @@ public static class ChatGroups
         var member = await Member(db, group, user);
         var rows = await db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == group && m.Id > member.JoinedAfterId && (before == null || m.Id < before)).OrderByDescending(m => m.Id).Take(50).ToListAsync();
         var names = await db.Users.Where(u => rows.Select(m => m.SenderId).Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.FullName);
-        return Results.Ok(rows.OrderBy(m => m.Id).Select(m => View(m, member.ReadThroughId, names[m.SenderId])));
+        var result = rows.OrderBy(m => m.Id).Select(m => View(m, member.ReadThroughId, names[m.SenderId])).ToList();
+        await ChatFiles.PopulateAsync(db, result); return Results.Ok(result);
     }
     public static async Task<IResult> SendAsync(ChatSend request, HelperDb db, int user, IHubContext<MessengerHub> hub, ChatGroupGate gate)
     {

@@ -19,7 +19,7 @@ public class MessengerSettings
         }
     }
 }
-public class ChatRetentionWorker(IServiceScopeFactory scopes, MessengerSettings settings, ILogger<ChatRetentionWorker> logger) : BackgroundService
+public class ChatRetentionWorker(IServiceScopeFactory scopes, MessengerSettings settings, IConfiguration config, ILogger<ChatRetentionWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -35,6 +35,7 @@ public class ChatRetentionWorker(IServiceScopeFactory scopes, MessengerSettings 
                     count += await db.ChatGroupMessages.Where(m => m.SentAt < cutoff).ExecuteDeleteAsync(stoppingToken);
                     if (count > 0) logger.LogInformation("Messenger retention removed {Count} messages", count);
                 }
+                using (var scope = scopes.CreateScope()) await ChatFiles.CleanupAsync(scope.ServiceProvider.GetRequiredService<HelperDb>(), config, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
             catch (Exception ex) { logger.LogError(ex, "Messenger retention failed"); }

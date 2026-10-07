@@ -33,7 +33,8 @@ public static class MessengerTests
         string folder = Path.Combine(Path.GetTempPath(), "helper-chat-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(folder);
         var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders(); builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:SigningKey"] = new string('k', 48), ["Jwt:Issuer"] = "test", ["Jwt:Audience"] = "test", ["Messenger:SettingsFile"] = Path.Combine(folder, "messenger.json") });
-        builder.Services.AddDbContext<HelperDb>(o => o.UseSqlite("Data Source=" + Path.Combine(folder, "chat.db")));
+        string? postgres = Environment.GetEnvironmentVariable("HELPER_CHAT_TEST_POSTGRES");
+        builder.Services.AddDbContext<HelperDb>(o => { if (string.IsNullOrEmpty(postgres)) o.UseSqlite("Data Source=" + Path.Combine(folder, "chat.db")); else o.UseNpgsql(postgres); });
         builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSignalR();
         builder.Services.AddSingleton<IMessengerKerberos, Kerberos>(); builder.Services.AddSingleton<IMessengerWindowsDirectory, WindowsDirectory>();
         builder.Services.AddSingleton<ChatGroupGate>();
@@ -156,6 +157,37 @@ public static class MessengerTests
         (await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/leave", new { })).EnsureSuccessStatusCode();
         Check((await a.GetAsync($"api/messenger/history/{groupPeer}")).StatusCode == HttpStatusCode.Forbidden, "leaving closed group revokes access");
         using var invalid = await a.PostAsJsonAsync("api/messenger/send", new ChatSend(bob.Id, new string('x', 4001), Guid.NewGuid().ToString())); Check(invalid.StatusCode == HttpStatusCode.BadRequest, "oversized messages rejected");
+        async Task<HttpResponseMessage> Upload(HttpClient actor, int peer, string key, string filename = "../Документ.exe", byte[]? data = null)
+        {
+            using var form = new MultipartFormDataContent(); form.Add(new StringContent(peer.ToString()), "peer"); form.Add(new StringContent(key), "clientId"); form.Add(new StringContent(""), "body");
+            form.Add(new ByteArrayContent(data ?? [0, 1, 2, 255]), "files", filename); return await actor.PostAsync("api/messenger/files/send", form);
+        }
+        string uploadKey = Guid.NewGuid().ToString("N");
+        using var uploaded = await Upload(a, charlie.Id, uploadKey); uploaded.EnsureSuccessStatusCode(); var fileMessage = (await uploaded.Content.ReadFromJsonAsync<ChatMessage>())!; var personalFile = fileMessage.Attachments.Single();
+        Check(personalFile.Name == "Документ.exe" && fileMessage.Body.Contains("Вложения:"), "all extensions accepted and paths stripped from filenames");
+        Check((await c.GetByteArrayAsync("api/messenger/files/" + personalFile.Id)).SequenceEqual(new byte[] { 0, 1, 2, 255 }), "recipient downloads exact original bytes");
+        using (var download = await a.GetAsync("api/messenger/files/" + personalFile.Id)) Check(download.IsSuccessStatusCode && download.Content.Headers.ContentDisposition?.DispositionType == "attachment" && download.Headers.GetValues("X-Content-Type-Options").Single() == "nosniff", "sender download uses attachment disposition and nosniff");
+        Check((await b.GetAsync("api/messenger/files/" + personalFile.Id)).StatusCode == HttpStatusCode.NotFound && (await anonymous.GetAsync("api/messenger/files/" + personalFile.Id)).StatusCode == HttpStatusCode.Unauthorized, "outsider and anonymous cannot download private files");
+        Check((await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/history/" + alice.Id))!.Single().Attachments.Single().Id == personalFile.Id, "attachment metadata persists in history");
+        using var repeatUpload = await Upload(a, charlie.Id, uploadKey); repeatUpload.EnsureSuccessStatusCode();
+        Check((await repeatUpload.Content.ReadFromJsonAsync<ChatMessage>())!.Id == fileMessage.Id, "upload retry creates no duplicate message or file");
+        Check((await Upload(a, charlie.Id, uploadKey, data: [9])).StatusCode == HttpStatusCode.BadRequest, "upload retry cannot change original bytes");
+        Check((await Upload(a, charlie.Id, Guid.NewGuid().ToString(), data: new byte[50 * 1024 * 1024 + 1])).StatusCode == HttpStatusCode.BadRequest, "file over 50 MB is rejected");
+        using var fileGroupCreated = await a.PostAsJsonAsync("api/messenger/groups", new GroupCreate("Вложения", [bob.Id])); fileGroupCreated.EnsureSuccessStatusCode(); int filePeer = (await fileGroupCreated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
+        using var groupUpload = await Upload(a, filePeer, Guid.NewGuid().ToString(), "photo.png"); groupUpload.EnsureSuccessStatusCode(); var groupFileMessage = (await groupUpload.Content.ReadFromJsonAsync<ChatMessage>())!; string groupFile = groupFileMessage.Attachments.Single().Id;
+        Check((await b.GetAsync("api/messenger/files/" + groupFile)).IsSuccessStatusCode, "group member can download attachment");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/invite", new GroupUser(charlie.Id))).EnsureSuccessStatusCode();
+        Check((await c.GetAsync("api/messenger/files/" + groupFile)).StatusCode == HttpStatusCode.NotFound, "new member cannot download files sent before joining");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/remove", new GroupUser(bob.Id))).EnsureSuccessStatusCode();
+        Check((await b.GetAsync("api/messenger/files/" + groupFile)).StatusCode == HttpStatusCode.NotFound, "removed group member loses file access");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/close", new { })).EnsureSuccessStatusCode();
+        Check((await Upload(a, filePeer, Guid.NewGuid().ToString())).StatusCode == HttpStatusCode.BadRequest, "closed group rejects attachment uploads");
+        using (var cleanupScope = app.Services.CreateScope())
+        {
+            var cleanupDb = cleanupScope.ServiceProvider.GetRequiredService<HelperDb>(); await cleanupDb.ChatMessages.Where(m => m.Id == fileMessage.Id).ExecuteDeleteAsync();
+            await ChatFiles.CleanupAsync(cleanupDb, builder.Configuration, default);
+            Check(!File.Exists(Path.Combine(ChatFiles.Folder(builder.Configuration), personalFile.Id)) && !await cleanupDb.ChatFiles.AnyAsync(f => f.Id == personalFile.Id), "retention removes attachment metadata and stored file");
+        }
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<HelperDb>();

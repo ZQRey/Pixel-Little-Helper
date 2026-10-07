@@ -11,6 +11,7 @@ namespace LitleHelperServer;
 public class ChatMessage
 {
     [System.ComponentModel.DataAnnotations.Schema.NotMapped] public string? SenderName { get; set; }
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public List<ChatFileInfo> Attachments { get; set; } = [];
     public long Id { get; set; }
     public int SenderId { get; set; }
     public int RecipientId { get; set; }
@@ -78,6 +79,7 @@ public static class Messenger
         await db.Database.ExecuteSqlRawAsync(sql); // Types above are fixed literals, never request data.
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ChatMessages_SenderId_ClientId\" ON \"ChatMessages\" (\"SenderId\", \"ClientId\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatMessages_RecipientId_Id\" ON \"ChatMessages\" (\"RecipientId\", \"Id\")");
+        await ChatFiles.EnsureSchemaAsync(db);
     }
     private static string Token(PanelUser user, IConfiguration config)
     {
@@ -147,6 +149,7 @@ public static class Messenger
         }).RequireRateLimiting("login");
         var api = app.MapGroup("/api/messenger").RequireAuthorization("Panel");
         ChatGroups.Map(api);
+        ChatFiles.Map(api);
         api.AddEndpointFilter(async (context, next) => context.HttpContext.RequestServices.GetRequiredService<MessengerSettings>().Value.Enabled ? await next(context) : Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403));
         api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName }; });
         api.MapGet("/users", async (HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>
@@ -160,7 +163,8 @@ public static class Messenger
         {
             var me = await UserAsync(db, p);
             if (peer < 0) return await ChatGroups.HistoryAsync(ChatGroups.IdFromPeer(peer), before, db, me.Id);
-            return Results.Ok((await db.ChatMessages.AsNoTracking().Where(m => (m.SenderId == me.Id && m.RecipientId == peer || m.SenderId == peer && m.RecipientId == me.Id) && (before == null || m.Id < before)).OrderByDescending(m => m.Id).Take(50).ToListAsync()).OrderBy(m => m.Id));
+            var rows = (await db.ChatMessages.AsNoTracking().Where(m => (m.SenderId == me.Id && m.RecipientId == peer || m.SenderId == peer && m.RecipientId == me.Id) && (before == null || m.Id < before)).OrderByDescending(m => m.Id).Take(50).ToListAsync()).OrderBy(m => m.Id).ToList();
+            await ChatFiles.PopulateAsync(db, rows); return Results.Ok(rows);
         });
         api.MapPost("/send", async (ChatSend request, HelperDb db, ClaimsPrincipal p, IHubContext<MessengerHub> hub, ChatGroupGate gate) =>
         {

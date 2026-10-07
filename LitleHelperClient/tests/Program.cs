@@ -276,7 +276,7 @@ try
     Check(((System.Windows.Controls.Grid)chatWindow.Content).ColumnDefinitions.Count == 2, "messenger provides directory and conversation panes");
     var mainBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); mainBitmap.Render(chatWindow); var mainPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); mainPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(mainBitmap)); using (var mainImage = File.Create(chatPreview.Replace("login", "dialogue"))) mainPng.Save(mainImage);
     typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, -3);
-    typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, привет! :helper_wave: :helper_joy:", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Обновление работает :helper_thanks: :helper_party:", "group2", DateTime.UtcNow, null, "Артём Шпынов") });
+    typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, привет! :helper_wave: :helper_joy:", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Обновление работает :helper_thanks: :helper_party:", "group2", DateTime.UtcNow, null, "Артём Шпынов", [new("preview-image", "Image.png", 2048), new("preview-document", "Document.pdf", 15360)]) });
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
     var groupBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); groupBitmap.Render(chatWindow); var groupPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); groupPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(groupBitmap)); using (var groupImage = File.Create(chatPreview.Replace("login", "groups"))) groupPng.Save(groupImage);
     var appearanceSettings = (Settings)typeof(MessengerWindow).GetField("settings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
@@ -291,7 +291,16 @@ try
         var themedBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); themedBitmap.Render(chatWindow);
         var themedPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); themedPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(themedBitmap)); using var themedFile = File.Create(chatPreview.Replace("login", theme)); themedPng.Save(themedFile);
     }
-    chatWindow.Close(); chatClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    string attachmentPath = Path.Combine(temp, "sample.unknown"); File.WriteAllBytes(attachmentPath, [1, 2, 3]);
+    chatWindow.AddFiles([attachmentPath]);
+    var pendingAttachments = (List<string>)typeof(MessengerWindow).GetField("pendingFiles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    Check(pendingAttachments.Count == 1, "composer accepts arbitrary file extension");
+    var imagePixels = new byte[16 * 16 * 4]; Array.Fill<byte>(imagePixels, 255);
+    chatWindow.AttachImage(System.Windows.Media.Imaging.BitmapSource.Create(16, 16, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null, imagePixels, 16 * 4));
+    Check(pendingAttachments.Count == 2 && File.ReadAllBytes(pendingAttachments[1]).Take(8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }), "pasted image encoded as PNG attachment");
+    string tooLarge = Path.Combine(temp, "oversize.bin"); using (var large = File.Create(tooLarge)) large.SetLength(50 * 1024 * 1024 + 1);
+    chatWindow.AddFiles([tooLarge]); Check(pendingAttachments.Count == 2, "oversized selection leaves existing attachments intact");
+    string pastedFile = pendingAttachments[1]; chatWindow.Close(); Check(!File.Exists(pastedFile) && File.Exists(attachmentPath), "window cleanup removes only owned temporary images"); chatClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

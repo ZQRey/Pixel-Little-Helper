@@ -91,6 +91,7 @@ public class TicketRecord
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatFile> ChatFiles => Set<ChatFile>();
     public DbSet<ChatGroup> ChatGroups => Set<ChatGroup>();
     public DbSet<ChatGroupMember> ChatGroupMembers => Set<ChatGroupMember>();
     public DbSet<ChatGroupMessage> ChatGroupMessages => Set<ChatGroupMessage>();

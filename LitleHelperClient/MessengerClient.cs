@@ -7,7 +7,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace PixelHelper;
-public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false)
+public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false, bool IsAdmin = false)
 {
     public string Label => (Pinned ? "📌 " : "") + (IsGroup ? "👥 " : "") + FullName + (Muted ? " · ◌" : "");
     public string DirectoryLabel => FullName + " (" + Username + ")";
@@ -23,13 +23,14 @@ public record ChatAttachment(string Id, string Name, long Size)
     public bool IsImage => new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" }.Contains(Path.GetExtension(Name).ToLowerInvariant());
     public string Label => Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
 }
-public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null);
-internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false)
+public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null, bool IsSystem = false);
+internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false, bool IsAdmin = false, bool IsOwner = false)
 {
     public string Label => (IsOnline ? "● " : "○ ") + FullName;
-    public string Detail => SuspendedUntil != null ? "Отключён до " + SuspendedUntil.Value.ToLocalTime().ToString("dd.MM HH:mm") : Username;
+    public string Detail => (IsOwner ? "Создатель · " : IsAdmin ? "Администратор · " : "") + (SuspendedUntil != null ? "Отключён до " + SuspendedUntil.Value.ToLocalTime().ToString("dd.MM HH:mm") : Username);
 }
-internal record ChatGroupInfo(int Id, string Name, int OwnerId, bool IsClosed, List<ChatMember> Members);
+internal record ChatGroupEvent(string Id, string Body, DateTime SentAt);
+internal record ChatGroupInfo(int Id, string Name, int OwnerId, bool IsClosed, List<ChatMember> Members, List<ChatGroupEvent>? Events = null);
 internal record ChatSession(string Token, int Id, string FullName, string Server);
 internal record ChatPreference(int Peer,bool Pinned,bool Favourite,bool Muted);
 internal record ReactionInfo(string Emoji,int Count,bool Mine);

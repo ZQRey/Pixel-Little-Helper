@@ -11,6 +11,8 @@ internal sealed class MessengerWindow : Window
 {
     private readonly MessengerClient client;
     private readonly Settings settings;
+    private List<ChatGroupEvent> groupEvents = [];
+    private int eventsPeer;
     private readonly Grid root = new() { Margin = new Thickness(12) };
     private Brush surface = Brushes.White, ink = Brushes.Black, muted = Brushes.Gray, incoming = Brushes.White, outgoing = Brushes.LightCyan, accent = Brushes.Teal;
     private void ApplyTheme()
@@ -156,6 +158,12 @@ internal sealed class MessengerWindow : Window
         var groupSettings = new MenuItem { Header="Настройки группы…" };
         groupSettings.Click += async (_,_) => { if (users.SelectedItem is not ChatContact { IsGroup:true } group) return; new ChatGroupWindow(client,group.Id,settings) { Owner=this }.ShowDialog(); await RefreshAsync(); };
         contactMenu.Items.Add(groupSettings);
+        foreach (var (label,operation) in new[] { ("Выйти из группы…","leave"),("Удалить группу…","delete") })
+        {
+            var item=new MenuItem { Header=label }; contactMenu.Items.Add(item);
+            contactMenu.Opened += (_,_) => item.Visibility=users.SelectedItem is ChatContact { IsGroup:true } c && (operation=="leave" || c.OwnerId==client.UserId) ? Visibility.Visible : Visibility.Collapsed;
+            item.Click += async (_,_) => { if (users.SelectedItem is not ChatContact { IsGroup:true } group) return; if (MessageBox.Show(this,operation=="delete" ? "Удалить «" + group.FullName + "» для всех участников? История сохранится на сервере." : "Выйти из «" + group.FullName + "»?",Title,MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;try { await client.GroupOperationAsync(group.Id,operation); await RefreshAsync(); }catch(Exception ex){error!.Text=ex.Message;} };
+        }
         foreach(var (label,kind) in new[]{("Закрепить / открепить","pin"),("Избранное / убрать","favourite"),("Без звука / включить","mute")})
         {var item=new MenuItem { Header=label };item.Click+=async(_,_)=>{if(users.SelectedItem is not ChatContact c)return;try{await client.PreferenceAsync(c.Id,kind=="pin"?!c.Pinned:c.Pinned,kind=="favourite"?!c.Favourite:c.Favourite,kind=="mute"?!c.Muted:c.Muted);await RefreshAsync();}catch(Exception ex){error!.Text=ex.Message;}};contactMenu.Items.Add(item);}
         contactMenu.Opened += async (_,_) =>
@@ -163,7 +171,7 @@ internal sealed class MessengerWindow : Window
             groupSettings.Visibility = users.SelectedItem is ChatContact { IsGroup:true } ? Visibility.Visible : Visibility.Collapsed;
             invite.Items.Clear(); invite.IsEnabled=users.SelectedItem is ChatContact { IsGroup:false, IsActive:true };
             if (users.SelectedItem is not ChatContact selected || !invite.IsEnabled) return;
-            foreach (var group in contacts.Where(c => c.IsGroup && c.IsActive && c.OwnerId == client.UserId))
+            foreach (var group in contacts.Where(c => c.IsGroup && c.IsActive && (c.OwnerId == client.UserId || c.IsAdmin)))
             {
                 try { var info=await client.GroupAsync(group.Id); if (info.Members.Any(m=>m.Id==selected.Id)) continue; var item=new MenuItem { Header=group.FullName }; item.Click += async (_,_) => { if (MessageBox.Show(this,"Добавить " + selected.FullName + " в «" + group.FullName + "»?",Title,MessageBoxButton.YesNo) != MessageBoxResult.Yes) return; try { await client.GroupOperationAsync(group.Id,"invite",new { userId=selected.Id }); await RefreshAsync(); } catch(Exception ex) { error!.Text=ex.Message; } }; invite.Items.Add(item); } catch(Exception ex) { error!.Text=ex.Message; }
             }
@@ -223,6 +231,8 @@ internal sealed class MessengerWindow : Window
         try
         {
             var latest = await client.HistoryAsync(selected); if (selected != peer || closing) return;
+            var events = selected < 0 ? (await client.GroupAsync(selected)).Events ?? [] : [];
+            if (selected != peer || closing) return; groupEvents=events; eventsPeer=selected;
             reactions=await client.ReactionsAsync(selected,latest.Select(m=>m.Id));if(selected!=peer||closing)return;
             messages = messages.Where(m => selected < 0 ? m.RecipientId == selected : m.SenderId == selected || m.RecipientId == selected).Concat(latest).GroupBy(m => m.Id).Select(g => g.Last()).OrderBy(m => m.Id).ToList();
             title!.Text = contacts.FirstOrDefault(u => u.Id == peer)?.FullName ?? "Диалог";
@@ -237,10 +247,12 @@ internal sealed class MessengerWindow : Window
         history!.Children.Clear();
         if (messages.Count == 0) history.Children.Add(new TextBlock { Text = "Начните переписку", Foreground = muted, Margin = new Thickness(12) });
         DateTime? date = null;
-        foreach (var message in messages.Concat(pendingMessage != null && pendingMessage.RecipientId==peer ? new[]{pendingMessage} : Array.Empty<ChatEntry>()))
+        var systemEntries = eventsPeer==peer && peer<0 ? groupEvents.Where(e=>messages.Count==0 || e.SentAt>=messages.Min(m=>m.SentAt)).Select(e=>new ChatEntry(-1,0,peer,e.Body,e.Id,e.SentAt,null,IsSystem:true)) : [];
+        foreach (var message in messages.Concat(systemEntries).Concat(pendingMessage != null && pendingMessage.RecipientId==peer ? new[]{pendingMessage} : Array.Empty<ChatEntry>()).OrderBy(m=>m.SentAt))
         {
             var day = message.SentAt.ToLocalTime().Date;
             if (date != day) { history.Children.Add(new TextBlock { Text=day.ToString("dd MMMM"), HorizontalAlignment=HorizontalAlignment.Center, Foreground=muted, FontSize=Math.Max(11,FontSize-2), Margin=new Thickness(0,10,0,10) }); date=day; }
+            if (message.IsSystem) { history.Children.Add(new TextBlock { Text=message.SentAt.ToLocalTime().ToString("HH:mm") + " · " + message.Body, Foreground=muted, TextWrapping=TextWrapping.Wrap, HorizontalAlignment=HorizontalAlignment.Center, Margin=new Thickness(12,8,12,8), MaxWidth=600 }); continue; }
             bool mine = message.SenderId == client.UserId;
             var panel = new StackPanel();
             if(message.Id==0){panel.Children.Add(new TextBlock {Text=message.Body,TextWrapping=TextWrapping.Wrap});panel.Children.Add(new TextBlock {Text=pendingFailed?"Ошибка · повторите отправку":"Отправляется…",FontSize=11,Foreground=Brushes.White});history.Children.Add(new Border {Child=panel,Background=outgoing,CornerRadius=new CornerRadius(16),Padding=new Thickness(12),Margin=new Thickness(4),MaxWidth=500,HorizontalAlignment=HorizontalAlignment.Right});continue;}
@@ -305,11 +317,13 @@ internal sealed class MessengerWindow : Window
             foreach(var member in info.Members)
             {
                 var row=Button("",(_,_)=>{}); row.Content=new StackPanel { Children = { new TextBlock { Text=member.Label, TextWrapping=TextWrapping.Wrap }, new TextBlock { Text=member.Id == info.OwnerId ? "Создатель" : member.Detail, FontSize=11, Foreground=muted, TextWrapping=TextWrapping.Wrap } } };
-                if (info.OwnerId==client.UserId && !info.IsClosed && member.Id!=client.UserId)
+                bool owner=info.OwnerId==client.UserId;
+                if ((owner || info.Members.Any(m => m.Id==client.UserId && m.IsAdmin)) && !info.IsClosed && member.Id!=client.UserId && member.Id!=info.OwnerId && (owner || !member.IsAdmin))
                 {
                     var menu=new ContextMenu { Background=surface,Foreground=ink };
                     void Add(string label,string operation,int minutes=0) { var item=new MenuItem { Header=label }; item.Click += async (_,_) => { if (MessageBox.Show(this,label + " — " + member.FullName + "?",Title,MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes) return; try { await client.GroupOperationAsync(selected,operation,new { userId=member.Id,minutes }); await RefreshAsync(); } catch(Exception ex) { error!.Text=ex.Message; } }; menu.Items.Add(item); }
                     Add("Удалить из группы","remove"); Add("Отключить на 1 час","suspend",60); Add("Отключить на 1 день","suspend",1440); Add("Восстановить доступ","resume"); row.ContextMenu=menu;
+                    if (owner) { Add(member.IsAdmin ? "Снять права администратора" : "Назначить администратором",member.IsAdmin ? "unadmin" : "admin"); Add("Передать владение","owner"); }
                 }
                 details.Children.Add(row);
             }

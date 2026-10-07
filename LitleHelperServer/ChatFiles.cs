@@ -51,7 +51,7 @@ public static class ChatFiles
             var file = await db.ChatFiles.AsNoTracking().SingleOrDefaultAsync(f => f.Id == id); if (file == null) return Results.NotFound();
             bool allowed;
             if (file.PeerId < 0)
-                allowed = await db.ChatGroupMembers.AnyAsync(m => m.GroupId == -file.PeerId && m.UserId == me.Id && m.JoinedAfterId < file.MessageId) && await db.ChatGroupMessages.AnyAsync(m => m.Id == file.MessageId && m.GroupId == -file.PeerId && m.SenderId == file.SenderId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == me.Id && (r.EndsAt > DateTime.UtcNow || m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt)));
+                allowed = await db.ChatGroups.AnyAsync(g => g.Id == -file.PeerId && !g.IsDeleted) && await db.ChatGroupMembers.AnyAsync(m => m.GroupId == -file.PeerId && m.UserId == me.Id && m.JoinedAfterId < file.MessageId) && await db.ChatGroupMessages.AnyAsync(m => m.Id == file.MessageId && m.GroupId == -file.PeerId && m.SenderId == file.SenderId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == me.Id && (r.EndsAt > DateTime.UtcNow || m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt)));
             else allowed = (me.Id == file.SenderId || me.Id == file.PeerId) && await db.ChatMessages.AnyAsync(m => m.Id == file.MessageId && m.SenderId == file.SenderId && m.RecipientId == file.PeerId);
             if (!allowed) return Results.NotFound();
             string path = Path.Combine(Folder(config), file.PathKey); if (!File.Exists(path)) return Results.NotFound();

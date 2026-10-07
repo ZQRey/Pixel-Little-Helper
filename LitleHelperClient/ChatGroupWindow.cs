@@ -51,7 +51,7 @@ internal sealed class ChatGroupWindow : Window
             }
             else
             {
-                var info = await client.GroupAsync(peer); bool owner = info.OwnerId == client.UserId && !info.IsClosed;
+                var info = await client.GroupAsync(peer); bool owner = info.OwnerId == client.UserId; bool manage = !info.IsClosed && (owner || info.Members.Any(m => m.Id == client.UserId && m.IsAdmin));
                 panel.Children.Add(new TextBlock { Text = info.Name, FontSize = FontSize + 6, TextWrapping = TextWrapping.Wrap }); panel.Children.Add(new TextBlock { Text = info.Members.Count + " участников" + (info.IsClosed ? " · Закрыта" : ""), Margin = new Thickness(0,5,0,12) });
                 var members = new ListBox { ItemsSource = info.Members, Height = 230, ItemTemplate = (DataTemplate)XamlReader.Parse("""
                     <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"><StackPanel Margin="4,6"><TextBlock Text="{Binding Label}" FontWeight="SemiBold"/><TextBlock Text="{Binding Detail}" Opacity="0.7" FontSize="11"/></StackPanel></DataTemplate>
@@ -59,20 +59,26 @@ internal sealed class ChatGroupWindow : Window
                 members.PreviewMouseRightButtonDown += (_, e) => { if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(members,source) is ListBoxItem item) members.SelectedItem=item.DataContext; };
                 var menu = new ContextMenu();
                 void Action(string label, Func<ChatMember,Task> action) { var item = new MenuItem { Header = label }; item.Click += async (_, _) => { if (members.SelectedItem is ChatMember m) await Run(() => action(m)); }; menu.Items.Add(item); }
-                if (owner)
+                if (manage)
                 {
                     Action("Удалить из группы", async m => { if (Confirm("Удалить " + m.FullName + " из группы?")) { await client.GroupOperationAsync(peer,"remove",new { userId = m.Id }); await LoadAsync(); } });
                     Action("Временно отключить…", async m => { int? minutes = Interval(); if (minutes != null && Confirm("Отключить " + m.FullName + " на " + minutes + " минут?")) { await client.GroupOperationAsync(peer,"suspend",new { userId=m.Id, minutes }); await LoadAsync(); } });
                     Action("Восстановить доступ", async m => { if (Confirm("Восстановить доступ " + m.FullName + "?")) { await client.GroupOperationAsync(peer,"resume",new { userId=m.Id, minutes=0 }); await LoadAsync(); } });
-                    Action("Передать владение", async m => { if (Confirm("Передать группу " + m.FullName + "?")) { await client.GroupOperationAsync(peer,"owner",new { userId=m.Id }); await LoadAsync(); } });
-                    menu.Opened += (_, _) => { foreach (MenuItem item in menu.Items) item.IsEnabled = members.SelectedItem is ChatMember m && m.Id != info.OwnerId; }; members.ContextMenu = menu;
+                    if (owner)
+                    {
+                        Action("Назначить администратором", async m => { if (Confirm("Выдать права администратора группы " + m.FullName + "?")) { await client.GroupOperationAsync(peer,"admin",new { userId=m.Id }); await LoadAsync(); } });
+                        Action("Снять права администратора", async m => { if (Confirm("Снять права администратора группы " + m.FullName + "?")) { await client.GroupOperationAsync(peer,"unadmin",new { userId=m.Id }); await LoadAsync(); } });
+                        Action("Передать владение", async m => { if (Confirm("Передать группу " + m.FullName + "?")) { await client.GroupOperationAsync(peer,"owner",new { userId=m.Id }); await LoadAsync(); } });
+                    }
+                    menu.Opened += (_, _) => { foreach (MenuItem item in menu.Items) item.IsEnabled = members.SelectedItem is ChatMember m && m.Id != info.OwnerId && m.Id != client.UserId && (owner || !m.IsAdmin); }; members.ContextMenu = menu;
                     panel.Children.Add(new TextBlock { Text = "Правый клик по участнику — управление", Opacity = .7, Margin = new Thickness(0,6,0,10) });
                     var rename = new TextBox { Text = info.Name, MaxLength = 80 }; panel.Children.Add(rename); panel.Children.Add(Button("Сохранить название", async () => { await client.GroupOperationAsync(peer,"rename",new { name=rename.Text }); await LoadAsync(); }));
                     panel.Children.Add(new TextBlock { Text = "Пригласить сотрудника", Margin = new Thickness(0,15,0,0) }); var available = Directory(contacts.Where(c => info.Members.All(m => m.Id != c.Id)).ToList(), false);
                     panel.Children.Add(Button("Пригласить выбранного", async () => { if (available.SelectedItem is not ChatContact u) throw new InvalidOperationException("Выберите сотрудника."); await client.GroupOperationAsync(peer,"invite",new { userId=u.Id }); await LoadAsync(); }));
-                    panel.Children.Add(Button("Закрыть группу", async () => { if (Confirm("Закрыть группу? История останется доступна.")) { await client.GroupOperationAsync(peer,"close"); await LoadAsync(); } }));
                 }
+                if (owner) panel.Children.Add(Button("Удалить группу", async () => { if (Confirm("Удалить группу для всех участников? Она исчезнет из списка чатов. История и файлы сохранятся на сервере.")) { await client.GroupOperationAsync(peer,"delete"); DialogResult = true; } }));
                 panel.Children.Add(Button("Выйти из группы", async () => { if (Confirm("Выйти из группы?")) { await client.GroupOperationAsync(peer,"leave"); DialogResult = true; } }));
+                if (info.Events?.Count > 0) { panel.Children.Add(new TextBlock { Text="События группы", Margin=new Thickness(0,16,0,6), FontWeight=FontWeights.SemiBold }); foreach (var entry in info.Events) panel.Children.Add(new TextBlock { Text=entry.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + " · " + entry.Body, TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,4,0,4) }); }
             }
             panel.Children.Add(status);
         }

@@ -175,7 +175,8 @@ public static class MessengerTests
         (await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/owner", new GroupUser(charlie.Id))).EnsureSuccessStatusCode();
         Check((await a.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(bob.Id))).StatusCode == HttpStatusCode.Forbidden, "former owner cannot invite participants");
         (await c.PostAsJsonAsync($"api/messenger/groups/{groupId}/invite", new GroupUser(bob.Id))).EnsureSuccessStatusCode();
-        Check((await b.GetFromJsonAsync<JsonElement>($"api/messenger/history/{groupPeer}")).GetArrayLength() == 0, "reinvited member does not regain old history");
+        var returningHistory = await b.GetFromJsonAsync<List<ChatMessage>>($"api/messenger/history/{groupPeer}");
+        Check(returningHistory!.Count == 2 && returningHistory.All(m => !m.Body.StartsWith("Group message")), "reinvited member retains previously accessible history and cannot read messages during absence");
         (await c.PostAsJsonAsync($"api/messenger/groups/{groupId}/rename", new GroupUpdate("Новая группа"))).EnsureSuccessStatusCode();
         (await c.PostAsJsonAsync($"api/messenger/groups/{groupId}/close", new { })).EnsureSuccessStatusCode();
         Check((await a.PostAsJsonAsync("api/messenger/send", new ChatSend(groupPeer, "Closed", Guid.NewGuid().ToString()))).StatusCode == HttpStatusCode.BadRequest, "closed group rejects messages");
@@ -224,6 +225,27 @@ public static class MessengerTests
             await ChatFiles.CleanupAsync(cleanupDb, builder.Configuration, default);
             Check(!File.Exists(Path.Combine(ChatFiles.Folder(builder.Configuration), personalFile.Id)) && !await cleanupDb.ChatFiles.AnyAsync(f => f.Id == personalFile.Id), "retention removes attachment metadata and stored file");
         }
+        using var roleGroupResponse = await a.PostAsJsonAsync("api/messenger/groups", new GroupCreate("Роли", [bob.Id,charlie.Id])); roleGroupResponse.EnsureSuccessStatusCode();
+        int rolePeer = (await roleGroupResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32(), roleId = -rolePeer;
+        async Task<HttpStatusCode> Operation(HttpClient actor,string op,object body) { using var response=await actor.PostAsJsonAsync($"api/messenger/groups/{roleId}/{op}",body); return response.StatusCode; }
+        Check(await Operation(b,"admin",new GroupUser(charlie.Id))==HttpStatusCode.Forbidden,"participant cannot appoint group administrators");
+        Check(await Operation(a,"admin",new GroupUser(bob.Id))==HttpStatusCode.OK,"creator appoints administrator");
+        Check((await b.GetFromJsonAsync<JsonElement>($"api/messenger/groups/{roleId}")).GetProperty("members").EnumerateArray().Single(m=>m.GetProperty("id").GetInt32()==bob.Id).GetProperty("isAdmin").GetBoolean(),"group API exposes administrator role");
+        Check(await Operation(b,"rename",new GroupUpdate("Администратор изменил название"))==HttpStatusCode.OK,"group administrator can rename");
+        Check(await Operation(b,"remove",new GroupUser(alice.Id))==HttpStatusCode.Forbidden && await Operation(b,"suspend",new GroupSuspend(alice.Id,60))==HttpStatusCode.Forbidden,"administrator cannot remove or suspend creator");
+        Check(await Operation(b,"delete",new{})==HttpStatusCode.Forbidden && await Operation(b,"owner",new GroupUser(charlie.Id))==HttpStatusCode.Forbidden && await Operation(b,"admin",new GroupUser(charlie.Id))==HttpStatusCode.Forbidden,"administrator cannot delete transfer ownership or grant roles");
+        Check(await Operation(a,"admin",new GroupUser(charlie.Id))==HttpStatusCode.OK,"creator appoints multiple administrators");
+        Check(await Operation(b,"remove",new GroupUser(charlie.Id))==HttpStatusCode.Forbidden && await Operation(b,"resume",new GroupSuspend(charlie.Id,0))==HttpStatusCode.Forbidden,"administrator cannot manage another administrator");
+        Check(await Operation(a,"unadmin",new GroupUser(charlie.Id))==HttpStatusCode.OK && await Operation(b,"remove",new GroupUser(charlie.Id))==HttpStatusCode.OK,"administrator can exclude ordinary member");
+        Check((await c.GetAsync($"api/messenger/groups/{roleId}")).StatusCode==HttpStatusCode.Forbidden,"excluded member cannot read roles or group events");
+        Check(await Operation(b,"invite",new GroupUser(charlie.Id))==HttpStatusCode.OK,"administrator can invite member");
+        Check(await Operation(a,"unadmin",new GroupUser(bob.Id))==HttpStatusCode.OK && await Operation(b,"rename",new GroupUpdate("Denied"))==HttpStatusCode.Forbidden,"revoked administrator loses management rights immediately");
+        Check(await Operation(c,"leave",new{})==HttpStatusCode.OK && (await c.GetAsync($"api/messenger/history/{rolePeer}")).StatusCode==HttpStatusCode.Forbidden,"ordinary member can leave and loses group access");
+        using var deletionUpload = await Upload(a,rolePeer,Guid.NewGuid().ToString(),"retained.bin"); deletionUpload.EnsureSuccessStatusCode(); var retainedFile=(await deletionUpload.Content.ReadFromJsonAsync<ChatMessage>())!.Attachments.Single().Id;
+        Check(await Operation(a,"delete",new{})==HttpStatusCode.OK,"creator can delete group for everyone");
+        Check(!(await b.GetFromJsonAsync<JsonElement>("api/messenger/users")).EnumerateArray().Any(g=>g.GetProperty("id").GetInt32()==rolePeer),"deleted group disappears from all chat lists");
+        Check((await a.GetAsync($"api/messenger/history/{rolePeer}")).StatusCode==HttpStatusCode.Forbidden && (await b.GetAsync("api/messenger/files/"+retainedFile)).StatusCode==HttpStatusCode.NotFound,"deleted group denies history and file access even to creator");
+        using(var auditScope=app.Services.CreateScope()) { var auditDb=auditScope.ServiceProvider.GetRequiredService<HelperDb>(); Check(await auditDb.ChatGroupMessages.AnyAsync(m=>m.GroupId==roleId) && await auditDb.ChatFiles.AnyAsync(f=>f.Id==retainedFile) && await auditDb.ChatGroupEvents.CountAsync(e=>e.GroupId==roleId)==9,"deletion retains history files and audited role actions on server"); }
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<HelperDb>();

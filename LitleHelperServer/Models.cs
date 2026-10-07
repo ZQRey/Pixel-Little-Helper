@@ -97,6 +97,8 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<ChatPreference> ChatPreferences => Set<ChatPreference>();
     public DbSet<ChatReaction> ChatReactions => Set<ChatReaction>();
     public DbSet<ChatGroup> ChatGroups => Set<ChatGroup>();
+    public DbSet<ChatGroupEvent> ChatGroupEvents => Set<ChatGroupEvent>();
+    public DbSet<ChatGroupDeparture> ChatGroupDepartures => Set<ChatGroupDeparture>();
     public DbSet<ChatGroupMember> ChatGroupMembers => Set<ChatGroupMember>();
     public DbSet<ChatGroupMessage> ChatGroupMessages => Set<ChatGroupMessage>();
     public DbSet<TelegramBotState> TelegramBotStates => Set<TelegramBotState>();
@@ -113,6 +115,7 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<ChatGroupMember>().HasKey(m => new { m.GroupId, m.UserId });
+        b.Entity<ChatGroupDeparture>().HasKey(m => new { m.GroupId, m.UserId });
         b.Entity<ChatGroup>().HasOne<PanelUser>().WithMany().HasForeignKey(g => g.OwnerId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<ChatGroupMember>().HasOne<ChatGroup>().WithMany().HasForeignKey(m => m.GroupId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<ChatGroupMember>().HasOne<PanelUser>().WithMany().HasForeignKey(m => m.UserId).OnDelete(DeleteBehavior.Restrict);

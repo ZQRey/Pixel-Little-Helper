@@ -1,5 +1,29 @@
 name: pixel-little-helper
 services:
+  init-tls:
+    build: ./tls
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/helper/init-tls.sh"]
+    volumes:
+      - tls-data:/etc/helper-tls
+  proxy:
+    build: ./tls
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - tls-data:/etc/helper-tls
+    depends_on:
+      init-tls:
+        condition: service_completed_successfully
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
   init-secrets:
     image: postgres:16-alpine
     restart: "no"
@@ -26,8 +50,8 @@ services:
   server:
     build: .
     restart: unless-stopped
-    ports:
-      - "80:5000"
+    expose:
+      - "5000"
     environment:
       ASPNETCORE_URLS: http://+:5000
       Database__Provider: Postgres
@@ -71,6 +95,7 @@ services:
       timeout: 5s
       retries: 20
 volumes:
+  tls-data:
   postgres-data:
   server-data:
   generated-secrets:

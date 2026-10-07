@@ -171,7 +171,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         await tickets.SyncAsync(ticket, token);
         if (!(await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)) throw new UnauthorizedAccessException("Эта заявка назначена другому исполнителю.");
         var history = await glpi.FollowupsAsync(ticket.GlpiId, token);
-        string comments = string.Join("\n", history.EnumerateArray().Where(r => !r.TryGetProperty("is_private", out var p) || GlpiService.Number(p) == 0).TakeLast(5).Select(r => r.TryGetProperty("content", out var c) ? Plain(c.GetString() ?? "") : ""));
+        string comments = RecentReplies(history);
         string text = $"Заявка GLPI #{ticket.GlpiId}\n{TicketManagement.StatusName(TicketManagement.Status(ticket.Status))}\n{ticket.Username} · {ticket.MachineName}\nФилиал: {ticket.BranchName} · Кабинет: {ticket.Room}\n{ticket.Title}\n{ticket.Description}\n\nПоследние ответы:\n{comments}";
         object[][] buttons = TicketManagement.Status(ticket.Status) == 6 ? [] :
             [[Button("Ответить", "reply:" + ticket.Id), Button("Добавить решение", "solve:" + ticket.Id)],
@@ -180,6 +180,16 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         await telegram.SendToAsync(chat.ToString(), Limit(text), new { inline_keyboard = buttons }, token);
     }
     public static string Plain(string text) => System.Net.WebUtility.HtmlDecode(Regex.Replace(text.Replace("<br>", "\n").Replace("<br />", "\n").Replace("</p>", "\n"), "<[^>]*>", ""));
+    public static string RecentReplies(JsonElement history)
+    {
+        var replies = history.EnumerateArray()
+            .Where(r => !r.TryGetProperty("is_private", out var p) || GlpiService.Number(p) == 0)
+            .OrderBy(r => r.TryGetProperty("id", out var id) ? GlpiService.Number(id) : 0)
+            .Select(r => r.TryGetProperty("content", out var c) ? Plain(c.GetString() ?? "").Trim() : "")
+            .Where(text => text.Length > 0).TakeLast(5);
+        string result = string.Join("\n", replies);
+        return result.Length == 0 ? "Ответов пока нет." : result;
+    }
     private static string Limit(string value) => value.Length <= 3800 ? value : value[..(char.IsHighSurrogate(value[3799]) ? 3799 : 3800)] + "…";
     public async Task HandleAsync(JsonElement update, CancellationToken token)
     {
@@ -256,7 +266,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                 await telegram.SendToAsync(sender.ToString(), "Сохранено в GLPI #" + ticket.GlpiId + ".", null, token);
                 await CardAsync(sender, ticket, actor, token);
             }
-            if (callbackId != null) await ConfirmAsync(callbackId, sender, "Готово", token);
+            if (callbackId != null) await telegram.AnswerCallbackAsync(callbackId, "", token);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or ArgumentException or InvalidOperationException or HttpRequestException)
         {

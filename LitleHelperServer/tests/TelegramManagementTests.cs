@@ -89,6 +89,9 @@ public static class TelegramManagementTests
     private static JsonElement Message(long sender, string text) => Json(new { update_id = 2, message = new { from = new { id = sender, is_bot = false }, chat = new { id = sender, type = "private" }, text } });
     public static async Task RunAsync()
     {
+        Check(TelegramBotHandler.RecentReplies(Json(Array.Empty<object>())) == "Ответов пока нет.", "empty ticket history has an explicit placeholder");
+        Check(TelegramBotHandler.RecentReplies(Json(new[] { new { id = 1, content = "<p> </p>", is_private = 0 }, new { id = 2, content = "Private", is_private = 1 } })) == "Ответов пока нет.", "empty and private replies are omitted");
+        Check(TelegramBotHandler.RecentReplies(Json(Enumerable.Range(1, 7).Reverse().Select(id => new { id, content = "<p>Reply " + id + "</p>", is_private = 0 }).ToArray())) == "Reply 3\nReply 4\nReply 5\nReply 6\nReply 7", "latest five replies ordered by GLPI ID");
         string root = Path.Combine(Path.GetTempPath(), "helper-telegram-" + Guid.NewGuid().ToString("N")); System.IO.Directory.CreateDirectory(root);
         try
         {
@@ -191,6 +194,7 @@ public static class TelegramManagementTests
                 await new TelegramBotInbox(restarted, replayHandler, NullLogger<TelegramBotInbox>.Instance).ProcessAsync(await restarted.TelegramBotStates.SingleAsync(), repeated, default);
             }
             Check(transport.Comments == before + 1, "restart preserves deduplication of GLPI side effects");
+            Check(!transport.Messages.Any(m => m.Text == "Готово"), "ticket callbacks do not send redundant Done messages");
             Console.WriteLine("ALL TELEGRAM MANAGEMENT CHECKS PASSED");
         }
         finally { System.IO.Directory.Delete(root, true); }

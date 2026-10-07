@@ -56,6 +56,7 @@ internal sealed class MessengerWindow : Window
     private ChatEntry? pendingMessage;
     private bool pendingFailed;
     private StackPanel? details;
+    private ScrollViewer? detailsView;
     private bool detailsOpen;
     private Dictionary<string,List<ReactionInfo>> reactions=[];
     private string chatFilter = "all";
@@ -71,6 +72,7 @@ internal sealed class MessengerWindow : Window
         client.TypingReceived += OnTyping;
         Loaded += async (_, _) => await RefreshAsync();
         Activated += async (_, _) => await MarkReadAsync();
+        SizeChanged+=(_,_)=>AdjustDrawer();
         Closed += (_, _) => { closing = true; client.Changed -= OnChanged; client.MessageReceived -= OnMessage; client.TypingReceived -= OnTyping; try { if (Directory.Exists(clipboardDirectory)) Directory.Delete(clipboardDirectory, true); } catch (IOException ex) { Settings.Log(ex); } };
     }
     private void OnChanged() => Dispatcher.BeginInvoke(new Action(async () => { if (!closing) await RefreshAsync(); }));
@@ -116,10 +118,10 @@ internal sealed class MessengerWindow : Window
         if (client.CanBroadcast) { var broadcast = new MenuItem { Header = "Рассылка пользователям…" }; broadcast.Click += (_,_) => new ChatBroadcastWindow(client,settings) { Owner=this }.ShowDialog(); actionsMenu.Items.Add(broadcast); }
         toolbar.Children.Clear(); var menuButton = Button("☰",(_,_) => { actionsMenu.PlacementTarget=toolbar; actionsMenu.IsOpen=true; }); toolbar.Children.Add(menuButton);
         toolbar.Children.Add(new TextBlock { Text="PixelHelper · " + client.FullName, FontWeight=FontWeights.SemiBold, Margin=new Thickness(12,10,12,8) });
-        toolbar.Children.Add(Button("ⓘ Информация", async (_,_) => { detailsOpen=!detailsOpen; root.ColumnDefinitions[3].Width=new GridLength(detailsOpen ? 320 : 0); await LoadDetailsAsync(); }));
+        toolbar.Children.Add(Button("ⓘ Информация", async (_,_) => { detailsOpen=!detailsOpen;AdjustDrawer();await LoadDetailsAsync();root.UpdateLayout();RenderHistory(false); }));
         toolbar.Children.Add(Button("⌕ Поиск",(_,_)=>SearchHistory()));
         Grid.SetColumnSpan(toolbar, 3); root.Children.Add(toolbar);
-        details = new StackPanel { Margin=new Thickness(14,12,10,8) }; var detailsScroll = new ScrollViewer { Content=details, VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=surface }; Grid.SetColumn(detailsScroll,2); Grid.SetRow(detailsScroll,1); Grid.SetRowSpan(detailsScroll,3); root.Children.Add(detailsScroll);
+        details = new StackPanel { Margin=new Thickness(14,12,10,8) }; var detailsScroll = new ScrollViewer { Content=details, VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=surface };detailsView=detailsScroll; Grid.SetColumn(detailsScroll,2); Grid.SetRow(detailsScroll,1); Grid.SetRowSpan(detailsScroll,3); root.Children.Add(detailsScroll);
         var left = new DockPanel { Margin = new Thickness(0, 8, 12, 8) };
         search = new TextBox { Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8), ToolTip = "Поиск по имени, логину или филиалу" };
         search.TextChanged += (_, _) => Filter(); DockPanel.SetDock(search, Dock.Top); left.Children.Add(search);
@@ -171,7 +173,7 @@ internal sealed class MessengerWindow : Window
             try { var previous = await client.HistoryAsync(peer, messages.Min(m => m.Id)); messages = previous.Concat(messages).DistinctBy(m => m.Id).OrderBy(m => m.Id).ToList(); RenderHistory(false); }
             catch (Exception ex) { error!.Text = ex.Message; }
         }); DockPanel.SetDock(older, Dock.Top); right.Children.Add(older);
-        history = new StackPanel(); scroll = new ScrollViewer { Content = history, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = ChatBackdrop(), Padding = new Thickness(8) }; right.Children.Add(scroll);
+        history = new StackPanel(); scroll = new ScrollViewer { ClipToBounds=true, Content = history, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = ChatBackdrop(), Padding = new Thickness(8) }; right.Children.Add(scroll);
         Grid.SetColumn(right, 1); Grid.SetRow(right, 1); root.Children.Add(right);
         var composer = new DockPanel(); send = Button("Отправить", async (_, _) => await SendAsync()); DockPanel.SetDock(send, Dock.Right); composer.Children.Add(send);
         var emojiButton = Button("Эмодзи", (_, _) => ShowEmojiPicker()); DockPanel.SetDock(emojiButton, Dock.Left); composer.Children.Add(emojiButton);
@@ -188,6 +190,7 @@ internal sealed class MessengerWindow : Window
         composerPanel.Children.Add(preview); Grid.SetColumn(composerPanel, 1); Grid.SetRow(composerPanel, 2); root.Children.Add(composerPanel);
         error = new TextBlock { Foreground = Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4) }; Grid.SetRow(error, 3); Grid.SetColumnSpan(error, 2); root.Children.Add(error);
         AddChrome(toolbar);
+        AdjustDrawer();
     }
     private void Filter()
     {
@@ -273,6 +276,12 @@ internal sealed class MessengerWindow : Window
         toolbar.MouseLeftButtonDown+=(_,e)=>{if(e.ClickCount==2)WindowState=WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized;else if(e.LeftButton==MouseButtonState.Pressed)DragMove();};
         var caption=new StackPanel { Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right };caption.Children.Add(Button("—",(_,_)=>WindowState=WindowState.Minimized));caption.Children.Add(Button("□",(_,_)=>WindowState=WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized));caption.Children.Add(Button("×",(_,_)=>Close()));
         root.Children.Remove(toolbar);var header=new DockPanel();DockPanel.SetDock(caption,Dock.Right);header.Children.Add(caption);header.Children.Add(toolbar);Grid.SetColumn(header,1);Grid.SetColumnSpan(header,3);root.Children.Add(header);
+    }
+    private void AdjustDrawer()
+    {
+        if(root.ColumnDefinitions.Count!=4||detailsView==null)return;bool overlay=ActualWidth>0&&ActualWidth<1100;
+        root.ColumnDefinitions[3].Width=new GridLength(detailsOpen&&!overlay?320:0);detailsView.Visibility=detailsOpen?Visibility.Visible:Visibility.Collapsed;
+        Grid.SetColumn(detailsView,overlay?2:3);Grid.SetColumnSpan(detailsView,overlay?2:1);detailsView.Width=overlay?320:double.NaN;detailsView.HorizontalAlignment=overlay?HorizontalAlignment.Right:HorizontalAlignment.Stretch;Panel.SetZIndex(detailsView,2);
     }
     private void SearchHistory()
     {

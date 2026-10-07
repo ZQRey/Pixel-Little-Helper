@@ -112,7 +112,6 @@ internal sealed class MessengerWindow : Window
         toolbar.Children.Add(Button("Оформление и уведомления", async (_, _) => { var dialog = new MessengerPreferences(settings) { Owner = this }; if (dialog.ShowDialog() == true) { var draft = input?.Text; ApplyTheme(); MainForm(); input!.Text = draft ?? ""; Filter(); RenderHistory(false); await LoadHistoryAsync(); title!.Text = contacts.FirstOrDefault(c => c.Id == peer)?.FullName ?? "Выберите чат"; } }));
         toolbar.Children.Add(Button("Обновить соединение", async (_, _) => await client.SignInWindowsAsync(true)));
         toolbar.Children.Add(Button("Создать группу", async (_, _) => { var window = new ChatGroupWindow(client) { Owner = this }; if (window.ShowDialog() == true) { peer = window.CreatedPeer; messages.Clear(); pendingId = null; await RefreshAsync(); } }));
-        toolbar.Children.Add(Button("Участники группы", async (_, _) => { if (peer >= 0) { error!.Text = "Выберите групповой чат."; return; } new ChatGroupWindow(client, peer) { Owner = this }.ShowDialog(); await RefreshAsync(); }));
         var actionsMenu = new ContextMenu { Background = surface, Foreground = ink };
         foreach (var action in toolbar.Children.OfType<Button>().ToArray()) { var item = new MenuItem { Header = action.Content }; item.Click += (_,_) => action.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); actionsMenu.Items.Add(item); }
         if (client.CanBroadcast) { var broadcast = new MenuItem { Header = "Рассылка пользователям…" }; broadcast.Click += (_,_) => new ChatBroadcastWindow(client,settings) { Owner=this }.ShowDialog(); actionsMenu.Items.Add(broadcast); }
@@ -154,10 +153,14 @@ internal sealed class MessengerWindow : Window
         }; left.Children.Add(users); Grid.SetRow(left, 1); root.Children.Add(left);
         users.PreviewMouseRightButtonDown += (_,e) => { if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(users,source) is ListBoxItem item) users.SelectedItem=item.DataContext; };
         var contactMenu = new ContextMenu { Background=surface, Foreground=ink }; var invite = new MenuItem { Header="Добавить в группу…" }; contactMenu.Items.Add(invite); users.ContextMenu=contactMenu;
+        var groupSettings = new MenuItem { Header="Настройки группы…" };
+        groupSettings.Click += async (_,_) => { if (users.SelectedItem is not ChatContact { IsGroup:true } group) return; new ChatGroupWindow(client,group.Id,settings) { Owner=this }.ShowDialog(); await RefreshAsync(); };
+        contactMenu.Items.Add(groupSettings);
         foreach(var (label,kind) in new[]{("Закрепить / открепить","pin"),("Избранное / убрать","favourite"),("Без звука / включить","mute")})
         {var item=new MenuItem { Header=label };item.Click+=async(_,_)=>{if(users.SelectedItem is not ChatContact c)return;try{await client.PreferenceAsync(c.Id,kind=="pin"?!c.Pinned:c.Pinned,kind=="favourite"?!c.Favourite:c.Favourite,kind=="mute"?!c.Muted:c.Muted);await RefreshAsync();}catch(Exception ex){error!.Text=ex.Message;}};contactMenu.Items.Add(item);}
         contactMenu.Opened += async (_,_) =>
         {
+            groupSettings.Visibility = users.SelectedItem is ChatContact { IsGroup:true } ? Visibility.Visible : Visibility.Collapsed;
             invite.Items.Clear(); invite.IsEnabled=users.SelectedItem is ChatContact { IsGroup:false, IsActive:true };
             if (users.SelectedItem is not ChatContact selected || !invite.IsEnabled) return;
             foreach (var group in contacts.Where(c => c.IsGroup && c.IsActive && c.OwnerId == client.UserId))
@@ -310,7 +313,7 @@ internal sealed class MessengerWindow : Window
                 }
                 details.Children.Add(row);
             }
-            details.Children.Add(Button("Управление и приглашение…",async (_,_) => { new ChatGroupWindow(client,selected,settings) { Owner=this }.ShowDialog(); await RefreshAsync(); }));
+            details.Children.Add(new TextBlock { Text="Правый клик по группе в списке чатов — настройки и приглашение участников.", Foreground=muted, TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,12,0,0) });
         }
         catch(Exception ex) { details.Children.Add(new TextBlock { Text=ex.Message,TextWrapping=TextWrapping.Wrap }); }
     }

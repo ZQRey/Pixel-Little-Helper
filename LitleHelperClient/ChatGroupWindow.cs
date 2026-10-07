@@ -9,8 +9,8 @@ internal static class MessengerDialog
     {
         window.Resources.MergedDictionaries.Add(new ResourceDictionary { Source=new Uri("/PixelHelper;component/MessengerControls.xaml",UriKind.Relative) }); bool light = settings.ChatTheme == "Light"; var surface = (Brush)new BrushConverter().ConvertFromString(light ? "#FFFFFF" : settings.ChatTheme == "Contrast" ? "#000000" : "#181F2F")!;
         window.Background = (Brush)new BrushConverter().ConvertFromString(light ? "#F0F2F7" : "#0A0D14")!; window.Foreground = light ? Brushes.DarkSlateGray : Brushes.WhiteSmoke; window.FontFamily = new FontFamily("Segoe UI"); window.FontSize = Math.Clamp(settings.ChatFontSize, 11, 22);
-        foreach (var type in new[] { typeof(TextBox), typeof(ListBox), typeof(ComboBox), typeof(Button) })
-        { var style = new Style(type,type==typeof(Button)?(Style)window.FindResource(typeof(Button)):null); style.Setters.Add(new Setter(Control.BackgroundProperty, surface)); style.Setters.Add(new Setter(Control.ForegroundProperty, window.Foreground)); style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.SlateBlue)); style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8))); window.Resources[type] = style; }
+        foreach (var type in new[] { typeof(TextBox), typeof(ListBox), typeof(ComboBox), typeof(ComboBoxItem), typeof(CheckBox), typeof(Button) })
+        { var style = new Style(type, type==typeof(Button) || type==typeof(ComboBox) || type==typeof(ComboBoxItem) || type==typeof(CheckBox) ? (Style)window.FindResource(type) : null); style.Setters.Add(new Setter(Control.BackgroundProperty, surface)); style.Setters.Add(new Setter(Control.ForegroundProperty, window.Foreground)); style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.SlateBlue)); style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8))); window.Resources[type] = style; }
     }
     internal static bool Matches(ChatContact user, string text) => (user.FullName + " " + user.Username + " " + user.Branch).Contains(text.Trim(), StringComparison.OrdinalIgnoreCase);
 }

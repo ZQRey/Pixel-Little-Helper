@@ -319,6 +319,15 @@ try
         typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
         typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
         Check(chatWindow.FontSize == 20, theme + " theme renders with accessible large text");
+        var preferences = new MessengerPreferences(appearanceSettings); preferences.Show(); preferences.UpdateLayout();
+        var preferencesPanel = (System.Windows.Controls.StackPanel)((System.Windows.Controls.ScrollViewer)preferences.Content).Content;
+        foreach (var toggle in preferencesPanel.Children.OfType<System.Windows.Controls.CheckBox>())
+            Check(toggle.Foreground.ToString() == preferences.Foreground.ToString(), theme + " checkbox text uses theme foreground");
+        foreach (var choice in preferencesPanel.Children.OfType<System.Windows.Controls.ComboBox>())
+            Check(choice.Foreground.ToString() == preferences.Foreground.ToString() && choice.Template.FindName("DropDown", choice) is System.Windows.Controls.Primitives.Popup, theme + " themed choice template applied");
+        var preferencesBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)preferences.ActualWidth, (int)preferences.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); preferencesBitmap.Render(preferences);
+        var preferencesPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); preferencesPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(preferencesBitmap)); using (var preferencesFile = File.Create(chatPreview.Replace("login", "settings-" + theme))) preferencesPng.Save(preferencesFile);
+        preferences.Close();
         var themedBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); themedBitmap.Render(chatWindow);
         var themedPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); themedPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(themedBitmap)); using var themedFile = File.Create(chatPreview.Replace("login", theme)); themedPng.Save(themedFile);
     }

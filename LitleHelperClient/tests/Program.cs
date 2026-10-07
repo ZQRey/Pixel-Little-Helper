@@ -261,6 +261,13 @@ try
     chatWindow.InsertEmoji(HelperEmojis.All[0]); Check(composerField.Text == "До :helper_wave:после" && insertedEmojis == 1, "emoji inserted at caret with one immediate reaction event");
     var renderedEmoji = HelperEmojis.Render("Текст :helper_wave: :helper_party: 😄 :helper_unknown:");
     Check(renderedEmoji.Inlines.OfType<System.Windows.Documents.InlineUIContainer>().Count() == 2, "known emoji displayed inline as robot images");
+    var animated = HelperEmojis.AnimatedImage(HelperEmojis.All[0], 32); var still = HelperEmojis.AnimatedImage(HelperEmojis.All[0], 32, false);
+    var animationPanel = new System.Windows.Controls.StackPanel(); animationPanel.Children.Add(animated); animationPanel.Children.Add(still);
+    var animationWindow = new System.Windows.Window { Content = animationPanel, Width = 120, Height = 160 }; animationWindow.Show();
+    var firstFrame = animated.Source; var staticFrame = still.Source;
+    var dispatcherFrame = new System.Windows.Threading.DispatcherFrame(); var stop = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+    stop.Tick += (_, _) => { stop.Stop(); dispatcherFrame.Continue = false; }; stop.Start(); System.Windows.Threading.Dispatcher.PushFrame(dispatcherFrame);
+    Check(!ReferenceEquals(firstFrame, animated.Source) && ReferenceEquals(staticFrame, still.Source), "visible emoji animates while disabled emoji remains static"); animationWindow.Close();
     typeof(MessengerWindow).GetField("contacts", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatContact> { new(1, "Анна Иванова", "anna@gp1.loc", true, "Поликлиника", 2, 1, true, DateTime.UtcNow.AddMinutes(-2), "Подскажите расписание"), new(2, "Борис Петров", "boris@gp1.loc", true, "Больница", 0, null, false), new(-3, "Отдел информационных технологий", "", true, null, 4, 2, false, DateTime.UtcNow, "Коллеги, обновление установлено", true, 0) });
     typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
     typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, 0, "Добрый день! Подскажите, пожалуйста, как найти расписание приёма?", "first", DateTime.UtcNow, null), new(2, 0, 1, "Здравствуйте! Отправлю вам ссылку на расписание.", "second", DateTime.UtcNow, DateTime.UtcNow) });
@@ -272,6 +279,18 @@ try
     typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, привет! :helper_wave: :helper_joy:", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Обновление работает :helper_thanks: :helper_party:", "group2", DateTime.UtcNow, null, "Артём Шпынов") });
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
     var groupBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); groupBitmap.Render(chatWindow); var groupPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); groupPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(groupBitmap)); using (var groupImage = File.Create(chatPreview.Replace("login", "groups"))) groupPng.Save(groupImage);
+    var appearanceSettings = (Settings)typeof(MessengerWindow).GetField("settings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    foreach (var theme in new[] { "Helper", "Light", "Dark", "Contrast" })
+    {
+        appearanceSettings.ChatTheme = theme; appearanceSettings.ChatFontSize = 20;
+        typeof(MessengerWindow).GetMethod("ApplyTheme", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
+        typeof(MessengerWindow).GetMethod("MainForm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
+        typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
+        typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
+        Check(chatWindow.FontSize == 20, theme + " theme renders with accessible large text");
+        var themedBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); themedBitmap.Render(chatWindow);
+        var themedPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); themedPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(themedBitmap)); using var themedFile = File.Create(chatPreview.Replace("login", theme)); themedPng.Save(themedFile);
+    }
     chatWindow.Close(); chatClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });

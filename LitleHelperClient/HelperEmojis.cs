@@ -24,15 +24,36 @@ internal static class HelperEmojis
     internal static IEnumerable<HelperEmoji> Parse(string text) => token.Matches(text).Select(m => codes.GetValueOrDefault(m.Value)).OfType<HelperEmoji>();
     internal static BitmapSource Image(HelperEmoji emoji) => sprites.Value.Get(emoji.State, 0).Image;
     internal static string PlainText(string text) => token.Replace(text, m => codes.TryGetValue(m.Value, out var emoji) ? "[" + emoji.Name + "]" : m.Value);
-    internal static TextBlock Render(string text, double size = 32)
+    internal static Image AnimatedImage(HelperEmoji emoji, double size, bool animated = true)
+    {
+        var image = new Image { Source = Image(emoji), Width = size, Height = size, ToolTip = emoji.Name, Margin = new Thickness(2, 0, 2, 0) };
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) }; int frame = 0;
+        timer.Tick += (_, _) =>
+        {
+            var window = Window.GetWindow(image);
+            if (window?.WindowState == WindowState.Minimized || !image.IsVisible) return;
+            var viewer = FindViewer(image);
+            if (viewer != null) { var bounds = image.TransformToAncestor(viewer).TransformBounds(new Rect(image.RenderSize)); if (!bounds.IntersectsWith(new Rect(viewer.RenderSize))) return; }
+            image.Source = sprites.Value.Get(emoji.State, ++frame).Image;
+        };
+        image.Loaded += (_, _) => { if (animated) timer.Start(); };
+        image.Unloaded += (_, _) => timer.Stop();
+        return image;
+    }
+    private static ScrollViewer? FindViewer(DependencyObject child)
+    {
+        for (var parent = VisualTreeHelper.GetParent(child); parent != null; parent = VisualTreeHelper.GetParent(parent)) if (parent is ScrollViewer viewer) return viewer;
+        return null;
+    }
+    internal static TextBlock Render(string text, double size = 32, bool animated = true)
     {
         var block = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 14 }; int offset = 0;
         foreach (Match match in token.Matches(text))
         {
             if (!codes.TryGetValue(match.Value, out var emoji)) continue;
             block.Inlines.Add(new Run(text[offset..match.Index]));
-            var image = new Image { Source = Image(emoji), Width = size, Height = size, ToolTip = emoji.Name, Margin = new Thickness(2, 0, 2, 0) };
-            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.NearestNeighbor);
+            var image = AnimatedImage(emoji, size, animated);
             block.Inlines.Add(new InlineUIContainer(image) { BaselineAlignment = BaselineAlignment.Center }); offset = match.Index + match.Length;
         }
         block.Inlines.Add(new Run(text[offset..])); return block;

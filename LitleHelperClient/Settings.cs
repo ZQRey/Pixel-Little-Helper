@@ -24,6 +24,12 @@ public sealed class Settings
     public bool AssistantHidden { get; set; }
     public bool EmojiReactions { get; set; } = true;
     public bool IncomingEmojiReactions { get; set; } = true;
+    public bool AnimatedChatEmojis { get; set; } = true;
+    public string ChatTheme { get; set; } = "Helper";
+    public double ChatFontSize { get; set; } = 13;
+    public string ChatBackground { get; set; } = "Dots";
+    public string? ChatBackgroundImage { get; set; }
+    public double ChatBackgroundDim { get; set; } = .35;
     internal bool EnsureClientKey()
     {
         if (!string.IsNullOrWhiteSpace(ClientToken)) return false;

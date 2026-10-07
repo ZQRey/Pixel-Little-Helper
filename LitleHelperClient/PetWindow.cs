@@ -18,7 +18,7 @@ public sealed class PetWindow : Window
     private readonly Image robot = new() { Width = 96, Height = 96, Cursor = Cursors.Hand };
     private readonly List<FrameworkElement> bubbles = [];
     private readonly Settings settings = Settings.Load();
-    private readonly HubConnectionService? hub;
+    private HubConnectionService? hub;
     private readonly Sprites sprites = new();
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherTimer animation = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
@@ -90,26 +90,7 @@ public sealed class PetWindow : Window
                 messenger.MessageReceived += message => Dispatcher.BeginInvoke(new Action(async () => { ReceiveEmoji(message); await CheckChatAsync(); }));
             }
             catch (Exception ex) { Settings.Log(ex); }
-            try
-            {
-                hub = new HubConnectionService(settings);
-                hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; if (menuOpen && !announcementVisible) ShowMenu(); }));
-                hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
-                hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    if (!online) { React(PetState.Error, 4); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
-                }));
-                hub.ButtonsUpdated += buttons => Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    if (hub.IsOnline)
-                    {
-                        actions = buttons.Where(b => b.IsActive).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
-                            .Select(b => new AssistantAction(b.Id.ToString(), b.Title, b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
-                        if (menuOpen && !announcementVisible) ShowMenu();
-                    }
-                }));
-            }
-            catch (Exception ex) { Settings.Log(ex); }
+            InitializeHub();
         }
         RenderOptions.SetBitmapScalingMode(robot, BitmapScalingMode.NearestNeighbor);
         Canvas.SetLeft(robot, SpriteLeft); Canvas.SetTop(robot, SpriteTop);
@@ -259,11 +240,49 @@ public sealed class PetWindow : Window
         var hide = new MenuItem { Header = settings.AssistantHidden ? "Показать помощника" : "Скрыть помощника" }; hide.Click += (_, _) => SetAssistantHidden(!settings.AssistantHidden); menu.Items.Add(hide);
         var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb }; quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); }; menu.Items.Add(quiet);
     }
+    private void InitializeHub()
+    {
+            try
+            {
+                hub = new HubConnectionService(settings);
+                hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; if (menuOpen && !announcementVisible) ShowMenu(); }));
+                hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
+                hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!online) { React(PetState.Error, 4); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
+                }));
+                hub.ButtonsUpdated += buttons => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (hub.IsOnline)
+                    {
+                        actions = buttons.Where(b => b.IsActive).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
+                            .Select(b => new AssistantAction(b.Id.ToString(), b.Title, b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
+                        if (menuOpen && !announcementVisible) ShowMenu();
+                    }
+                }));
+            }
+            catch (Exception ex) { Settings.Log(ex); }
+    }
+    private bool reconnecting;
+    internal async Task ReconnectAsync()
+    {
+        if (reconnecting || diagnostics) return;
+        reconnecting = true;
+        try
+        {
+            if (hub != null) await hub.DisposeAsync();
+            hub = null; InitializeHub(); hub?.Start();
+            if (messenger != null) await messenger.SignInWindowsAsync(true);
+        }
+        catch (Exception ex) { Settings.Log(ex); React(PetState.Error, 4); }
+        finally { reconnecting = false; }
+    }
     private void ShowTrayMenu()
     {
         var menu = new ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
         var chat = new MenuItem { Header = "Мессенджер" }; chat.Click += async (_, _) => await OpenMessengerAsync(); menu.Items.Add(chat);
         if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
+        var reconnect = new MenuItem { Header = "Повторить подключение", IsEnabled = !reconnecting }; reconnect.Click += async (_, _) => await ReconnectAsync(); menu.Items.Add(reconnect);
         AddDisplayMenu(menu); menu.Items.Add(new Separator()); var exit = new MenuItem { Header = "Выход" }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
     }
     private void Draw()

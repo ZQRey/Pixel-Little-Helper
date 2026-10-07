@@ -28,10 +28,19 @@ public class ChatGroupMessage
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
 }
 public record ChatListItem(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId,
-    bool IsOnline, DateTime? LastAt, string? LastText, bool IsGroup = false, int? OwnerId = null);
+    bool IsOnline, DateTime? LastAt, string? LastText, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null);
 public record GroupCreate(string Name, int[] Members);
 public record GroupUpdate(string Name);
 public record GroupUser(int UserId);
+public record GroupSuspend(int UserId, int Minutes);
+public class ChatGroupRestriction
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public int GroupId { get; set; }
+    public int UserId { get; set; }
+    public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    public DateTime EndsAt { get; set; }
+}
 // Membership changes and sends use one gate, including across await boundaries.
 // The deployment runs one server instance; scale-out requires a distributed gate.
 public class ChatGroupGate { public SemaphoreSlim Semaphore { get; } = new(1, 1); }
@@ -50,9 +59,17 @@ public static class ChatGroups
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ChatGroupMessages_SenderId_ClientId\" ON \"ChatGroupMessages\" (\"SenderId\", \"ClientId\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatGroupMessages_GroupId_Id\" ON \"ChatGroupMessages\" (\"GroupId\", \"Id\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatGroupMembers_UserId\" ON \"ChatGroupMembers\" (\"UserId\")");
+        string restrictionSql = $"CREATE TABLE IF NOT EXISTS \"ChatGroupRestrictions\" (\"Id\" TEXT PRIMARY KEY, \"GroupId\" INTEGER NOT NULL, \"UserId\" INTEGER NOT NULL, \"StartedAt\" {date} NOT NULL, \"EndsAt\" {date} NOT NULL)";
+        await db.Database.ExecuteSqlRawAsync(restrictionSql);
     }
     private static string Name(string value) => !string.IsNullOrWhiteSpace(value) && value.Trim().Length <= 80 && !value.Any(char.IsControl) ? value.Trim() : throw new ArgumentException("Название группы: от 1 до 80 символов.");
-    private static async Task<ChatGroupMember> Member(HelperDb db, int group, int user) => await db.ChatGroupMembers.SingleOrDefaultAsync(m => m.GroupId == group && m.UserId == user) ?? throw new UnauthorizedAccessException("Вы не состоите в этой группе.");
+    public static async Task<ChatGroupMember> Member(HelperDb db, int group, int user)
+    {
+        var member = await db.ChatGroupMembers.SingleOrDefaultAsync(m => m.GroupId == group && m.UserId == user) ?? throw new UnauthorizedAccessException("Вы не состоите в этой группе.");
+        if (await db.ChatGroupRestrictions.AnyAsync(r => r.GroupId == group && r.UserId == user && r.EndsAt > DateTime.UtcNow)) throw new UnauthorizedAccessException("Доступ к группе временно отключён.");
+        return member;
+    }
+    private static IQueryable<ChatGroupMessage> Visible(HelperDb db, ChatGroupMember member) => db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == member.GroupId && m.Id > member.JoinedAfterId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == member.UserId && m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt));
     private static async Task<ChatGroup> Owner(HelperDb db, int group, int user)
     {
         await Member(db, group, user);
@@ -67,17 +84,18 @@ public static class ChatGroups
         foreach (var member in memberships)
         {
             var group = await db.ChatGroups.AsNoTracking().SingleAsync(g => g.Id == member.GroupId);
-            var visible = db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == group.Id && m.Id > member.JoinedAfterId);
+            var visible = Visible(db, member);
+            var suspendedUntil = await db.ChatGroupRestrictions.Where(r => r.GroupId == group.Id && r.UserId == user && r.EndsAt > DateTime.UtcNow).Select(r => (DateTime?)r.EndsAt).MaxAsync(); bool suspended = suspendedUntil != null;
             var last = await visible.OrderByDescending(m => m.Id).FirstOrDefaultAsync();
             int unread = await visible.CountAsync(m => m.Id > member.ReadThroughId && m.SenderId != user);
-            list.Add(new(-group.Id, group.Name, "", !group.IsClosed, null, unread, last?.Id, false, last?.SentAt, last?.Body, true, group.OwnerId));
+            list.Add(new(-group.Id, group.Name, "", !group.IsClosed && !suspended, null, suspended ? 0 : unread, last?.Id, false, last?.SentAt, last?.Body, true, group.OwnerId, suspendedUntil));
         }
         return list;
     }
     public static async Task<IResult> HistoryAsync(int group, long? before, HelperDb db, int user)
     {
         var member = await Member(db, group, user);
-        var rows = await db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == group && m.Id > member.JoinedAfterId && (before == null || m.Id < before)).OrderByDescending(m => m.Id).Take(50).ToListAsync();
+        var rows = await Visible(db, member).Where(m => before == null || m.Id < before).OrderByDescending(m => m.Id).Take(50).ToListAsync();
         var names = await db.Users.Where(u => rows.Select(m => m.SenderId).Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.FullName);
         var result = rows.OrderBy(m => m.Id).Select(m => View(m, member.ReadThroughId, names[m.SenderId])).ToList();
         await ChatFiles.PopulateAsync(db, result); return Results.Ok(result);
@@ -95,7 +113,7 @@ public static class ChatGroups
             if (old != null)
             { if (old.GroupId != group || old.Body != request.Body.Trim()) throw new ArgumentException("Идентификатор сообщения уже использован."); return Results.Ok(View(old, 0, (await db.Users.FindAsync(user))!.FullName)); }
             var message = new ChatGroupMessage { GroupId = group, SenderId = user, Body = request.Body.Trim(), ClientId = clientId }; db.ChatGroupMessages.Add(message); await db.SaveChangesAsync();
-            var recipients = await db.ChatGroupMembers.Where(m => m.GroupId == group && db.Users.Any(u => u.Id == m.UserId && u.IsActive)).Select(m => "Chat:" + m.UserId).ToArrayAsync();
+            var recipients = await db.ChatGroupMembers.Where(m => m.GroupId == group && db.Users.Any(u => u.Id == m.UserId && u.IsActive) && !db.ChatGroupRestrictions.Any(r => r.GroupId == group && r.UserId == m.UserId && r.EndsAt > DateTime.UtcNow)).Select(m => "Chat:" + m.UserId).ToArrayAsync();
             var result = View(message, 0, (await db.Users.FindAsync(user))!.FullName);
             await hub.Clients.Groups(recipients).SendAsync("ChatMessage", result); return Results.Ok(result);
         }
@@ -104,7 +122,7 @@ public static class ChatGroups
     public static async Task<IResult> ReadAsync(int group, long through, HelperDb db, int user, IHubContext<MessengerHub> hub)
     {
         var member = await Member(db, group, user);
-        long maximum = await db.ChatGroupMessages.Where(m => m.GroupId == group && m.Id <= through && m.Id > member.JoinedAfterId).Select(m => (long?)m.Id).MaxAsync() ?? member.JoinedAfterId;
+        long maximum = await Visible(db, member).Where(m => m.Id <= through).Select(m => (long?)m.Id).MaxAsync() ?? member.JoinedAfterId;
         await db.ChatGroupMembers.Where(m => m.GroupId == group && m.UserId == user && m.ReadThroughId < maximum).ExecuteUpdateAsync(s => s.SetProperty(m => m.ReadThroughId, maximum));
         await hub.Clients.Group("Chat:" + user).SendAsync("ChatChanged"); return Results.Ok();
     }
@@ -130,10 +148,12 @@ public static class ChatGroups
             }
             finally { gate.Semaphore.Release(); }
         });
-        api.MapGet("/groups/{group:int}", async (int group, HelperDb db, ClaimsPrincipal p) =>
+        api.MapGet("/groups/{group:int}", async (int group, HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>
         {
             var me = await Messenger.UserAsync(db, p); await Member(db, group, me.Id); var item = await db.ChatGroups.SingleAsync(g => g.Id == group);
-            var members = await db.ChatGroupMembers.Where(m => m.GroupId == group).Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.FullName, u.Username, u.IsActive }).ToListAsync();
+            var rows = await db.ChatGroupMembers.Where(m => m.GroupId == group).Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.FullName, u.Username, u.IsActive }).ToListAsync();
+            var restrictions = await db.ChatGroupRestrictions.Where(r => r.GroupId == group && r.EndsAt > DateTime.UtcNow).ToListAsync();
+            var members = rows.Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, isOnline = presence.Online(u.Id), suspendedUntil = restrictions.Where(r => r.UserId == u.Id).Select(r => (DateTime?)r.EndsAt).Max() });
             return Results.Ok(new { item.Id, item.Name, item.OwnerId, item.IsClosed, members });
         });
         api.MapPost("/groups/{group:int}/{operation}", async (int group, string operation, HttpRequest http, HelperDb db, ClaimsPrincipal p, ChatGroupGate gate, IHubContext<MessengerHub> hub) =>
@@ -156,6 +176,14 @@ public static class ChatGroups
                     {
                         if (item.IsClosed) throw new ArgumentException("Группа закрыта.");
                         if (operation == "rename") { var request = await http.ReadFromJsonAsync<GroupUpdate>() ?? throw new ArgumentException(); item.Name = Name(request.Name); }
+                        else if (operation is "suspend" or "resume")
+                        {
+                            var request = await http.ReadFromJsonAsync<GroupSuspend>() ?? throw new ArgumentException();
+                            if (request.UserId == me.Id || !await db.ChatGroupMembers.AnyAsync(m => m.GroupId == group && m.UserId == request.UserId)) throw new ArgumentException("Выберите другого участника.");
+                            if (operation == "suspend" && request.Minutes is < 1 or > 43200) throw new ArgumentException("Интервал: от 1 минуты до 30 дней.");
+                            await db.ChatGroupRestrictions.Where(r => r.GroupId == group && r.UserId == request.UserId && r.EndsAt > DateTime.UtcNow).ExecuteUpdateAsync(s => s.SetProperty(r => r.EndsAt, DateTime.UtcNow));
+                            if (operation == "suspend") db.ChatGroupRestrictions.Add(new() { GroupId = group, UserId = request.UserId, EndsAt = DateTime.UtcNow.AddMinutes(request.Minutes) });
+                        }
                         else if (operation is "invite" or "remove" or "owner")
                         {
                             int id = (await http.ReadFromJsonAsync<GroupUser>() ?? throw new ArgumentException()).UserId;
@@ -173,7 +201,7 @@ public static class ChatGroups
                             else
                             {
                                 if (member == null || id == me.Id) throw new ArgumentException("Выберите другого участника.");
-                                if (operation == "owner") { if (!await db.Users.AnyAsync(u => u.Id == id && u.IsActive)) throw new ArgumentException("Участник отключён."); item.OwnerId = id; }
+                                if (operation == "owner") { await Member(db,group,id); if (!await db.Users.AnyAsync(u => u.Id == id && u.IsActive)) throw new ArgumentException("Участник отключён."); item.OwnerId = id; }
                                 else { db.ChatGroupMembers.Remove(member); removed = id; }
                             }
                         }

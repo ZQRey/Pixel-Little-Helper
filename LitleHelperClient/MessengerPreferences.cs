@@ -33,6 +33,7 @@ internal sealed class MessengerPreferences : Window
         Toggle("Уведомления Windows", settings.ChatWindowsNotifications, v => settings.ChatWindowsNotifications = v);
         Toggle("Облачко помощника", settings.ChatComicNotifications, v => settings.ChatComicNotifications = v);
         Toggle("Не беспокоить", settings.ChatDoNotDisturb, v => settings.ChatDoNotDisturb = v);
+        Toggle("Срочные сообщения обходят «Не беспокоить»", settings.ChatUrgentOverridesQuiet, v => settings.ChatUrgentOverridesQuiet = v);
         var apply = new Button { Content = "Применить", Margin = new Thickness(0, 16, 0, 0), Padding = new Thickness(10), IsDefault = true };
         apply.Click += (_, _) => { settings.ChatTheme = themes[theme.SelectedIndex]; settings.ChatFontSize = sizes[font.SelectedIndex]; settings.ChatBackground = backgrounds[background.SelectedIndex]; settings.ChatBackgroundImage = image; settings.ChatBackgroundDim = dim.Value; foreach (var save in saves) save(); settings.Save(); DialogResult = true; }; panel.Children.Add(apply);
     }

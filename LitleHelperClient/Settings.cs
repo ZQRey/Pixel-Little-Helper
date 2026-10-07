@@ -18,6 +18,7 @@ public sealed class Settings
     public bool ChatSound { get; set; } = true;
     public bool ChatPreview { get; set; } = true;
     public bool ChatDoNotDisturb { get; set; }
+    public bool ChatUrgentOverridesQuiet { get; set; }
     public bool ChatWindowsNotifications { get; set; } = true;
     public bool ChatComicNotifications { get; set; } = true;
     public string DisplayMode { get; set; } = "Background";

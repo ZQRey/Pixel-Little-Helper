@@ -176,6 +176,16 @@ public static class MessengerTests
         using var fileGroupCreated = await a.PostAsJsonAsync("api/messenger/groups", new GroupCreate("Вложения", [bob.Id])); fileGroupCreated.EnsureSuccessStatusCode(); int filePeer = (await fileGroupCreated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
         using var groupUpload = await Upload(a, filePeer, Guid.NewGuid().ToString(), "photo.png"); groupUpload.EnsureSuccessStatusCode(); var groupFileMessage = (await groupUpload.Content.ReadFromJsonAsync<ChatMessage>())!; string groupFile = groupFileMessage.Attachments.Single().Id;
         Check((await b.GetAsync("api/messenger/files/" + groupFile)).IsSuccessStatusCode, "group member can download attachment");
+        Check((await b.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/suspend", new GroupSuspend(alice.Id,60))).StatusCode == HttpStatusCode.Forbidden, "only owner can suspend group members");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/suspend", new GroupSuspend(bob.Id,60))).EnsureSuccessStatusCode();
+        Check((await b.GetAsync($"api/messenger/history/{filePeer}")).StatusCode == HttpStatusCode.Forbidden && (await b.GetAsync("api/messenger/files/"+groupFile)).StatusCode == HttpStatusCode.NotFound, "suspension blocks group history and attachments");
+        Check((await b.PostAsJsonAsync("api/messenger/send",new ChatSend(filePeer,"Blocked",Guid.NewGuid().ToString()))).StatusCode==HttpStatusCode.Forbidden, "suspended member cannot send");
+        (await a.PostAsJsonAsync("api/messenger/send",new ChatSend(filePeer,"During suspension",Guid.NewGuid().ToString()))).EnsureSuccessStatusCode();
+        (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/resume",new GroupSuspend(bob.Id,0))).EnsureSuccessStatusCode();
+        Check((await b.GetFromJsonAsync<List<ChatMessage>>($"api/messenger/history/{filePeer}"))!.Count==1, "resumed member does not receive messages from suspension interval");
+        (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/suspend",new GroupSuspend(bob.Id,1))).EnsureSuccessStatusCode();
+        using(var expiryScope=app.Services.CreateScope()) { var expiryDb=expiryScope.ServiceProvider.GetRequiredService<HelperDb>(); var expiresAt=DateTime.UtcNow.AddMilliseconds(50); await expiryDb.ChatGroupRestrictions.Where(r=>r.UserId==bob.Id && r.EndsAt>DateTime.UtcNow).ExecuteUpdateAsync(s=>s.SetProperty(r=>r.EndsAt,expiresAt)); }
+        await Task.Delay(100); Check((await b.GetAsync($"api/messenger/history/{filePeer}")).IsSuccessStatusCode,"suspension expires automatically without client intervention");
         (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/invite", new GroupUser(charlie.Id))).EnsureSuccessStatusCode();
         Check((await c.GetAsync("api/messenger/files/" + groupFile)).StatusCode == HttpStatusCode.NotFound, "new member cannot download files sent before joining");
         (await a.PostAsJsonAsync($"api/messenger/groups/{-filePeer}/remove", new GroupUser(bob.Id))).EnsureSuccessStatusCode();
@@ -201,6 +211,23 @@ public static class MessengerTests
         Check((await b.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled account cannot read chat");
         windows.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Negotiate", "verified-bob");
         Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "Windows SSO cannot reactivate a disabled panel account");
+        async Task<HttpResponseMessage> Broadcast(string id,string audience,bool urgent,byte[]? file=null)
+        {
+            using var form=new MultipartFormDataContent(); form.Add(new StringContent(id),"clientId"); form.Add(new StringContent(audience),"audience"); form.Add(new StringContent(urgent ? "true" : "false"),"urgent"); form.Add(new StringContent("Объявление"),"body"); if(file!=null) form.Add(new ByteArrayContent(file),"files","notice.pdf"); return await a.PostAsync("api/messenger/broadcast",form);
+        }
+        Check((await Broadcast(Guid.NewGuid().ToString(),"all",false)).StatusCode==HttpStatusCode.Forbidden,"ordinary user cannot broadcast");
+        using(var permissionScope=app.Services.CreateScope()) { var permissionDb=permissionScope.ServiceProvider.GetRequiredService<HelperDb>(); var actor=await permissionDb.Users.SingleAsync(u=>u.Id==alice.Id); actor.Permissions=new() { ["chat.broadcast"]=true }; await permissionDb.SaveChangesAsync(); }
+        Check((await Broadcast(Guid.NewGuid().ToString(),"online",false)).StatusCode==HttpStatusCode.BadRequest,"online broadcast excludes offline users");
+        await using var charlieHub=new HubConnectionBuilder().WithUrl(address+"/messengerHub",o=>o.AccessTokenProvider=()=>Task.FromResult<string?>(charlie.Token)).Build(); await charlieHub.StartAsync();
+        string broadcastId=Guid.NewGuid().ToString("N"); using var announcement=await Broadcast(broadcastId,"online",true,[4,5,6]); announcement.EnsureSuccessStatusCode(); Check((await announcement.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recipients").GetInt32()==1,"online broadcast snapshots connected recipients and skips disabled accounts");
+        var announcementMessage=(await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/history/"+alice.Id))!.Single(m=>m.BroadcastId==broadcastId);
+        Check(announcementMessage.IsUrgent && (await c.GetByteArrayAsync("api/messenger/files/"+announcementMessage.Attachments.Single().Id)).SequenceEqual(new byte[]{4,5,6}),"urgent broadcast includes downloadable attachments");
+        using var duplicateAnnouncement=await Broadcast(broadcastId,"online",true,[4,5,6]); duplicateAnnouncement.EnsureSuccessStatusCode();
+        Check((await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/history/"+alice.Id))!.Count(m=>m.BroadcastId==broadcastId)==1,"broadcast retry creates one copy per recipient");
+        Check((await a.PostAsJsonAsync("api/messenger/ack/"+announcementMessage.Id,new{})).StatusCode==HttpStatusCode.Forbidden,"sender cannot acknowledge for recipient");
+        (await c.PostAsJsonAsync("api/messenger/ack/"+announcementMessage.Id,new{})).EnsureSuccessStatusCode();
+        Check((await a.GetFromJsonAsync<JsonElement>("api/messenger/broadcasts"))[0].GetProperty("acknowledged").GetInt32()==1,"broadcast report counts recipient acknowledgments");
+        await charlieHub.StopAsync(); using var allAnnouncement=await Broadcast(Guid.NewGuid().ToString(),"all",false); allAnnouncement.EnsureSuccessStatusCode(); Check((await allAnnouncement.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recipients").GetInt32()==1,"all-user broadcast persists for offline active users");
         var options = app.Services.GetRequiredService<MessengerSettings>(); options.Save(new(false));
         Check((await a.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks chat APIs");
         Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks Windows SSO");

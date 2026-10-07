@@ -123,6 +123,7 @@ public sealed class PetWindow : Window
         {
             
             animation.Start(); inactivity.Start(); refresh.Start();
+            if (!diagnostics) hub?.Start();
             if (!diagnostics && messenger != null) _ = messenger.StartAsync();
             if (!diagnostics) React(PetState.Greeting, 3);
             if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
@@ -280,6 +281,9 @@ public sealed class PetWindow : Window
     private void ShowTrayMenu()
     {
         var menu = new ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+        menu.Items.Add(new MenuItem { Header = "Помощник: " + (hub?.IsOnline == true ? "Online" : "Offline") + " · " + (hub?.Status ?? "Не запущен"), IsEnabled = false });
+        menu.Items.Add(new MenuItem { Header = "Мессенджер: " + (messenger?.ConnectionStatus ?? "Не запущен"), IsEnabled = false });
+        if (hub?.LastSuccess is DateTime success) menu.Items.Add(new MenuItem { Header = "Последняя связь: " + success.ToLocalTime().ToString("HH:mm:ss"), IsEnabled = false });
         var chat = new MenuItem { Header = "Мессенджер" }; chat.Click += async (_, _) => await OpenMessengerAsync(); menu.Items.Add(chat);
         if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
         var reconnect = new MenuItem { Header = "Повторить подключение", IsEnabled = !reconnecting }; reconnect.Click += async (_, _) => await ReconnectAsync(); menu.Items.Add(reconnect);
@@ -600,16 +604,17 @@ public sealed class PetWindow : Window
             foreach (var user in users)
             {
                 long previous = chatUnread.GetValueOrDefault(user.Id);
-                if (settings.ChatDoNotDisturb || !ChatDesktop.Unlocked()) continue;
+                if (settings.ChatDoNotDisturb && !settings.ChatUrgentOverridesQuiet || !ChatDesktop.Unlocked()) continue;
                 long latestId = user.LastId ?? 0;
                 if (user.Unread == 0 || messengerWindow?.ActivePeer == user.Id) { chatUnread[user.Id] = latestId; continue; }
-                if (latestId <= previous || settings.ChatDoNotDisturb) continue;
+                if (latestId <= previous) continue;
                 var recent = await messenger.HistoryAsync(user.Id);
                 var last = recent.LastOrDefault(m => (user.IsGroup ? m.SenderId != messenger.UserId : m.RecipientId == messenger.UserId) && m.ReadAt == null);
                 chatUnread[user.Id] = latestId;
                 if (last == null || last.Id <= previous) continue;
+                if (settings.ChatDoNotDisturb && !last.IsUrgent) continue;
                 ReceiveEmoji(last);
-                string text = "Непрочитанных сообщений: " + user.Unread;
+                string text = (last.IsUrgent ? "СРОЧНО · " : "") + "Непрочитанных сообщений: " + user.Unread;
                 if (settings.ChatPreview)
                 {
                     text += "\n" + (user.IsGroup ? last.SenderName + ": " : "") + HelperEmojis.PlainText(last.Body[..Math.Min(300, last.Body.Length)]);

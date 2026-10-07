@@ -70,12 +70,14 @@ internal sealed class MessengerWindow : Window
     private readonly string clipboardDirectory = Path.Combine(Path.GetTempPath(), "PixelHelper-chat-" + Guid.NewGuid().ToString("N"));
     private WrapPanel? attachmentsPanel;
     private bool sending;
+    private StackPanel? details;
+    private bool detailsOpen;
     internal event Action<HelperEmoji>? EmojiInserted;
     internal int ActivePeer => IsActive ? peer : 0;
     internal MessengerWindow(MessengerClient client, Settings settings)
     {
         this.client = client; this.settings = settings;
-        Title = "Мессенджер · PixelHelper"; Width = 880; Height = 650; MinWidth = 720; MinHeight = 480;
+        Title = "Мессенджер · PixelHelper"; Width = 1040; Height = 720; MinWidth = 720; MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen; Content = root; ApplyTheme();
         client.Changed += OnChanged;
         client.MessageReceived += OnMessage;
@@ -111,6 +113,7 @@ internal sealed class MessengerWindow : Window
     {
         showingLogin = false; root.Children.Clear(); root.ColumnDefinitions.Clear(); root.RowDefinitions.Clear();
         root.ColumnDefinitions.Add(new() { Width = new GridLength(280) }); root.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new() { Width = new GridLength(detailsOpen ? 280 : 0) });
         root.RowDefinitions.Add(new() { Height = GridLength.Auto }); root.RowDefinitions.Add(new()); root.RowDefinitions.Add(new() { Height = GridLength.Auto }); root.RowDefinitions.Add(new() { Height = GridLength.Auto });
         var toolbar = new WrapPanel();
         toolbar.Children.Add(new TextBlock { Text = client.FullName, FontWeight = FontWeights.Bold, Margin = new Thickness(4, 10, 15, 5) });
@@ -118,7 +121,14 @@ internal sealed class MessengerWindow : Window
         toolbar.Children.Add(Button("Обновить соединение", async (_, _) => await client.SignInWindowsAsync(true)));
         toolbar.Children.Add(Button("Создать группу", async (_, _) => { var window = new ChatGroupWindow(client) { Owner = this }; if (window.ShowDialog() == true) { peer = window.CreatedPeer; messages.Clear(); pendingId = null; await RefreshAsync(); } }));
         toolbar.Children.Add(Button("Участники группы", async (_, _) => { if (peer >= 0) { error!.Text = "Выберите групповой чат."; return; } new ChatGroupWindow(client, peer) { Owner = this }.ShowDialog(); await RefreshAsync(); }));
-        Grid.SetColumnSpan(toolbar, 2); root.Children.Add(toolbar);
+        var actionsMenu = new ContextMenu { Background = surface, Foreground = ink };
+        foreach (var action in toolbar.Children.OfType<Button>().ToArray()) { var item = new MenuItem { Header = action.Content }; item.Click += (_,_) => action.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); actionsMenu.Items.Add(item); }
+        if (client.CanBroadcast) { var broadcast = new MenuItem { Header = "Рассылка пользователям…" }; broadcast.Click += (_,_) => new ChatBroadcastWindow(client,settings) { Owner=this }.ShowDialog(); actionsMenu.Items.Add(broadcast); }
+        toolbar.Children.Clear(); var menuButton = Button("☰",(_,_) => { actionsMenu.PlacementTarget=toolbar; actionsMenu.IsOpen=true; }); toolbar.Children.Add(menuButton);
+        toolbar.Children.Add(new TextBlock { Text="PixelHelper · " + client.FullName, FontWeight=FontWeights.SemiBold, Margin=new Thickness(12,10,12,8) });
+        toolbar.Children.Add(Button("ⓘ Информация", async (_,_) => { detailsOpen=!detailsOpen; root.ColumnDefinitions[2].Width=new GridLength(detailsOpen ? 280 : 0); await LoadDetailsAsync(); }));
+        Grid.SetColumnSpan(toolbar, 3); root.Children.Add(toolbar);
+        details = new StackPanel { Margin=new Thickness(14,12,10,8) }; var detailsScroll = new ScrollViewer { Content=details, VerticalScrollBarVisibility=ScrollBarVisibility.Auto, Background=surface }; Grid.SetColumn(detailsScroll,2); Grid.SetRow(detailsScroll,1); Grid.SetRowSpan(detailsScroll,3); root.Children.Add(detailsScroll);
         var left = new DockPanel { Margin = new Thickness(0, 8, 12, 8) };
         search = new TextBox { Padding = new Thickness(8), Margin = new Thickness(0, 0, 0, 8), ToolTip = "Поиск по имени, логину или филиалу" };
         search.TextChanged += (_, _) => Filter(); DockPanel.SetDock(search, Dock.Top); left.Children.Add(search);
@@ -128,7 +138,8 @@ internal sealed class MessengerWindow : Window
               <Grid Margin="6,4">
                 <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <Ellipse Width="9" Height="9" Margin="0,0,7,4" VerticalAlignment="Center">
+                <Border Grid.RowSpan="3" Width="38" Height="38" CornerRadius="19" Background="#267A90" Margin="0,0,9,0" VerticalAlignment="Center"><TextBlock Text="{Binding Initials}" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold"/></Border>
+                <Ellipse Grid.RowSpan="3" Width="9" Height="9" Margin="27,0,9,4" VerticalAlignment="Bottom" Stroke="{DynamicResource MutedInk}" StrokeThickness="1">
                   <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="Fill" Value="#89949E"/><Style.Triggers><DataTrigger Binding="{Binding IsOnline}" Value="True"><Setter Property="Fill" Value="#35C878"/></DataTrigger><DataTrigger Binding="{Binding IsGroup}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
                 </Ellipse>
                 <TextBlock Grid.Column="1" Text="{Binding Label}" ToolTip="{Binding FullName}" TextTrimming="CharacterEllipsis" FontSize="{DynamicResource ContactFont}" Margin="0,0,5,4">
@@ -138,8 +149,8 @@ internal sealed class MessengerWindow : Window
                   <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasUnread}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
                   <TextBlock Text="{Binding Unread}" Foreground="White" FontWeight="Bold" FontSize="11"/>
                 </Border>
-                <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource MutedInk}" FontSize="{DynamicResource DetailFont}"/>
-                <TextBlock Grid.Row="2" Grid.ColumnSpan="3" Text="{Binding TimeLabel}" Foreground="{DynamicResource MutedInk}" FontSize="10" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding Subtitle}" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource MutedInk}" FontSize="{DynamicResource DetailFont}"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding TimeLabel}" Foreground="{DynamicResource MutedInk}" FontSize="10" Margin="0,4,0,0"/>
               </Grid>
             </DataTemplate>
             """) }; ScrollViewer.SetHorizontalScrollBarVisibility(users, ScrollBarVisibility.Disabled); users.SelectionChanged += async (_, _) =>
@@ -148,6 +159,17 @@ internal sealed class MessengerWindow : Window
             if (peer != contact.Id) { peer = contact.Id; input!.Text = ""; pendingId = null; pendingFiles.Clear(); RenderPendingFiles(); messages.Clear(); }
             await LoadHistoryAsync();
         }; left.Children.Add(users); Grid.SetRow(left, 1); root.Children.Add(left);
+        users.PreviewMouseRightButtonDown += (_,e) => { if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(users,source) is ListBoxItem item) users.SelectedItem=item.DataContext; };
+        var contactMenu = new ContextMenu { Background=surface, Foreground=ink }; var invite = new MenuItem { Header="Добавить в группу…" }; contactMenu.Items.Add(invite); users.ContextMenu=contactMenu;
+        contactMenu.Opened += async (_,_) =>
+        {
+            invite.Items.Clear(); invite.IsEnabled=users.SelectedItem is ChatContact { IsGroup:false, IsActive:true };
+            if (users.SelectedItem is not ChatContact selected || !invite.IsEnabled) return;
+            foreach (var group in contacts.Where(c => c.IsGroup && c.IsActive && c.OwnerId == client.UserId))
+            {
+                try { var info=await client.GroupAsync(group.Id); if (info.Members.Any(m=>m.Id==selected.Id)) continue; var item=new MenuItem { Header=group.FullName }; item.Click += async (_,_) => { if (MessageBox.Show(this,"Добавить " + selected.FullName + " в «" + group.FullName + "»?",Title,MessageBoxButton.YesNo) != MessageBoxResult.Yes) return; try { await client.GroupOperationAsync(group.Id,"invite",new { userId=selected.Id }); await RefreshAsync(); } catch(Exception ex) { error!.Text=ex.Message; } }; invite.Items.Add(item); } catch(Exception ex) { error!.Text=ex.Message; }
+            }
+        };
         var right = new DockPanel { Margin = new Thickness(0, 8, 0, 8) };
         title = new TextBlock { Text = "Выберите сотрудника", FontSize = FontSize + 4, Margin = new Thickness(4, 0, 4, 8) }; DockPanel.SetDock(title, Dock.Top); right.Children.Add(title);
         var older = Button("Предыдущие сообщения", async (_, _) =>
@@ -195,6 +217,8 @@ internal sealed class MessengerWindow : Window
     {
         if (peer == 0 || !client.SignedIn || closing) return;
         int selected = peer;
+        var selectedContact=contacts.FirstOrDefault(c=>c.Id==selected);
+        if (selectedContact?.SuspendedUntil > DateTime.UtcNow) { messages.Clear(); RenderHistory(false); input!.IsEnabled=false; send!.IsEnabled=false; error!.Text="Доступ к группе отключён до " + selectedContact.SuspendedUntil.Value.ToLocalTime().ToString("dd.MM HH:mm"); return; }
         try
         {
             var latest = await client.HistoryAsync(selected); if (selected != peer || closing) return;
@@ -202,6 +226,7 @@ internal sealed class MessengerWindow : Window
             title!.Text = contacts.FirstOrDefault(u => u.Id == peer)?.FullName ?? "Диалог";
             bool writable = contacts.FirstOrDefault(u => u.Id == peer)?.IsActive == true; input!.IsEnabled = writable && !sending; send!.IsEnabled = writable && !sending;
             RenderHistory(scroll!.ScrollableHeight - scroll.VerticalOffset < 5); await MarkReadAsync(); error!.Text = "";
+            await LoadDetailsAsync();
         }
         catch (Exception ex) { if (error != null) error.Text = ex.Message; }
     }
@@ -209,20 +234,51 @@ internal sealed class MessengerWindow : Window
     {
         history!.Children.Clear();
         if (messages.Count == 0) history.Children.Add(new TextBlock { Text = "Начните переписку", Foreground = muted, Margin = new Thickness(12) });
+        DateTime? date = null;
         foreach (var message in messages)
         {
+            var day = message.SentAt.ToLocalTime().Date;
+            if (date != day) { history.Children.Add(new TextBlock { Text=day.ToString("dd MMMM"), HorizontalAlignment=HorizontalAlignment.Center, Foreground=muted, FontSize=Math.Max(11,FontSize-2), Margin=new Thickness(0,10,0,10) }); date=day; }
             bool mine = message.SenderId == client.UserId;
             var panel = new StackPanel();
+            if (message.IsUrgent) panel.Children.Add(new TextBlock { Text="⚠ СРОЧНО", Foreground=Brushes.Orange, FontWeight=FontWeights.Bold, Margin=new Thickness(0,0,0,6) });
             if (peer < 0) panel.Children.Add(new TextBlock { Text = message.SenderName ?? "Участник", FontWeight = FontWeights.Bold, Foreground = accent, Margin = new Thickness(0, 0, 0, 5) });
             var body = HelperEmojis.Render(message.Body, Math.Max(32, FontSize * 2.3), settings.AnimatedChatEmojis); body.FontSize = FontSize; body.Foreground = ink; panel.Children.Add(body);
             foreach (var attachment in message.Attachments ?? [])
             {
                 var file = Button("", async (_, _) => await OpenFileAsync(attachment)); file.Content = new TextBlock { Text = (attachment.IsImage ? "▧ " : "📎 ") + attachment.Label, TextWrapping = TextWrapping.Wrap }; file.HorizontalContentAlignment = HorizontalAlignment.Left; file.ToolTip = attachment.IsImage ? "Просмотр изображения и скачивание" : "Скачать файл"; panel.Children.Add(file);
             }
+            if (message.IsUrgent && message.RecipientId == client.UserId && message.AcknowledgedAt == null) panel.Children.Add(Button("Ознакомился",async (_,_) => { try { await client.AcknowledgeAsync(message.Id); await LoadHistoryAsync(); } catch(Exception ex) { error!.Text=ex.Message; } }));
+            if (message.AcknowledgedAt != null) panel.Children.Add(new TextBlock { Text="✓ Ознакомление подтверждено", Foreground=accent, FontSize=Math.Max(11,FontSize-2) });
             panel.Children.Add(new TextBlock { Text = message.SentAt.ToLocalTime().ToString("dd.MM HH:mm") + (mine ? peer < 0 || message.ReadAt == null ? " · Сохранено" : " · Прочитано" : ""), FontSize = Math.Max(11, FontSize - 2), Foreground = muted, Margin = new Thickness(0, 6, 0, 0) });
-            history.Children.Add(new Border { Child = panel, Background = mine ? outgoing : incoming, BorderBrush = muted, BorderThickness = new Thickness(settings.ChatTheme == "Contrast" ? 1 : 0), CornerRadius = new CornerRadius(12), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = Math.Max(280, ActualWidth * .48), HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
+            history.Children.Add(new Border { Child = panel, Background = mine ? outgoing : incoming, BorderBrush = muted, BorderThickness = new Thickness(settings.ChatTheme == "Contrast" ? 1 : 0), CornerRadius = new CornerRadius(12), Padding = new Thickness(12), Margin = new Thickness(4, 4, 4, 4), MaxWidth = Math.Max(180, (scroll is { ActualWidth: > 0 } ? scroll.ActualWidth : ActualWidth - 320) * .85), HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left });
         }
         if (bottom) scroll!.ScrollToEnd();
+    }
+    private async Task LoadDetailsAsync()
+    {
+        if (!detailsOpen || details == null) return; details.Children.Clear(); int selected=peer;
+        var contact=contacts.FirstOrDefault(c=>c.Id==selected); if (contact==null) return;
+        details.Children.Add(new TextBlock { Text=contact.FullName, FontSize=FontSize+5, FontWeight=FontWeights.SemiBold, TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,0,0,12) });
+        if (!contact.IsGroup) { details.Children.Add(new TextBlock { Text=contact.IsOnline ? "● В сети" : "○ Не в сети", Foreground=contact.IsOnline ? Brushes.MediumSeaGreen : muted }); details.Children.Add(new TextBlock { Text=contact.Username + "\n" + contact.Branch, TextWrapping=TextWrapping.Wrap, Margin=new Thickness(0,12,0,0) }); return; }
+        try
+        {
+            var info=await client.GroupAsync(selected); if (selected!=peer || details==null) return;
+            details.Children.Add(new TextBlock { Text=info.Members.Count + " участников", Foreground=muted });
+            foreach(var member in info.Members)
+            {
+                var row=Button("",(_,_)=>{}); row.Content=new StackPanel { Children = { new TextBlock { Text=member.Label, TextWrapping=TextWrapping.Wrap }, new TextBlock { Text=member.Id == info.OwnerId ? "Создатель" : member.Detail, FontSize=11, Foreground=muted, TextWrapping=TextWrapping.Wrap } } };
+                if (info.OwnerId==client.UserId && !info.IsClosed && member.Id!=client.UserId)
+                {
+                    var menu=new ContextMenu { Background=surface,Foreground=ink };
+                    void Add(string label,string operation,int minutes=0) { var item=new MenuItem { Header=label }; item.Click += async (_,_) => { if (MessageBox.Show(this,label + " — " + member.FullName + "?",Title,MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes) return; try { await client.GroupOperationAsync(selected,operation,new { userId=member.Id,minutes }); await RefreshAsync(); } catch(Exception ex) { error!.Text=ex.Message; } }; menu.Items.Add(item); }
+                    Add("Удалить из группы","remove"); Add("Отключить на 1 час","suspend",60); Add("Отключить на 1 день","suspend",1440); Add("Восстановить доступ","resume"); row.ContextMenu=menu;
+                }
+                details.Children.Add(row);
+            }
+            details.Children.Add(Button("Управление и приглашение…",async (_,_) => { new ChatGroupWindow(client,selected,settings) { Owner=this }.ShowDialog(); await RefreshAsync(); }));
+        }
+        catch(Exception ex) { details.Children.Add(new TextBlock { Text=ex.Message,TextWrapping=TextWrapping.Wrap }); }
     }
     private void ShowEmojiPicker()
     {

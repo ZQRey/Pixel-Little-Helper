@@ -7,12 +7,12 @@ namespace PixelHelper;
 public sealed class HubConnectionService : IAsyncDisposable
 {
     private readonly Settings settings;
-    private readonly HubConnection connection;
+    private HubConnection connection;
     private readonly CancellationTokenSource lifetime = new();
     private readonly CommandExecutor executor;
     private readonly SemaphoreSlim inventoryLock = new(1, 1);
     private Task? loop;
-    private bool registered;
+    private volatile bool registered;
     private bool registrationSent;
     public bool IsOnline => registered && connection.State == HubConnectionState.Connected;
     public event Action<bool>? OnlineChanged;
@@ -26,23 +26,36 @@ public sealed class HubConnectionService : IAsyncDisposable
         {
             settings.Save(); // Persist before sending; retry after restart uses the same identity.
         }
+        connection = BuildConnection();
+    }
+    public string Status { get; private set; } = "Подключение";
+    public DateTime? LastSuccess { get; private set; }
+    private void Stage(string status)
+    {
+        Status = status;
+        try { System.IO.Directory.CreateDirectory(Settings.Folder); string path = System.IO.Path.Combine(Settings.Folder, "connection.log"); if (System.IO.File.Exists(path) && new System.IO.FileInfo(path).Length > 512000) System.IO.File.Delete(path); System.IO.File.AppendAllText(path, DateTime.UtcNow.ToString("u") + " " + status + "\n"); } catch { }
+    }
+    private HubConnection BuildConnection()
+    {
         string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "http://helper.gp1.loc" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) throw new ArgumentException("Неверный адрес хаба");
-        connection = new HubConnectionBuilder().WithUrl(uri, options =>
+        var created = new HubConnectionBuilder().WithUrl(uri, options =>
         {
             options.Headers["X-Client-Key"] = settings.ClientToken;
             options.Headers["X-Machine-Name"] = Environment.MachineName;
-        }).WithAutomaticReconnect().Build();
-        connection.On<List<ActionButton>>("OnButtonsUpdated", buttons => { if (registered) ButtonsUpdated?.Invoke(buttons); });
-        connection.On<CommandEnvelope>("ExecuteCommand", RunTask);
-        connection.On<bool>("SuperAdminAvailable", available => SuperAdminAvailable?.Invoke(available));
-        connection.On("RefreshInventory", SendInventory);
-        connection.On<string>("KillProcess", name => RunTask(new(Guid.NewGuid().ToString("N"), "kill", name)));
-        connection.On("Reboot", () => RunTask(new(Guid.NewGuid().ToString("N"), "reboot", "")));
-        connection.On("Shutdown", () => RunTask(new(Guid.NewGuid().ToString("N"), "shutdown", "")));
-        connection.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
-        connection.Closed += _ => { Offline(); return Task.CompletedTask; };
-        connection.Reconnected += async _ => { try { await Register(); } catch (Exception ex) { Settings.Log(ex); Offline(); } };
+        }).Build();
+        created.On<List<ActionButton>>("OnButtonsUpdated", buttons => { if (registered) ButtonsUpdated?.Invoke(buttons); });
+        created.On<CommandEnvelope>("ExecuteCommand", RunTask);
+        created.On<bool>("SuperAdminAvailable", available => SuperAdminAvailable?.Invoke(available));
+        created.On("RefreshInventory", SendInventory);
+        created.On<string>("KillProcess", name => RunTask(new(Guid.NewGuid().ToString("N"), "kill", name)));
+        created.On("Reboot", () => RunTask(new(Guid.NewGuid().ToString("N"), "reboot", "")));
+        created.On("Shutdown", () => RunTask(new(Guid.NewGuid().ToString("N"), "shutdown", "")));
+        created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
+        created.Closed += _ => { if (ReferenceEquals(connection,created)) Offline(); return Task.CompletedTask; };
+
+        created.ServerTimeout = TimeSpan.FromSeconds(25); created.HandshakeTimeout = TimeSpan.FromSeconds(10); created.KeepAliveInterval = TimeSpan.FromSeconds(10);
+        return created;
     }
     private void Offline() { registered = false; SuperAdminAvailable?.Invoke(false); OnlineChanged?.Invoke(false); }
     public void Start() => loop ??= Task.Run(ConnectLoop);
@@ -53,8 +66,10 @@ public sealed class HubConnectionService : IAsyncDisposable
         {
             try
             {
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); attempt.CancelAfter(TimeSpan.FromSeconds(25));
                 if (connection.State == HubConnectionState.Disconnected)
                 {
+                    Stage("Регистрация клиента");
                     if (!registrationSent)
                     {
                         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
@@ -65,34 +80,38 @@ public sealed class HubConnectionService : IAsyncDisposable
                             throw new InvalidOperationException("Компьютер уже зарегистрирован с другим ключом. Обратитесь к администратору.");
                         response.EnsureSuccessStatusCode(); registrationSent = true;
                     }
-                    await connection.StartAsync(lifetime.Token); await Register();
+                    Stage("Подключение SignalR"); await connection.StartAsync(attempt.Token); await Register(attempt.Token);
                 }
                 else if (connection.State == HubConnectionState.Connected)
                 {
-                    if (!registered) await Register(); else await connection.InvokeAsync("Heartbeat", lifetime.Token);
+                    if (!registered) await Register(attempt.Token); else { Stage("Проверка связи"); await connection.InvokeAsync("Heartbeat", attempt.Token); LastSuccess = DateTime.UtcNow; Stage("В сети"); }
                 }
                 await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
-                Settings.Log(ex); Offline();
+                Settings.Log(ex); Offline(); Stage(ex is OperationCanceledException or TimeoutException ? "Нет ответа сервера · повторное подключение" : "Повторное подключение: " + ex.Message);
+                try { await connection.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10)); } catch (Exception stopError) { Settings.Log(stopError); }
+                connection = BuildConnection(); registrationSent = false;
                 try { await Task.Delay(TimeSpan.FromSeconds(15), lifetime.Token); } catch (OperationCanceledException) { break; }
             }
         }
     }
-    private async Task Register()
+    private async Task Register(CancellationToken token)
     {
-        var machine = await Task.Run(SystemInspector.Machine, lifetime.Token);
-        var buttons = await connection.InvokeAsync<List<ActionButton>>("RegisterComputer", machine, lifetime.Token);
-        registered = true; OnlineChanged?.Invoke(true); ButtonsUpdated?.Invoke(buttons);
+        var machine = await Task.Run(SystemInspector.Machine, token).WaitAsync(TimeSpan.FromSeconds(5), token);
+        var buttons = await connection.InvokeAsync<List<ActionButton>>("RegisterComputer", machine, token);
+        LastSuccess = DateTime.UtcNow; Stage("В сети"); registered = true; OnlineChanged?.Invoke(true); ButtonsUpdated?.Invoke(buttons);
         // Inventory does not block button availability or the WPF dispatcher.
         _ = SendInventory();
     }
     public async Task RefreshButtons()
     {
         if (!IsOnline) return;
-        var buttons = await connection.InvokeAsync<List<ActionButton>>("RegisterComputer", await Task.Run(SystemInspector.Machine), lifetime.Token);
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(25));
+        var machine=await Task.Run(SystemInspector.Machine).WaitAsync(TimeSpan.FromSeconds(5),timeout.Token);
+        var buttons = await connection.InvokeAsync<List<ActionButton>>("RegisterComputer", machine, timeout.Token);
         ButtonsUpdated?.Invoke(buttons);
     }
     private async Task<bool> SendInventory()
@@ -101,7 +120,8 @@ public sealed class HubConnectionService : IAsyncDisposable
         try
         {
             var snapshot = await Task.Run(SystemInspector.Collect, lifetime.Token);
-            await connection.InvokeAsync("UpdateHardwareAndSoftware", snapshot.Hardware, snapshot.Software, lifetime.Token);
+            using var timeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(25));
+            await connection.InvokeAsync("UpdateHardwareAndSoftware", snapshot.Hardware, snapshot.Software, timeout.Token);
             return true;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return false; }
@@ -148,13 +168,14 @@ public sealed class HubConnectionService : IAsyncDisposable
     public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, CancellationToken token)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
-        return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, token);
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token,lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, timeout.Token);
     }
     public async ValueTask DisposeAsync()
     {
         lifetime.Cancel(); Offline();
-        await connection.DisposeAsync();
-        if (loop != null) { try { await loop; } catch (OperationCanceledException) { } }
+        try { await connection.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10)); } catch (Exception ex) { Settings.Log(ex); }
+        if (loop != null) { try { await loop.WaitAsync(TimeSpan.FromSeconds(10)); } catch (Exception ex) { Settings.Log(ex); } }
         // WMI may still be returning from a bounded query; locks stay alive until callbacks finish.
         lifetime.Dispose();
     }

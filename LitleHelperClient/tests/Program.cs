@@ -19,6 +19,36 @@ if (args.Length > 0 && args[0] == "--messenger-windows")
     Check((await messenger.UsersAsync()).All(u => u.Id != messenger.UserId), "authenticated messenger directory excludes current user");
     return;
 }
+if (args.FirstOrDefault() == "--group-preview")
+{
+    await using var messenger = new MessengerClient(Settings.Load()); await messenger.StartAsync();
+    Check(messenger.SignedIn, messenger.SignInStatus);
+    var group = (await messenger.UsersAsync()).First(c => c.IsGroup);
+    Exception? failure = null;
+    var thread = new Thread(() => {
+        try {
+            var window = new ChatGroupWindow(messenger, group.Id, Settings.Load()); window.Show();
+            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            timer.Tick += (_, _) => {
+                timer.Stop(); window.UpdateLayout();
+                var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)window.ActualWidth,(int)window.ActualHeight,96,96,System.Windows.Media.PixelFormats.Pbgra32); bitmap.Render(window);
+                var png = new System.Windows.Media.Imaging.PngBitmapEncoder(); png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+                using(var output=File.Create(Path.Combine(Environment.CurrentDirectory,"LitleHelperClient/artifacts/group-management-preview.png"))) png.Save(output);
+                window.Close(); System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }; timer.Start(); System.Windows.Threading.Dispatcher.Run();
+        } catch(Exception ex) { failure=ex; }
+    }); thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
+    if(failure!=null) throw failure; Check(true,"real group management renders with Windows SSO"); return;
+}
+if (args.FirstOrDefault() == "--agent-connection")
+{
+    await using var agent = new HubConnectionService(Settings.Load()); agent.Start();
+    var deadline = DateTime.UtcNow.AddSeconds(35);
+    while (!agent.IsOnline && DateTime.UtcNow < deadline) await Task.Delay(250);
+    Check(agent.IsOnline, "real helper connects: " + agent.Status);
+    var first = agent.LastSuccess; await Task.Delay(TimeSpan.FromSeconds(32));
+    Check(agent.IsOnline && agent.LastSuccess > first, "real helper heartbeat advances without restart"); return;
+}
 
 string temp = Path.Combine(Path.GetTempPath(), "PixelHelper.Tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(temp);
@@ -252,7 +282,7 @@ try
     chatWindow.Show(); chatWindow.UpdateLayout(); chatWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     Check(chatWindow.ActualWidth >= 720 && ((System.Windows.Controls.Grid)chatWindow.Content).Children.Count > 0, "messenger automatic Windows sign-in view is displayed");
     Check(!((System.Windows.Controls.Grid)chatWindow.Content).Children.OfType<System.Windows.Controls.StackPanel>().SelectMany(p => p.Children.Cast<System.Windows.UIElement>()).Any(c => c is System.Windows.Controls.PasswordBox or System.Windows.Controls.TextBox), "automatic sign-in has no login or password inputs");
-    var chatBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); chatBitmap.Render(chatWindow);
+    var chatBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); chatBitmap.Render(chatWindow);
     var chatPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "messenger-login-preview.png"));
     var chatPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); chatPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(chatBitmap)); using (var chatImage = File.Create(chatPreview)) chatPng.Save(chatImage);
     typeof(MessengerWindow).GetMethod("MainForm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
@@ -273,12 +303,13 @@ try
     typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, 0, "Добрый день! Подскажите, пожалуйста, как найти расписание приёма?", "first", DateTime.UtcNow, null), new(2, 0, 1, "Здравствуйте! Отправлю вам ссылку на расписание.", "second", DateTime.UtcNow, DateTime.UtcNow) });
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true });
     chatWindow.UpdateLayout();
-    Check(((System.Windows.Controls.Grid)chatWindow.Content).ColumnDefinitions.Count == 2, "messenger provides directory and conversation panes");
-    var mainBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); mainBitmap.Render(chatWindow); var mainPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); mainPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(mainBitmap)); using (var mainImage = File.Create(chatPreview.Replace("login", "dialogue"))) mainPng.Save(mainImage);
+    Check(((System.Windows.Controls.Grid)chatWindow.Content).ColumnDefinitions.Count == 3, "messenger provides directory, conversation and optional information panes");
+    Check(MessengerDialog.Matches(new(1,"Анна Иванова","anna@gp1.loc",true,"Поликлиника",0,null,false), "иван") && MessengerDialog.Matches(new(1,"Анна Иванова","anna@gp1.loc",true,"Поликлиника",0,null,false),"клиника"), "group search matches phrases anywhere in name or branch");
+    var mainBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); mainBitmap.Render(chatWindow); var mainPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); mainPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(mainBitmap)); using (var mainImage = File.Create(chatPreview.Replace("login", "dialogue"))) mainPng.Save(mainImage);
     typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, -3);
     typeof(MessengerWindow).GetField("messages", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, new List<ChatEntry> { new(1, 1, -3, "Коллеги, привет! :helper_wave: :helper_joy:", "group1", DateTime.UtcNow, null, "Анна Иванова"), new(2, 0, -3, "Спасибо! Обновление работает :helper_thanks: :helper_party:", "group2", DateTime.UtcNow, null, "Артём Шпынов", [new("preview-image", "Image.png", 2048), new("preview-document", "Document.pdf", 15360)]) });
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
-    var groupBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); groupBitmap.Render(chatWindow); var groupPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); groupPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(groupBitmap)); using (var groupImage = File.Create(chatPreview.Replace("login", "groups"))) groupPng.Save(groupImage);
+    var groupBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); groupBitmap.Render(chatWindow); var groupPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); groupPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(groupBitmap)); using (var groupImage = File.Create(chatPreview.Replace("login", "groups"))) groupPng.Save(groupImage);
     var appearanceSettings = (Settings)typeof(MessengerWindow).GetField("settings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
     foreach (var theme in new[] { "Helper", "Light", "Dark", "Contrast" })
     {
@@ -288,7 +319,7 @@ try
         typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
         typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
         Check(chatWindow.FontSize == 20, theme + " theme renders with accessible large text");
-        var themedBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(880, 650, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); themedBitmap.Render(chatWindow);
+        var themedBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); themedBitmap.Render(chatWindow);
         var themedPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); themedPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(themedBitmap)); using var themedFile = File.Create(chatPreview.Replace("login", theme)); themedPng.Save(themedFile);
     }
     string attachmentPath = Path.Combine(temp, "sample.unknown"); File.WriteAllBytes(attachmentPath, [1, 2, 3]);

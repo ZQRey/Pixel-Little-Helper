@@ -19,6 +19,9 @@ public class ChatMessage
     public string ClientId { get; set; } = "";
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
     public DateTime? ReadAt { get; set; }
+    public bool IsUrgent { get; set; }
+    public string? BroadcastId { get; set; }
+    public DateTime? AcknowledgedAt { get; set; }
 }
 public record ChatSend(int RecipientId, string Body, string ClientId);
 public class ChatPresence
@@ -80,6 +83,7 @@ public static class Messenger
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ChatMessages_SenderId_ClientId\" ON \"ChatMessages\" (\"SenderId\", \"ClientId\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatMessages_RecipientId_Id\" ON \"ChatMessages\" (\"RecipientId\", \"Id\")");
         await ChatFiles.EnsureSchemaAsync(db);
+        await ChatBroadcasts.EnsureSchemaAsync(db);
     }
     private static string Token(PanelUser user, IConfiguration config)
     {
@@ -150,6 +154,7 @@ public static class Messenger
         var api = app.MapGroup("/api/messenger").RequireAuthorization("Panel");
         ChatGroups.Map(api);
         ChatFiles.Map(api);
+        ChatBroadcasts.Map(api);
         api.AddEndpointFilter(async (context, next) => context.HttpContext.RequestServices.GetRequiredService<MessengerSettings>().Value.Enabled ? await next(context) : Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403));
         api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName }; });
         api.MapGet("/users", async (HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>

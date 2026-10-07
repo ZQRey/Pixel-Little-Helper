@@ -7,13 +7,14 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace PixelHelper;
-public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null)
+public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null)
 {
     public string Label => (IsGroup ? "👥 " : "") + FullName;
     public string DirectoryLabel => FullName + " (" + Username + ")";
     public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch) : HelperEmojis.PlainText(LastText).Replace('\n', ' ');
     public string TimeLabel => LastAt?.ToLocalTime().ToString("dd.MM HH:mm") ?? "";
     public bool HasUnread => Unread > 0;
+    public string Initials => string.Concat(FullName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(n => char.ToUpperInvariant(n[0])));
     public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : IsOnline ? "● Online" : "○ Offline" : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
     public static IEnumerable<ChatContact> Ordered(IEnumerable<ChatContact> contacts) => contacts.OrderByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastAt).ThenBy(u => u.FullName);
 }
@@ -22,8 +23,12 @@ public record ChatAttachment(string Id, string Name, long Size)
     public bool IsImage => new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" }.Contains(Path.GetExtension(Name).ToLowerInvariant());
     public string Label => Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
 }
-public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null);
-internal record ChatMember(int Id, string FullName, string Username, bool IsActive);
+public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null);
+internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null)
+{
+    public string Label => (IsOnline ? "● " : "○ ") + FullName;
+    public string Detail => SuspendedUntil != null ? "Отключён до " + SuspendedUntil.Value.ToLocalTime().ToString("dd.MM HH:mm") : Username;
+}
 internal record ChatGroupInfo(int Id, string Name, int OwnerId, bool IsClosed, List<ChatMember> Members);
 internal record ChatSession(string Token, int Id, string FullName, string Server);
 internal sealed class MessengerClient : IAsyncDisposable
@@ -42,6 +47,8 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal int UserId => session?.Id ?? 0;
     internal string FullName => session?.FullName ?? "";
     internal string IdentityContext => server + ":" + UserId;
+    internal bool CanBroadcast { get; private set; }
+    internal string ConnectionStatus => !SignedIn ? SignInStatus : connection?.State == HubConnectionState.Connected ? "В сети · " + FullName : "Нет соединения · повторная попытка";
     internal string SignInStatus { get; private set; } = "Подключение под текущей учётной записью Windows…";
     internal event Action<ChatEntry>? MessageReceived;
     internal event Action? Changed;
@@ -91,12 +98,13 @@ internal sealed class MessengerClient : IAsyncDisposable
             await connectLock.WaitAsync(lifetime.Token);
             try
             {
-                if (connection != null) { await connection.DisposeAsync(); connection = null; }
+                if (connection != null) { await connection.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10),lifetime.Token); connection = null; }
                 session = login with { Server = server }; SetToken(); renewAt = DateTime.UtcNow.AddHours(6);
             }
             finally { connectLock.Release(); }
             SignInStatus = "Вход выполнен: " + FullName;
             await ConnectAsync();
+            var capabilities = await Request<JsonElement>("api/messenger/capabilities"); CanBroadcast = capabilities.GetProperty("canBroadcast").GetBoolean();
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex) { SignInStatus = ex is InvalidOperationException ? ex.Message : "Нет связи с сервером. Автоматическая повторная попытка через минуту."; Settings.Log(ex); }
@@ -112,12 +120,13 @@ internal sealed class MessengerClient : IAsyncDisposable
             if (connection == null)
             {
                 connection = new HubConnectionBuilder().WithUrl(server + "messengerHub", options => options.AccessTokenProvider = () => Task.FromResult<string?>(session?.Token)).WithAutomaticReconnect().Build();
+                connection.ServerTimeout=TimeSpan.FromSeconds(25); connection.HandshakeTimeout=TimeSpan.FromSeconds(10); connection.KeepAliveInterval=TimeSpan.FromSeconds(10);
                 connection.On<ChatEntry>("ChatMessage", message => MessageReceived?.Invoke(message));
                 connection.On("ChatChanged", () => Changed?.Invoke());
                 connection.Reconnected += _ => { Changed?.Invoke(); return Task.CompletedTask; };
                 connection.Closed += _ => { Changed?.Invoke(); return Task.CompletedTask; };
             }
-            if (connection.State == HubConnectionState.Disconnected) await connection.StartAsync(lifetime.Token);
+            if (connection.State == HubConnectionState.Disconnected) { using var timeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(25)); await connection.StartAsync(timeout.Token); }
         }
         finally { connectLock.Release(); }
     }
@@ -139,6 +148,17 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal Task<List<ChatContact>> UsersAsync() => Request<List<ChatContact>>("api/messenger/users");
     internal Task<List<ChatEntry>> HistoryAsync(int peer, long? before = null) => Request<List<ChatEntry>>("api/messenger/history/" + peer + (before == null ? "" : "?before=" + before));
     internal Task<ChatEntry> SendAsync(int peer, string text, string clientId) => Request<ChatEntry>("api/messenger/send", new { recipientId = peer, body = text, clientId });
+    internal async Task AcknowledgeAsync(long id) { using var response = await http.PostAsJsonAsync("api/messenger/ack/" + id, new { }, lifetime.Token); response.EnsureSuccessStatusCode(); Changed?.Invoke(); }
+    internal Task<JsonElement> BroadcastsAsync() => Request<JsonElement>("api/messenger/broadcasts");
+    internal async Task<JsonElement> BroadcastAsync(string body, string audience, bool urgent, string id, IEnumerable<string> paths)
+    {
+        using var form = new MultipartFormDataContent(); form.Add(new StringContent(body), "body"); form.Add(new StringContent(audience), "audience"); form.Add(new StringContent(urgent ? "true" : "false"), "urgent"); form.Add(new StringContent(id), "clientId");
+        foreach (var path in paths) form.Add(new StreamContent(File.OpenRead(path)), "files", Path.GetFileName(path));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromMinutes(5));
+        using var response = await filesHttp.PostAsync("api/messenger/broadcast", form, timeout.Token);
+        var data = await response.Content.ReadFromJsonAsync<JsonElement>(Settings.Json, timeout.Token);
+        if (!response.IsSuccessStatusCode) throw new InvalidOperationException(data.TryGetProperty("error", out var error) ? error.GetString() : "Рассылка не отправлена."); return data;
+    }
     internal async Task<ChatEntry> SendFilesAsync(int peer, string text, string clientId, IEnumerable<string> paths)
     {
         using var form = new MultipartFormDataContent();

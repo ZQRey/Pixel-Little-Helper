@@ -239,19 +239,21 @@ public sealed class PetWindow : Window
     private void Expand()
     {
         if (expanded) return;
+        double anchorX = Left, anchorY = Top;
         expanded = true;
         canvas.RenderTransform = Transform.Identity;
+        Left = anchorX - SpriteLeft; Top = anchorY - SpriteTop;
         Width = 500; Height = 400;
-        Left -= SpriteLeft; Top -= SpriteTop;
         ClearRegions(); UpdateRegion();
     }
     private void Collapse()
     {
         if (!expanded || bubbles.Count > 0) return;
+        double anchorX = Left + SpriteLeft, anchorY = Top + SpriteTop;
         expanded = false;
         canvas.RenderTransform = new TranslateTransform(-SpriteLeft, -SpriteTop);
-        Left += SpriteLeft; Top += SpriteTop;
         Width = 96; Height = 96;
+        Left = anchorX; Top = anchorY;
         ClearRegions(); UpdateRegion();
     }
     private void MouseDownRobot(object sender, MouseButtonEventArgs e)

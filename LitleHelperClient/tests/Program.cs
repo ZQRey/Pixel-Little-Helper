@@ -172,6 +172,11 @@ try
     typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
     Check(pet.ActualWidth == 96 && pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "menu collapse restores robot hit testing");
+    double taskbarAnchor = System.Windows.SystemParameters.WorkArea.Bottom - 96;
+    pet.Top = taskbarAnchor;
+    typeof(PetWindow).GetMethod("Expand", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    typeof(PetWindow).GetMethod("Collapse", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    Check(Math.Abs(pet.Top - taskbarAnchor) < 1, "resize cycle preserves robot anchor beside taskbar");
     Check(pet.ReceiveAnnouncement(new("Проверка сообщения\nПомощник показывает текст в облачке над собой.", "Супер администратор", 30)).Contains("показано"), "notice displayed on WPF dispatcher");
     pet.UpdateLayout();
     var canvas = (System.Windows.Controls.Canvas)pet.Content;

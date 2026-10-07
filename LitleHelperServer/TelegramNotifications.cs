@@ -35,7 +35,7 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
     public async Task<JsonElement> UpdatesAsync(long offset, CancellationToken token) =>
         await CallAsync("getUpdates", new { offset, timeout = 0, limit = 20, allowed_updates = new[] { "message", "callback_query" } }, token);
     public async Task AnswerCallbackAsync(string id, string text, CancellationToken token) =>
-        await CallAsync("answerCallbackQuery", new { callback_query_id = id, text, show_alert = true }, token);
+        await CallAsync("answerCallbackQuery", new { callback_query_id = id, text, show_alert = false }, token);
     public async Task MarkClaimedAsync(long chat, long messageId, string text, CancellationToken token)
     {
         try { await CallAsync("editMessageReplyMarkup", new { chat_id = chat, message_id = messageId, reply_markup = new { inline_keyboard = new[] { new[] { new { text, callback_data = "claimed" } } } } }, token); }

@@ -160,6 +160,11 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         return new(user, await glpi.FindTechnicianAsync(identity.AccountName, token));
     }
     private static object Button(string text, string data) => new { text, callback_data = data };
+    private async Task ConfirmAsync(string id, long sender, string text, CancellationToken token)
+    {
+        await telegram.AnswerCallbackAsync(id, "", token);
+        await telegram.SendToAsync(sender.ToString(), text, null, token);
+    }
     private async Task CardAsync(long chat, TicketRecord ticket, TelegramActor actor, CancellationToken token)
     {
         Branches.Require(actor.User, ticket);
@@ -187,7 +192,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         JsonElement message = callback && item.TryGetProperty("message", out var m) ? m : item;
         if (message.TryGetProperty("chat", out var c)) { chat = c.GetProperty("id").GetInt64(); chatType = c.GetProperty("type").GetString() ?? ""; }
         string command = callback ? item.GetProperty("data").GetString() ?? "" : item.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
-        if (callback && command == "claimed") { await telegram.AnswerCallbackAsync(callbackId!, "Заявка уже принята", token); return; }
+        if (callback && command == "claimed") { await ConfirmAsync(callbackId!, sender, "Заявка уже принята", token); return; }
         if (!callback && command.Length == 0) return;
         if (!callback && chatType != "private") return;
         if (callback && command.StartsWith("claim:") && chat.ToString() != settings.Telegram().ChatId) return;
@@ -222,7 +227,7 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                     // Verify that private messages work before assigning the ticket.
                     await telegram.SendToAsync(sender.ToString(), "Принимаю заявку GLPI #" + ticket.GlpiId + "…", null, token);
                     await tickets.ClaimAsync(ticket, actor, token);
-                    await telegram.AnswerCallbackAsync(callbackId!, "Назначено на " + actor.User.Username, token); callbackId = null;
+                    await ConfirmAsync(callbackId!, sender, "Назначено на " + actor.User.Username, token); callbackId = null;
                     if (message.TryGetProperty("message_id", out var mid)) await telegram.MarkClaimedAsync(chat, mid.GetInt64(), "Принята: " + actor.User.Username, token);
                     await CardAsync(sender, ticket, actor, token);
                 }
@@ -251,12 +256,12 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                 await telegram.SendToAsync(sender.ToString(), "Сохранено в GLPI #" + ticket.GlpiId + ".", null, token);
                 await CardAsync(sender, ticket, actor, token);
             }
-            if (callbackId != null) await telegram.AnswerCallbackAsync(callbackId, "Готово", token);
+            if (callbackId != null) await ConfirmAsync(callbackId, sender, "Готово", token);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or ArgumentException or InvalidOperationException or HttpRequestException)
         {
             string error = ex is HttpRequestException ? "GLPI недоступен. Проверьте заявку перед повтором действия." : ex.Message;
-            if (callbackId != null) await telegram.AnswerCallbackAsync(callbackId, Limit(error)[..Math.Min(error.Length, 190)], token);
+            if (callbackId != null) await ConfirmAsync(callbackId, sender, Limit(error), token);
             else await telegram.SendToAsync(sender.ToString(), Limit(error), null, token);
         }
     }

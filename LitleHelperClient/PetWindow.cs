@@ -59,6 +59,8 @@ public sealed class PetWindow : Window
     private NativeMethods.POINT previousDragPoint;
     private bool dizzyDrag;
     private readonly Queue<ClientNotice> announcements = new();
+    private bool urgentVisible;
+    private readonly HashSet<long> urgentShown = new();
     private DateTime announcementUntil;
     private readonly bool diagnostics;
     private bool expanded = true;
@@ -189,7 +191,7 @@ public sealed class PetWindow : Window
     }
     private nint Hook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
-        if (message == NativeMethods.WM_WINDOWPOSCHANGING && settings.DisplayMode == "Background")
+        if (message == NativeMethods.WM_WINDOWPOSCHANGING && settings.DisplayMode == "Background" && !urgentVisible)
         {
             var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
             if ((pos.Flags & NativeMethods.SWP_NOZORDER) == 0)
@@ -214,18 +216,19 @@ public sealed class PetWindow : Window
     private void ApplyDisplayMode()
     {
         if (handle == 0) return;
+        if (urgentVisible) { Topmost = true; return; }
         if (settings.DisplayMode == "Background") NativeMethods.Bottom(handle);
     }
     internal void SetDisplayMode(string mode)
     {
         if (mode is not ("Topmost" or "Normal" or "Background")) throw new ArgumentException("Неизвестный режим.");
-        settings.DisplayMode = mode; Topmost = mode == "Topmost";
-        NativeMethods.SetWindowPos(handle, mode == "Topmost" ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        settings.DisplayMode = mode; Topmost = urgentVisible || mode == "Topmost";
+        NativeMethods.SetWindowPos(handle, Topmost ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
         ApplyDisplayMode(); if (!diagnostics) settings.Save();
     }
     internal void SetAssistantHidden(bool hidden)
     {
-        settings.AssistantHidden = hidden; if (hidden) { HideBubbles(); Hide(); animation.Stop(); } else { Show(); ApplyDisplayMode(); }
+        settings.AssistantHidden = hidden; if (hidden && !urgentVisible) { HideBubbles(); Hide(); animation.Stop(); } else { Show(); ApplyDisplayMode(); }
         if (!diagnostics) settings.Save();
     }
     internal void RestoreDisplayPreferences()
@@ -547,6 +550,7 @@ public sealed class PetWindow : Window
     }
     private void HideBubbles()
     {
+        if (urgentVisible) { urgentVisible = false; Topmost = settings.DisplayMode == "Topmost"; NativeMethods.SetWindowPos(handle, Topmost ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE); ApplyDisplayMode(); if (settings.AssistantHidden) { Hide(); animation.Stop(); } }
         localNoticeAnimation=null;
         announcementVisible = false;
         outsideClick.Stop();
@@ -577,7 +581,11 @@ public sealed class PetWindow : Window
     private void ShowNextAnnouncement()
     {
         if (announcements.Count == 0) return;
-        var notice = announcements.Dequeue(); HideBubbles(); Expand(); Wake(); menuOpen = true; announcementVisible = true;
+        var notice = announcements.Dequeue();
+        if (notice.ExpiresAt < DateTime.UtcNow) { ShowNextAnnouncement(); return; }
+        HideBubbles();
+        if (notice.UrgentMessageId is long urgentId) { settings.UrgentNotificationsShown.Add(chatUserId + ":" + urgentId); settings.UrgentNotificationsShown = settings.UrgentNotificationsShown.TakeLast(1000).ToList(); if (!diagnostics) settings.Save(); urgentVisible = true; ShowActivated = false; Show(); animation.Start(); Topmost = true; NativeMethods.SetWindowPos(handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE); }
+        Expand(); Wake(); menuOpen = true; announcementVisible = true;
         localNoticeAnimation=notice.LocalAnimation;
         React(notice.LocalAnimation ?? PetState.Notice, notice.LocalAnimation == PetState.Twirl ? 1.2 : notice.LocalAnimation == null ? 3 : 6);
         var panel = new Grid { Margin = new Thickness(12) };
@@ -592,6 +600,13 @@ public sealed class PetWindow : Window
         {
             close.Content = "Открыть переписку";
             close.Click += async (_, _) => await OpenMessengerAsync(peer);
+        }
+        if (notice.UrgentMessageId is long messageId)
+        {
+            close.Content = "Открыть чат";
+            var acknowledge = MakeButton("Прочитано"); acknowledge.Margin = new Thickness(0,8,0,0);
+            acknowledge.Click += async (_,_) => { acknowledge.IsEnabled = false; try { if (messenger != null) await messenger.AcknowledgeAsync(messageId); HideBubbles(); ShowNextAnnouncement(); } catch(Exception ex) { acknowledge.IsEnabled = true; Settings.Log(ex); acknowledge.Content = "Повторить подтверждение"; } };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Remove(close); buttons.Children.Add(acknowledge); buttons.Children.Add(close); Grid.SetRow(buttons,2); panel.Children.Add(buttons);
         }
         AddBubble(new Border { Background = Brushes.AliceBlue, BorderBrush = Brushes.SteelBlue, BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(14), Child = panel }, 70, 48, 360, 216);
         var tail = new System.Windows.Shapes.Polygon { Fill = Brushes.AliceBlue, Stroke = Brushes.SteelBlue, StrokeThickness = 2, Points = new PointCollection { new(0, 0), new(22, 0), new(11, 22) } };
@@ -618,9 +633,17 @@ public sealed class PetWindow : Window
         refreshingChat = true;
         try
         {
-            if (chatUserId != messenger.UserId) { chatUserId = messenger.UserId; chatUnread.Clear(); }
+            if (chatUserId != messenger.UserId) { chatUserId = messenger.UserId; chatUnread.Clear(); urgentShown.Clear(); }
             await Task.Delay(1500, lifetime.Token); // Coalesce a burst of messages and read receipts.
             var users = await messenger.UsersAsync();
+            if (ChatDesktop.Unlocked()) foreach (var urgent in await messenger.UrgentAsync())
+            {
+                string key = messenger.UserId + ":" + urgent.Id;
+                if (urgentShown.Contains(urgent.Id) || settings.UrgentNotificationsShown.Contains(key) || announcements.Count >= 10) continue;
+                var sender = users.FirstOrDefault(u => u.Id == urgent.SenderId);
+                ReceiveAnnouncement(new ClientNotice("СРОЧНО · " + HelperEmojis.PlainText(urgent.Body[..Math.Min(970,urgent.Body.Length)]), sender?.FullName ?? "Сотрудник", 60, urgent.SenderId) { UrgentMessageId = urgent.Id, ExpiresAt = urgent.SentAt.ToUniversalTime().AddHours(1) });
+                urgentShown.Add(urgent.Id); if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
+            }
             tray?.SetUnread(users.Any(u => u.Unread > 0));
             var notifications = new List<(string Title, string Text, int Peer)>();
             foreach (var user in users)
@@ -633,7 +656,7 @@ public sealed class PetWindow : Window
                 var recent = await messenger.HistoryAsync(user.Id);
                 var last = recent.LastOrDefault(m => (user.IsGroup ? m.SenderId != messenger.UserId : m.RecipientId == messenger.UserId) && m.ReadAt == null);
                 chatUnread[user.Id] = latestId;
-                if (last == null || last.Id <= previous) continue;
+                if (last == null || last.Id <= previous || last.IsUrgent) continue;
                 if (settings.ChatDoNotDisturb && !last.IsUrgent) continue;
                 ReceiveEmoji(last);
                 string text = (last.IsUrgent ? "СРОЧНО · " : "") + "Непрочитанных сообщений: " + user.Unread;

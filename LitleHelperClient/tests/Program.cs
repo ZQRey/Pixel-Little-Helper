@@ -230,6 +230,16 @@ try
     pet.SetDisplayMode("Normal"); Check(!pet.Topmost, "normal display mode clears topmost");
     pet.SetDisplayMode("Background");
     pet.SetAssistantHidden(true); Check(!pet.IsVisible, "helper hides without terminating window"); pet.SetAssistantHidden(false); Check(pet.IsVisible, "helper can be restored from tray action");
+    foreach (var mode in new[] { "Background", "Normal", "Topmost" }) {
+        pet.SetDisplayMode(mode); pet.SetAssistantHidden(true);
+        pet.ReceiveAnnouncement(new ClientNotice("Срочная проверка", "Тест", 60) { UrgentMessageId = 987, ExpiresAt = DateTime.UtcNow.AddHours(1) });
+        Check(pet.IsVisible && pet.Topmost, "urgent notice overrides hidden " + mode + " mode");
+        typeof(PetWindow).GetField("announcementUntil",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.SetValue(pet,DateTime.UtcNow.AddSeconds(-1));pet.AdvanceAnnouncements();
+        Check(!pet.IsVisible && pet.Topmost == (mode == "Topmost"), "urgent timeout restores hidden " + mode + " preference");
+        pet.SetAssistantHidden(false);
+    }
+    pet.SetDisplayMode("Background");
+    typeof(PetWindow).GetMethod("ChangeState",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.Invoke(pet,new object[] { PetState.Idle });
     var trayHandle = new System.Windows.Interop.WindowInteropHelper(pet).Handle;
     using (var nativeTray = new TrayIcon(trayHandle, new Sprites().Get(PetState.Idle, 0), () => { }, () => { }, _ => { }))
     { Check(nativeTray.Registered, "native tray icon registered with Explorer"); nativeTray.SetUnread(true); nativeTray.SetUnread(false); }

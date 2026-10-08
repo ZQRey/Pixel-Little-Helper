@@ -263,8 +263,8 @@ public static class MessengerTests
         {
             using var form=new MultipartFormDataContent(); form.Add(new StringContent(id),"clientId"); form.Add(new StringContent(audience),"audience"); form.Add(new StringContent(urgent ? "true" : "false"),"urgent"); form.Add(new StringContent("Объявление"),"body"); if(file!=null) form.Add(new ByteArrayContent(file),"files","notice.pdf"); return await a.PostAsync("api/messenger/broadcast",form);
         }
-        Check((await Broadcast(Guid.NewGuid().ToString(),"all",false)).StatusCode==HttpStatusCode.Forbidden,"ordinary user cannot broadcast");
-        using(var permissionScope=app.Services.CreateScope()) { var permissionDb=permissionScope.ServiceProvider.GetRequiredService<HelperDb>(); var actor=await permissionDb.Users.SingleAsync(u=>u.Id==alice.Id); actor.Permissions=new() { ["chat.broadcast"]=true }; await permissionDb.SaveChangesAsync(); }
+        Check((await a.GetFromJsonAsync<JsonElement>("api/messenger/capabilities")).GetProperty("canBroadcast").GetBoolean(),"ordinary AD user can broadcast");
+
         Check((await Broadcast(Guid.NewGuid().ToString(),"online",false)).StatusCode==HttpStatusCode.BadRequest,"online broadcast excludes offline users");
         await using var charlieHub=new HubConnectionBuilder().WithUrl(address+"/messengerHub",o=>o.AccessTokenProvider=()=>Task.FromResult<string?>(charlie.Token)).Build(); await charlieHub.StartAsync();
         string broadcastId=Guid.NewGuid().ToString("N"); using var announcement=await Broadcast(broadcastId,"online",true,[4,5,6]); announcement.EnsureSuccessStatusCode(); Check((await announcement.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recipients").GetInt32()==1,"online broadcast snapshots connected recipients and skips disabled accounts");
@@ -273,9 +273,18 @@ public static class MessengerTests
         using var duplicateAnnouncement=await Broadcast(broadcastId,"online",true,[4,5,6]); duplicateAnnouncement.EnsureSuccessStatusCode();
         Check((await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/history/"+alice.Id))!.Count(m=>m.BroadcastId==broadcastId)==1,"broadcast retry creates one copy per recipient");
         Check((await a.PostAsJsonAsync("api/messenger/ack/"+announcementMessage.Id,new{})).StatusCode==HttpStatusCode.Forbidden,"sender cannot acknowledge for recipient");
+        Check((await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/urgent"))!.Any(m=>m.Id==announcementMessage.Id),"urgent queue includes unacknowledged broadcasts");
         (await c.PostAsJsonAsync("api/messenger/ack/"+announcementMessage.Id,new{})).EnsureSuccessStatusCode();
+        Check(!(await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/urgent"))!.Any(m=>m.Id==announcementMessage.Id),"acknowledgment removes message from urgent queue");
         Check((await a.GetFromJsonAsync<JsonElement>("api/messenger/broadcasts"))[0].GetProperty("acknowledged").GetInt32()==1,"broadcast report counts recipient acknowledgments");
+        Check((await Broadcast(Guid.NewGuid().ToString(),"all",false)).StatusCode==HttpStatusCode.TooManyRequests,"broadcast rate limit applies to new requests but permits retries");
+        using(var scope=app.Services.CreateScope()) { var d=scope.ServiceProvider.GetRequiredService<HelperDb>(); foreach(var item in await d.ChatBroadcasts.ToListAsync())item.CreatedAt=DateTime.UtcNow.AddMinutes(-2);await d.SaveChangesAsync(); }
         await charlieHub.StopAsync(); using var allAnnouncement=await Broadcast(Guid.NewGuid().ToString(),"all",false); allAnnouncement.EnsureSuccessStatusCode(); Check((await allAnnouncement.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recipients").GetInt32()==1,"all-user broadcast persists for offline active users");
+        using(var scope=app.Services.CreateScope()) { var d=scope.ServiceProvider.GetRequiredService<HelperDb>(); foreach(var item in await d.ChatBroadcasts.ToListAsync())item.CreatedAt=DateTime.UtcNow.AddMinutes(-2); foreach(var item in await d.ChatMessages.Where(m=>m.IsUrgent).ToListAsync())item.SentAt=DateTime.UtcNow.AddHours(-2);await d.SaveChangesAsync(); }
+        Check((await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/urgent"))!.Count==0,"expired urgent broadcasts remain in history but leave alert queue");
+        string selectedId=Guid.NewGuid().ToString("N");
+        using(var selectedForm=new MultipartFormDataContent()) { selectedForm.Add(new StringContent(selectedId),"clientId"); selectedForm.Add(new StringContent("selected"),"audience");selectedForm.Add(new StringContent("Выбранному сотруднику"),"body");selectedForm.Add(new StringContent(charlie.Id.ToString()),"recipients");using var response=await a.PostAsync("api/messenger/broadcast",selectedForm);response.EnsureSuccessStatusCode();Check((await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("recipients").GetInt32()==1,"selected broadcast is available to ordinary AD users"); }
+        using(var invalidForm=new MultipartFormDataContent()) { invalidForm.Add(new StringContent(Guid.NewGuid().ToString()),"clientId");invalidForm.Add(new StringContent("selected"),"audience");invalidForm.Add(new StringContent("Ошибка"),"body");invalidForm.Add(new StringContent(bob.Id.ToString()),"recipients");Check((await a.PostAsync("api/messenger/broadcast",invalidForm)).StatusCode==HttpStatusCode.BadRequest,"selected broadcast rejects disabled recipients"); }
         var options = app.Services.GetRequiredService<MessengerSettings>(); options.Save(new(false));
         Check((await a.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks chat APIs");
         Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks Windows SSO");

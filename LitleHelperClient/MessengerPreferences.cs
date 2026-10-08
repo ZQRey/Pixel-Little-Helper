@@ -34,7 +34,7 @@ internal sealed class MessengerPreferences : Window
         Toggle("Уведомления Windows", settings.ChatWindowsNotifications, v => settings.ChatWindowsNotifications = v);
         Toggle("Облачко помощника", settings.ChatComicNotifications, v => settings.ChatComicNotifications = v);
         Toggle("Не беспокоить", settings.ChatDoNotDisturb, v => settings.ChatDoNotDisturb = v);
-        Toggle("Срочные сообщения обходят «Не беспокоить»", settings.ChatUrgentOverridesQuiet, v => settings.ChatUrgentOverridesQuiet = v);
+        panel.Children.Add(new TextBlock { Text = "Срочные рассылки показывают помощника поверх окон на срок до 60 секунд и обходят «Не беспокоить».", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,8,0,0) });
         var apply = new Button { Content = "Применить", Margin = new Thickness(0, 16, 0, 0), Padding = new Thickness(10), IsDefault = true };
         apply.Click += (_, _) => { settings.ChatTheme = themes[theme.SelectedIndex]; settings.ChatFontSize = sizes[font.SelectedIndex]; settings.ChatBackground = backgrounds[background.SelectedIndex]; settings.ChatBackgroundImage = image; settings.ChatBackgroundDim = dim.Value; foreach (var save in saves) save(); settings.Save(); DialogResult = true; }; panel.Children.Add(apply);
     }

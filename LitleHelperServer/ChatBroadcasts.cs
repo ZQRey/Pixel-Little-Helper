@@ -37,7 +37,12 @@ public static class ChatBroadcasts
     }
     public static void Map(RouteGroupBuilder api)
     {
-        api.MapGet("/capabilities", async (HelperDb db, ClaimsPrincipal p) => new { canBroadcast = Access.Can(await Messenger.UserAsync(db, p), "chat.broadcast") });
+        api.MapGet("/capabilities", async (HelperDb db, ClaimsPrincipal p) => { await Messenger.UserAsync(db, p); return new { canBroadcast = true }; });
+        api.MapGet("/urgent", async (HelperDb db, ClaimsPrincipal p) =>
+        {
+            var me = await Messenger.UserAsync(db, p); var since = DateTime.UtcNow.AddHours(-1);
+            return await db.ChatMessages.Where(m => m.RecipientId == me.Id && m.IsUrgent && m.AcknowledgedAt == null && m.SentAt > since).OrderBy(m => m.Id).Take(100).ToListAsync();
+        });
         api.MapPost("/ack/{id:long}", async (long id, HelperDb db, ClaimsPrincipal p, IHubContext<MessengerHub> hub) =>
         {
             var me = await Messenger.UserAsync(db, p); var message = await db.ChatMessages.SingleOrDefaultAsync(m => m.Id == id && m.RecipientId == me.Id && m.IsUrgent) ?? throw new UnauthorizedAccessException();
@@ -46,16 +51,19 @@ public static class ChatBroadcasts
         });
         api.MapGet("/broadcasts", async (HelperDb db, ClaimsPrincipal p) =>
         {
-            var me = await Messenger.UserAsync(db, p); if (!Access.Can(me, "chat.broadcast")) throw new UnauthorizedAccessException();
+            var me = await Messenger.UserAsync(db, p);
             return await db.ChatBroadcasts.Where(b => b.SenderId == me.Id).OrderByDescending(b => b.CreatedAt).Take(50).Select(b => new { b.Id, b.Body, b.Urgent, b.Audience, b.CreatedAt, recipients = db.ChatMessages.Count(m => m.BroadcastId == b.Id), read = db.ChatMessages.Count(m => m.BroadcastId == b.Id && m.ReadAt != null), acknowledged = db.ChatMessages.Count(m => m.BroadcastId == b.Id && m.AcknowledgedAt != null) }).ToListAsync();
         });
         api.MapPost("/broadcast", async (HttpRequest request, HelperDb db, ClaimsPrincipal p, IConfiguration config, ChatPresence presence, ChatGroupGate gate, IHubContext<MessengerHub> hub, CancellationToken token) =>
         {
-            var me = await Messenger.UserAsync(db, p); if (!Access.Can(me, "chat.broadcast")) throw new UnauthorizedAccessException();
+            var me = await Messenger.UserAsync(db, p);
             var feature = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>(); if (feature is { IsReadOnly: false }) feature.MaxRequestBodySize = 128 * 1024 * 1024;
             if (!request.HasFormContentType) throw new ArgumentException("Неверный формат рассылки.");
             var form = await request.ReadFormAsync(token); string audience = form["audience"].ToString(), body = form["body"].ToString().Trim(); bool urgent = form["urgent"] == "true";
-            if (!Guid.TryParse(form["clientId"], out var key) || audience is not ("all" or "online") || body.Length > 4000 || body.Any(c => char.IsControl(c) && c is not '\n' and not '\r' and not '\t')) throw new ArgumentException("Проверьте параметры рассылки.");
+            if (!Guid.TryParse(form["clientId"], out var key) || audience is not ("all" or "online" or "selected") || body.Length > 4000 || body.Any(c => char.IsControl(c) && c is not '\n' and not '\r' and not '\t')) throw new ArgumentException("Проверьте параметры рассылки.");
+            var selected = new HashSet<int>();
+            foreach (var value in form["recipients"]) { if (!int.TryParse(value, out int user) || user <= 0) throw new ArgumentException("Неверный получатель."); selected.Add(user); }
+            if (selected.Count > 5000 || audience == "selected" && selected.Count == 0) throw new ArgumentException("Выберите получателей.");
             var uploads = form.Files.ToArray(); if (uploads.Length > 10 || uploads.Any(f => f.Length > ChatFiles.MaxFile) || uploads.Sum(f => f.Length) > ChatFiles.MaxTotal) throw new ArgumentException("Вложения: до 10 файлов, до 50 МБ каждый и 100 МБ всего.");
             if (body.Length == 0 && uploads.Length > 0) body = "Вложения: " + string.Join(", ", uploads.Select(f => ChatFiles.Name(f.FileName))); if (body.Length == 0) throw new ArgumentException("Введите сообщение.");
             var saved = new List<ChatFile>(); string directory = ChatFiles.Folder(config); Directory.CreateDirectory(directory); bool committed = false;
@@ -72,13 +80,17 @@ public static class ChatBroadcasts
                 if (old != null)
                 {
                     if (old.SenderId != me.Id || old.Body != body || old.Audience != audience || old.Urgent != urgent) throw new ArgumentException("Идентификатор рассылки уже использован.");
+                    if (audience == "selected" && !selected.SetEquals(await db.ChatMessages.Where(m => m.BroadcastId == id).Select(m => m.RecipientId).ToListAsync(token))) throw new ArgumentException("Получатели рассылки изменились.");
                     var first = await db.ChatMessages.Where(m => m.BroadcastId == id).OrderBy(m => m.Id).FirstAsync(token);
                     var files = await db.ChatFiles.Where(f => f.MessageId == first.Id && f.PeerId == first.RecipientId && f.SenderId == me.Id).OrderBy(f => f.Order).ToListAsync(token);
                     if (!files.Select(f => (f.Name, f.Size, f.Sha256)).SequenceEqual(saved.Select(f => (f.Name, f.Size, f.Sha256)))) throw new ArgumentException("Вложения рассылки изменились.");
                     return Results.Ok(new { id, recipients = await db.ChatMessages.CountAsync(m => m.BroadcastId == id, token) });
                 }
                 var recipients = await db.Users.Where(u => u.Id != me.Id && u.IsActive && u.PasswordHash == "!AD").Select(u => u.Id).ToListAsync(token);
+                if (audience == "selected") { if (selected.Contains(me.Id) || selected.Any(id => !recipients.Contains(id))) throw new ArgumentException("Получатель отключён или недоступен."); recipients = recipients.Where(selected.Contains).ToList(); }
                 if (audience == "online") recipients = recipients.Where(presence.Online).ToList(); if (recipients.Count == 0) throw new ArgumentException("Нет получателей для выбранного режима.");
+                var minute = DateTime.UtcNow.AddMinutes(-1);
+                if (await db.ChatBroadcasts.AnyAsync(b => b.SenderId == me.Id && b.CreatedAt > minute, token)) return Results.Json(new { error = "Массовая рассылка доступна раз в минуту. Повторите позже." }, statusCode: 429);
                 await using var transaction = await db.Database.BeginTransactionAsync(token);
                 db.ChatBroadcasts.Add(new() { Id = id, SenderId = me.Id, Body = body, Audience = audience, Urgent = urgent });
                 var messages = recipients.Select(user => new ChatMessage { SenderId = me.Id, RecipientId = user, Body = body, IsUrgent = urgent, BroadcastId = id, ClientId = Guid.NewGuid().ToString("N") }).ToArray(); db.ChatMessages.AddRange(messages); await db.SaveChangesAsync(token);

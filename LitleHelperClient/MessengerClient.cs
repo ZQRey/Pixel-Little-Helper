@@ -167,9 +167,11 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal Task<ChatEntry> SendAsync(int peer, string text, string clientId) => Request<ChatEntry>("api/messenger/send", new { recipientId = peer, body = text, clientId });
     internal async Task AcknowledgeAsync(long id) { using var response = await http.PostAsJsonAsync("api/messenger/ack/" + id, new { }, lifetime.Token); response.EnsureSuccessStatusCode(); Changed?.Invoke(); }
     internal Task<JsonElement> BroadcastsAsync() => Request<JsonElement>("api/messenger/broadcasts");
-    internal async Task<JsonElement> BroadcastAsync(string body, string audience, bool urgent, string id, IEnumerable<string> paths)
+    internal Task<List<ChatEntry>> UrgentAsync() => Request<List<ChatEntry>>("api/messenger/urgent");
+    internal async Task<JsonElement> BroadcastAsync(string body, string audience, bool urgent, string id, IEnumerable<string> paths, IEnumerable<int>? recipients = null)
     {
         using var form = new MultipartFormDataContent(); form.Add(new StringContent(body), "body"); form.Add(new StringContent(audience), "audience"); form.Add(new StringContent(urgent ? "true" : "false"), "urgent"); form.Add(new StringContent(id), "clientId");
+        foreach (var recipient in recipients ?? []) form.Add(new StringContent(recipient.ToString()), "recipients");
         foreach (var path in paths) form.Add(new StreamContent(File.OpenRead(path)), "files", Path.GetFileName(path));
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromMinutes(5));
         using var response = await filesHttp.PostAsync("api/messenger/broadcast", form, timeout.Token);

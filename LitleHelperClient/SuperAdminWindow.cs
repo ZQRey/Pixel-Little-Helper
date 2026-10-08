@@ -7,7 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace PixelHelper;
-public sealed record ClientNotice(string Text, string Sender = "", int DurationSeconds = 30, int? ChatPeerId = null) { [System.Text.Json.Serialization.JsonIgnore] internal PetState? LocalAnimation { get; init; } }
+public sealed record ClientNotice(string Text, string Sender = "", int DurationSeconds = 30, int? ChatPeerId = null) { [System.Text.Json.Serialization.JsonIgnore] internal PetState? LocalAnimation { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal long? UrgentMessageId { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal DateTime? ExpiresAt { get; init; } }
 public sealed record SuperAdminButton(int Id, string Title, string Message, string Target, int DurationSeconds, int OrderIndex, bool IsActive);
 public sealed record NoticeComputer(string MachineName, bool IsOnline);
 public sealed class SuperAdminWindow : Window

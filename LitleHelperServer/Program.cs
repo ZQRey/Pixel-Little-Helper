@@ -98,6 +98,7 @@ builder.Services.AddSingleton<ChatPresence>();
 builder.Services.AddSingleton<ChatGroupGate>();
 builder.Services.AddSingleton<IMessengerKerberos, MessengerKerberos>();
 builder.Services.AddScoped<IMessengerWindowsDirectory, MessengerWindowsDirectory>();
+builder.Services.AddScoped<IAgentMachineDirectory, AgentMachineDirectory>();
 builder.Services.AddSingleton<MessengerSettings>();
 builder.Services.AddHostedService<ChatRetentionWorker>();
 builder.Services.AddSingleton<GlpiSettingsStore>();
@@ -127,6 +128,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
     await Access.EnsureSchema(db);
+    await ChatBroadcasts.Column(db,"Computers","AdMachineObjectId","TEXT NOT NULL DEFAULT ''");
     await Messenger.EnsureSchemaAsync(db);
     await ChatGroups.EnsureSchemaAsync(db);
     await AnnouncementService.EnsureSchemaAsync(db);
@@ -179,6 +181,7 @@ app.Use(async (context, next) =>
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
+AgentMachineEnrollment.Map(app);
 app.MapIntegrationApi();
 app.MapAnnouncementApi();
 app.MapBranchApi();

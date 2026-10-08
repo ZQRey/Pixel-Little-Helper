@@ -57,6 +57,7 @@ if (args.FirstOrDefault() == "--ad-probe")
 if (args.FirstOrDefault() == "--telegram-management") { await TelegramManagementTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--glpi-import") { await GlpiImportTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--messenger") { await MessengerTests.RunAsync(); return; }
+if (args.FirstOrDefault() == "--machine-enrollment") { await MachineEnrollmentTests.RunAsync(); return; }
 string url = args.FirstOrDefault() ?? "http://127.0.0.1:21500";
 string mockUrl = args.Skip(1).FirstOrDefault() ?? "http://127.0.0.1:21501";
 var mockBuilder = WebApplication.CreateBuilder();

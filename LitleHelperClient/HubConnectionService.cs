@@ -66,6 +66,8 @@ public sealed class HubConnectionService : IAsyncDisposable
         {
             try
             {
+                string? machineKey = MachineIdentity.Read(settings.ServerUrl);
+                if (machineKey != null && machineKey != settings.ClientToken) { settings.ClientToken = machineKey; settings.Save(); await connection.DisposeAsync(); connection = BuildConnection(); registrationSent = false; registered = false; }
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); attempt.CancelAfter(TimeSpan.FromSeconds(25));
                 if (connection.State == HubConnectionState.Disconnected)
                 {

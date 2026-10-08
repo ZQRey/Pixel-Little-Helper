@@ -21,6 +21,7 @@ public class Computer
     public string HardwareJson { get; set; } = "{}";
     public string SoftwareJson { get; set; } = "[]";
     [JsonIgnore] public string? ConnectionId { get; set; }
+    [JsonIgnore] public string AdMachineObjectId { get; set; } = "";
     [JsonIgnore] public string AgentKeyHash { get; set; } = "";
 }
 public class ActionButton

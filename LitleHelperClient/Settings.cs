@@ -35,11 +35,14 @@ public sealed class Settings
     public double ChatBackgroundDim { get; set; } = .35;
     internal bool EnsureClientKey()
     {
+        string? machineKey = MachineIdentity.Read(ServerUrl);
+        if (machineKey != null) { bool changed = ClientToken != machineKey; ClientToken = machineKey; return changed; }
         if (!string.IsNullOrWhiteSpace(ClientToken)) return false;
         ClientToken = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48));
         return true;
     }
-    public static readonly string Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PixelHelper");
+    internal static string? TestFolder;
+    public static string Folder => TestFolder ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PixelHelper");
     public static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true, WriteIndented = true };
     private const string RegistryPath = @"Software\PixelHelper";
     private const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";

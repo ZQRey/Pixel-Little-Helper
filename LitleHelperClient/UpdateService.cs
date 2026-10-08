@@ -22,6 +22,7 @@ internal sealed class UpdateService : ServiceBase
     {
         stop = new(); _ = Task.Run(() => Loop(stop.Token));
         _ = Task.Run(() => SessionLauncher.RunAsync(stop.Token));
+        _ = Task.Run(() => MachineIdentity.RunAsync(stop.Token));
     }
     protected override void OnStop() => stop?.Cancel();
     private static async Task Loop(CancellationToken token)

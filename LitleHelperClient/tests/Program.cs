@@ -6,7 +6,11 @@ using System.Text;
 using System.Text.Json;
 using PixelHelper;
 
+Settings.TestFolder = Path.Combine(Path.GetTempPath(), "PixelHelper-tests-" + Guid.NewGuid().ToString("N"));
 static void Check(bool result, string message) { if (!result) throw new Exception(message); Console.WriteLine("PASS " + message); }
+Check(Settings.Folder.StartsWith(Path.GetTempPath(),StringComparison.OrdinalIgnoreCase)&&!Settings.Folder.Equals(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"PixelHelper"),StringComparison.OrdinalIgnoreCase),"tests isolate client settings from the installed helper");
+Check(MachineIdentity.Scope("http://helper.gp1.loc")==MachineIdentity.Scope("https://HELPER.gp1.loc/"),"machine key survives HTTP to HTTPS migration");
+Check(MachineIdentity.Scope("https://other.gp1.loc")!=MachineIdentity.Scope("https://helper.gp1.loc"),"machine key is scoped to its own server");
 
 var robotClicks = new RobotClicks(); var clickTime = DateTime.UtcNow;
 Check(robotClicks.Register(clickTime,false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(150),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(300),false)==RobotClickReaction.Greeting,"third rapid robot click triggers greeting");

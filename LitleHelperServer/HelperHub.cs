@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace LitleHelperServer;
 
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
-public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate) : Hub
+public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, IHttpClientFactory? httpFactory = null) : Hub
 {
     public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
@@ -28,6 +28,13 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             computer.IsOnline = true; computer.ConnectionId = Context.ConnectionId; computer.LastSeen = DateTime.UtcNow;
             await db.SaveChangesAsync();
             await Groups.AddToGroupAsync(Context.ConnectionId, "All");
+            await Groups.AddToGroupAsync(Context.ConnectionId, "AllAgents");
+            await Groups.AddToGroupAsync(Context.ConnectionId, "AgentMachine:" + computer.MachineName.ToLowerInvariant());
+            if (!string.IsNullOrWhiteSpace(computer.CurrentUser))
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, "AgentUser:" + computer.CurrentUser.ToLowerInvariant());
+                await Groups.AddToGroupAsync(Context.ConnectionId, "AgentUser:" + Security.TicketUser(computer.CurrentUser).ToLowerInvariant());
+            }
             await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(computer));
         }
         else
@@ -68,7 +75,15 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             throw new HubException("Неверная регистрация");
         c.CurrentUser = Security.Login(info.UserName); c.DomainName = info.DomainName; c.IpAddress = info.IpAddress;
         c.OsVersion = info.OsVersion; c.LastSeen = DateTime.UtcNow;
-        await db.SaveChangesAsync(); await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
+        await db.SaveChangesAsync();
+        await Groups.AddToGroupAsync(Context.ConnectionId, "AllAgents");
+        await Groups.AddToGroupAsync(Context.ConnectionId, "AgentMachine:" + c.MachineName.ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(c.CurrentUser))
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, "AgentUser:" + c.CurrentUser.ToLowerInvariant());
+            await Groups.AddToGroupAsync(Context.ConnectionId, "AgentUser:" + Security.TicketUser(c.CurrentUser).ToLowerInvariant());
+        }
+        await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
         var buttons = await Buttons(db, c); await Clients.Caller.SendAsync("OnButtonsUpdated", buttons);
         await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName));
         return buttons;
@@ -133,6 +148,70 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             string message = ex is InvalidOperationException or ArgumentException ? ex.Message : ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Заявка не отправлена." : "Сервер не смог подключиться к GLPI. Проверьте адрес, DNS и сеть в настройках GLPI.";
             throw new HubException(message);
         }
-        finally {ticketGate.Semaphore.Release();}
+        finally { ticketGate.Semaphore.Release(); }
+    }
+
+    public async Task TriggerEmergencyAlert(string code, string cabinet, string? notes)
+    {
+        var c = await Agent();
+        var em = settings.Emergency();
+        if (!em.AllowClientTrigger && !em.AllowStandalone) throw new HubException("Запуск экстренных кодов через помощника отключён");
+        string upperCode = code.Trim().ToUpperInvariant();
+        string title = upperCode switch
+        {
+            "CODE_RED" => "КОД КРАСНЫЙ: Пожар / Задымление",
+            "CODE_BLACK" => "КОД ЧЁРНЫЙ: Угроза взрыва / Теракт",
+            "CODE_ORANGE" => "КОД ОРАНЖЕВЫЙ: ЧС / Опасные вещества",
+            "CODE_YELLOW" => "КОД ЖЁЛТЫЙ: Чрезвычайная ситуация",
+            "CODE_BLUE" => "КОД СИНИЙ: Реанимация / Остановка сердца",
+            "CODE_WHITE" => "КОД БЕЛЫЙ: Агрессия / Нападение",
+            "CODE_PINK" => "КОД РОЗОВЫЙ: Потеря / Похищение ребёнка",
+            _ => "ЭКСТРЕННОЕ ОПОВЕЩЕНИЕ"
+        };
+        var notice = new EmergencyAlertNotice(upperCode, title, string.IsNullOrWhiteSpace(cabinet) ? c.MachineName : cabinet.Trim(), notes?.Trim(), null, null, null, 300, null, null);
+        await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
+        db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "emergency_trigger", CommandPayload = upperCode + " / " + cabinet + " / " + (notes ?? ""), Status = "Completed", Result = "Оповещение разослано агентам" });
+        await db.SaveChangesAsync();
+
+        if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl) && httpFactory != null)
+        {
+            try
+            {
+                var http = httpFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(3);
+                var endpoint = em.ServerUrl.TrimEnd('/') + "/api/broadcast/client/alert";
+                var body = new { code = upperCode, cabinet = cabinet?.Trim(), notes = notes?.Trim(), client_name = c.MachineName };
+                using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                if (!string.IsNullOrWhiteSpace(em.ApiKey)) req.Headers.Add("X-Client-Key", em.ApiKey);
+                req.Content = System.Net.Http.Json.JsonContent.Create(body);
+                _ = http.SendAsync(req);
+            }
+            catch { }
+        }
+    }
+
+    public async Task AcknowledgeSpecialistCall(int callId, bool accepted, string? reason)
+    {
+        var c = await Agent();
+        var em = settings.Emergency();
+        db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "specialist_call_ack", CommandPayload = $"Call #{callId}, Accepted: {accepted}, Reason: {reason}", Status = "Completed", Result = $"Специалист {c.CurrentUser} ({c.MachineName}) {(accepted ? "подтвердил" : "отклонил")} вызов" });
+        await db.SaveChangesAsync();
+
+        if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl) && httpFactory != null)
+        {
+            try
+            {
+                var http = httpFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(3);
+                var endpoint = $"{em.ServerUrl.TrimEnd('/')}/api/specialist/calls/{callId}/ack";
+                var body = new { acknowledged_by = $"{c.CurrentUser} ({c.MachineName})" };
+                using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                if (!string.IsNullOrWhiteSpace(em.ApiKey)) req.Headers.Add("X-Client-Key", em.ApiKey);
+                req.Content = System.Net.Http.Json.JsonContent.Create(body);
+                _ = http.SendAsync(req);
+            }
+            catch { }
+        }
     }
 }
+

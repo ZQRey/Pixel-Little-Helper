@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Novell.Directory.Ldap;
 using System.ComponentModel.DataAnnotations;
@@ -57,7 +58,7 @@ public class TelegramDirectory(IntegrationSettings settings) : ITelegramDirector
 }
 
 public class TicketManagementGate { public SemaphoreSlim Semaphore { get; } = new(1, 1); }
-public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGate gate)
+public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGate gate, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub>? hub = null)
 {
     public static int Status(string value) => value == "Created" ? 1 : int.TryParse(value, out int n) && n is >= 1 and <= 6 ? n : 1;
     public static string StatusName(int n) => n switch { 1 => "Новая", 2 => "В работе (назначена)", 3 => "В работе (запланирована)", 4 => "Ожидание", 5 => "Выполнена (решена)", 6 => "Закрыта", _ => "Неизвестно" };
@@ -70,6 +71,39 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
         int[] assignees = await glpi.AssigneesAsync(ticket.GlpiId, token);
         if (!assignees.Contains(ticket.AssignedGlpiUserId)) { ticket.AssignedGlpiUserId = assignees.FirstOrDefault(); ticket.AssignedUsername = ""; }
         ticket.SyncedAt = DateTime.UtcNow; await db.SaveChangesAsync(token);
+
+        try
+        {
+            var followups = await glpi.FollowupsAsync(ticket.GlpiId, token);
+            if (followups.ValueKind == System.Text.Json.JsonValueKind.Array && followups.GetArrayLength() > 0)
+            {
+                string stateKey = "ticket-last-followup:" + ticket.GlpiId;
+                var lastState = await db.TelegramBotStates.FindAsync([stateKey], token);
+                long lastId = lastState?.Offset ?? 0;
+                long maxId = lastId;
+                foreach (var f in followups.EnumerateArray())
+                {
+                    int fid = GlpiService.Number(f.GetProperty("id"));
+                    if (fid > maxId) maxId = fid;
+                    if (lastId > 0 && fid > lastId)
+                    {
+                        string content = GlpiTicketImport.Plain(GlpiService.Text(f, "content"));
+                        if (hub != null && !string.IsNullOrWhiteSpace(ticket.Username) && !string.IsNullOrWhiteSpace(content))
+                        {
+                            var notice = new TicketReplyNotice(ticket.GlpiId, ticket.Title, "Специалист техподдержки", content);
+                            _ = hub.Clients.Group("AgentUser:" + ticket.Username.ToLowerInvariant()).SendAsync("TicketReplyNotice", notice, token);
+                        }
+                    }
+                }
+                if (maxId > lastId)
+                {
+                    if (lastState == null) db.TelegramBotStates.Add(new() { Id = stateKey, Offset = maxId });
+                    else lastState.Offset = maxId;
+                    await db.SaveChangesAsync(token);
+                }
+            }
+        }
+        catch { }
     }
     public async Task SyncAsync(TicketRecord ticket, CancellationToken token)
     {
@@ -108,6 +142,13 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
                 if (string.IsNullOrWhiteSpace(text) || text.Length > 8000) throw new ArgumentException("Текст должен содержать от 1 до 8000 символов.");
                 if (action == "reply") await glpi.FollowupAsync(ticket.GlpiId, actor.User.Username, text, token);
                 else await glpi.SolveAsync(ticket.GlpiId, actor.User.Username, text, token);
+                if (hub != null && !string.IsNullOrWhiteSpace(ticket.Username))
+                {
+                    string author = actor.User.FullName.Length > 0 ? actor.User.FullName : actor.User.Username;
+                    var notice = new TicketReplyNotice(ticket.GlpiId, ticket.Title, author, text);
+                    _ = hub.Clients.Group("AgentUser:" + ticket.Username.ToLowerInvariant()).SendAsync("TicketReplyNotice", notice, token);
+                }
+
             }
             else
             {

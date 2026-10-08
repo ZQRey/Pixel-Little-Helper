@@ -9,3 +9,6 @@ public sealed record PhysicalDisk(string Model, ulong SizeBytes, string Interfac
 public sealed record SoftwareInfo(string Name, string Version);
 public sealed record HardwareInfo(string CpuModel, ulong TotalRamBytes, MemorySlot[] MemorySlots, LogicalDisk[] LogicalDisks, PhysicalDisk[] PhysicalDisks, string[] Errors);
 public sealed record InventorySnapshot(HardwareInfo Hardware, SoftwareInfo[] Software);
+public sealed record CartridgeReadyNotice(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
+public sealed record TicketReplyNotice(int GlpiId, string Title, string Author, string Text);
+public sealed record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department);

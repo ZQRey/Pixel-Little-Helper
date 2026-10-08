@@ -172,7 +172,10 @@ public static class PanelApi
             else if (!p.IsInRole(Roles.SuperAdmin))
             {
                 var staff = await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name);
-                query = query.Where(t => t.BranchId == null || t.BranchId == staff.BranchId);
+                if (staff.Role != Roles.Admin || staff.BranchId != null)
+                {
+                    query = query.Where(t => t.BranchId == null || t.BranchId == staff.BranchId);
+                }
             }
             if (branchId != null) query = branchId == 0 ? query.Where(t => t.BranchId == null) : query.Where(t => t.BranchId == branchId);
             if (!string.IsNullOrEmpty(status) && status != "all")

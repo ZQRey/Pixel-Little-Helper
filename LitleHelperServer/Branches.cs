@@ -11,7 +11,7 @@ public class Branch
 }
 public static class Branches
 {
-    public static bool CanHandle(PanelUser user, TicketRecord ticket) => user.Role == Roles.SuperAdmin || ticket.BranchId == null || user.BranchId == ticket.BranchId;
+    public static bool CanHandle(PanelUser user, TicketRecord ticket) => user.Role == Roles.SuperAdmin || (user.Role == Roles.Admin && user.BranchId == null) || ticket.BranchId == null || user.BranchId == ticket.BranchId;
     public static void Require(PanelUser user, TicketRecord ticket)
     { if (!CanHandle(user, ticket)) throw new UnauthorizedAccessException("Заявка относится к другому филиалу. Проверьте филиал в профиле пользователя."); }
     public static async Task ValidateUserAsync(HelperDb db, int? id)

@@ -19,6 +19,9 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action<List<ActionButton>>? ButtonsUpdated;
     public event Action<bool>? SuperAdminAvailable;
     public event Func<ClientNotice, Task<string>>? NoticeReceived;
+    public event Action<CartridgeReadyNotice>? CartridgeReadyReceived;
+    public event Action<TicketReplyNotice>? TicketReplyReceived;
+    public event Action<EmergencyAlertNotice>? EmergencyAlertReceived;
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
@@ -51,6 +54,9 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On<string>("KillProcess", name => RunTask(new(Guid.NewGuid().ToString("N"), "kill", name)));
         created.On("Reboot", () => RunTask(new(Guid.NewGuid().ToString("N"), "reboot", "")));
         created.On("Shutdown", () => RunTask(new(Guid.NewGuid().ToString("N"), "shutdown", "")));
+        created.On<CartridgeReadyNotice>("CartridgeReadyNotice", notice => CartridgeReadyReceived?.Invoke(notice));
+        created.On<TicketReplyNotice>("TicketReplyNotice", notice => TicketReplyReceived?.Invoke(notice));
+        created.On<EmergencyAlertNotice>("EmergencyAlertNotice", notice => EmergencyAlertReceived?.Invoke(notice));
         created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
         created.Closed += _ => { if (ReferenceEquals(connection,created)) Offline(); return Task.CompletedTask; };
 
@@ -173,6 +179,21 @@ public sealed class HubConnectionService : IAsyncDisposable
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token,lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(30));
         return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, timeout.Token);
     }
+    public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room) =>
+        await CreateTicketAtAsync(title, description, branchId, room, CancellationToken.None);
+
+    public async Task TriggerEmergencyAlertAsync(string code, string cabinet, string? notes, CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        await connection.InvokeAsync("TriggerEmergencyAlert", code, cabinet, notes, token);
+    }
+
+    public async Task AcknowledgeSpecialistCallAsync(int callId, bool accepted, CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        await connection.InvokeAsync("AcknowledgeSpecialistCall", callId, accepted, token);
+    }
+
     public async ValueTask DisposeAsync()
     {
         lifetime.Cancel(); Offline();

@@ -24,6 +24,7 @@ public sealed class Settings
     public bool ChatWindowsNotifications { get; set; } = true;
     public bool ChatComicNotifications { get; set; } = true;
     public string DisplayMode { get; set; } = "Background";
+    public string Language { get; set; } = "ru";
     public bool AssistantHidden { get; set; }
     public bool EmojiReactions { get; set; } = true;
     public bool IncomingEmojiReactions { get; set; } = true;

@@ -142,6 +142,8 @@ public static class TelegramManagementTests
             try { await Branches.ValidateTicketAsync(db, branch.Id, ""); throw new Exception("Missing room accepted"); } catch (ArgumentException) { Check(true, "branch ticket requires room"); }
             Check((await Branches.ValidateTicketAsync(db, branch.Id, "12"))!.Name == "Clinic", "active branch and room accepted");
             ticket.BranchId = branch.Id; ticket.BranchName = branch.Name; ticket.Room = "12"; await db.SaveChangesAsync();
+            var otherBranch = new Branch { Name = "Other" }; db.Branches.Add(otherBranch); await db.SaveChangesAsync();
+            alice.BranchId = otherBranch.Id; await db.SaveChangesAsync();
             await handler.HandleAsync(Callback(123, ticket.Id, "claim", "supergroup", -100888), default);
             Check(transport.Assignments == 0, "administrator without matching branch cannot claim ticket");
             alice.BranchId = branch.Id; await db.SaveChangesAsync(); actor = await handler.ActorAsync(123, default);

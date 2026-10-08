@@ -72,6 +72,7 @@ public sealed class PetWindow : Window
     public PetWindow(bool diagnostics = false)
     {
         this.diagnostics = diagnostics;
+        Loc.Initialize(settings.Language);
         emojiReactions = new EmojiReactions(diagnostics ? null : Path.Combine(Settings.Folder, "emoji-seen.json"));
         Width = 500; Height = 400;
         WindowStyle = WindowStyle.None;
@@ -130,6 +131,13 @@ public sealed class PetWindow : Window
             animation.Start(); inactivity.Start(); refresh.Start();
             if (!diagnostics) hub?.Start();
             if (!diagnostics && messenger != null) _ = messenger.StartAsync();
+            if (!diagnostics && hub != null)
+            {
+                var ncaWatchdog = new NcaLayerWatchdog(hub, msg => Dispatcher.InvokeAsync(() => ShowNotice(msg)));
+                ncaWatchdog.StartDelayed();
+                var sessionWatchdog = new SessionWatchdog();
+                sessionWatchdog.Start();
+            }
             if (!diagnostics) React(PetState.Greeting, 3);
             if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
         };
@@ -255,6 +263,9 @@ public sealed class PetWindow : Window
                 hub = new HubConnectionService(settings);
                 hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; if (menuOpen && !announcementVisible) ShowMenu(); }));
                 hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
+                hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
+                hub.TicketReplyReceived += notice => Dispatcher.InvokeAsync(() => HandleTicketReply(notice));
+                hub.EmergencyAlertReceived += notice => Dispatcher.InvokeAsync(() => HandleEmergencyAlert(notice));
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (!online) { React(PetState.Error, 4); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
@@ -294,7 +305,16 @@ public sealed class PetWindow : Window
         var chat = new MenuItem { Header = "Мессенджер" }; chat.Click += async (_, _) => await OpenMessengerAsync(); menu.Items.Add(chat);
         if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
         var reconnect = new MenuItem { Header = "Повторить подключение", IsEnabled = !reconnecting }; reconnect.Click += async (_, _) => await ReconnectAsync(); menu.Items.Add(reconnect);
-        AddDisplayMenu(menu); menu.Items.Add(new Separator()); var exit = new MenuItem { Header = "Выход" }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
+        AddDisplayMenu(menu);
+        var langMenu = new MenuItem { Header = Loc.T("TrayLanguage") };
+        foreach (var lang in Enum.GetValues<AppLanguage>())
+        {
+            var item = new MenuItem { Header = Loc.DisplayName(lang), IsCheckable = true, IsChecked = Loc.CurrentLanguage == lang };
+            item.Click += (_, _) => { Loc.CurrentLanguage = lang; settings.Language = Loc.Code; settings.Save(); React(PetState.Twirl, 1.2); };
+            langMenu.Items.Add(item);
+        }
+        menu.Items.Add(langMenu);
+        menu.Items.Add(new Separator()); var exit = new MenuItem { Header = Loc.T("TrayExit") }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
     }
     private void Draw()
     {
@@ -531,7 +551,8 @@ public sealed class PetWindow : Window
     {
         HideBubbles(); Expand(); menuOpen = true; Wake();
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
-        if (!diagnostics) visibleActions.Add(new("messenger", "Мессенджер", "messenger"));
+        if (!diagnostics) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
+        if (!diagnostics && hub?.IsOnline == true) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
         int rows = (visibleActions.Count + 1) / 2;
         for (int i = 0; i < visibleActions.Count; i++)
         {
@@ -708,6 +729,7 @@ public sealed class PetWindow : Window
             switch (action.Type)
             {
                 case "messenger": return OpenMessengerAsync();
+                case "emergency": return OpenEmergencyDialogAsync();
                 case "exit": Application.Current.Shutdown(); break;
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
@@ -754,5 +776,51 @@ public sealed class PetWindow : Window
         catch (Exception ex) { Settings.Log(ex); ShowNotice(ex.Message); }
         return Task.CompletedTask;
     }
+
+    private Task OpenEmergencyDialogAsync()
+    {
+        if (hub?.IsOnline != true)
+        {
+            ShowNotice("Сервер недоступен для отправки тревоги.");
+            return Task.CompletedTask;
+        }
+        var dlg = new EmergencyDialogWindow(hub, settings);
+        dlg.ShowDialog();
+        return Task.CompletedTask;
+    }
+
+    private void HandleCartridgeReady(CartridgeReadyNotice notice)
+    {
+        Wake();
+        React(PetState.Joy, 5);
+        try { System.Media.SystemSounds.Exclamation.Play(); } catch { }
+        string title = Loc.T("CartridgeReadyTitle");
+        string body = Loc.T("CartridgeReadyBody", notice.Username, notice.Marker, notice.Model, notice.Cabinet, notice.ItOffice);
+        ReceiveAnnouncement(new ClientNotice($"{title}\n\n{body}", "Склад картриджей", 25) { LocalAnimation = PetState.Joy });
+    }
+
+    private void HandleTicketReply(TicketReplyNotice notice)
+    {
+        Wake();
+        React(PetState.Surprise, 5);
+        try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+        string title = Loc.T("GlpiReplyTitle", notice.GlpiId);
+        string by = Loc.T("GlpiReplyBy", notice.Author);
+        ReceiveAnnouncement(new ClientNotice($"{title}\n{by}\n\n{notice.Text}", "GLPI HelpDesk", 25) { LocalAnimation = PetState.Surprise });
+    }
+
+    private void HandleEmergencyAlert(EmergencyAlertNotice notice)
+    {
+        Wake();
+        var window = new EmergencyAlertWindow(notice, accepted =>
+        {
+            if (notice.CallId.HasValue && hub != null)
+            {
+                _ = hub.AcknowledgeSpecialistCallAsync(notice.CallId.Value, accepted);
+            }
+        });
+        window.ShowDialog();
+    }
 }
+
 

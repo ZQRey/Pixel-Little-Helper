@@ -145,3 +145,9 @@ public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
 public record AgentRegistrationRequest(string MachineName, string ClientKey);
 public record TicketRequest(string Title, string Description, int? BranchId = null, string Room = "");
+public record CartridgeReadyNotice(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
+public record TicketReplyNotice(int GlpiId, string Title, string Author, string Text);
+public record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department);
+public record CartridgeReadyRequest(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
+public record EmergencyAlertRequest(string Code, string? Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int? DurationSeconds, int? CallId, string? Department);
+

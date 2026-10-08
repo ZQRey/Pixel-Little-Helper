@@ -18,4 +18,4 @@ if ($LASTEXITCODE -ne 0) { throw 'candle failed' }
 & (Join-Path $WixBin 'light.exe') -nologo -ext WixUIExtension -cultures:ru-ru -out (Join-Path $output 'PixelHelper.msi') (Join-Path $output 'Product.wixobj') (Join-Path $output 'PublishedFiles.wixobj')
 if ($LASTEXITCODE -ne 0) { throw 'light failed' }
 Write-Host "MSI: $output\PixelHelper.msi"
-if(Test-Path (Join-Path $projectRoot 'artifacts\update-signing-key.pem')) { & (Join-Path $PSScriptRoot 'sign-update.ps1') -Msi (Join-Path $output 'PixelHelper.msi') }
+if(Test-Path (Join-Path $projectRoot 'artifacts\update-signing-key.pem')) { & (Join-Path $PSScriptRoot 'sign-update.ps1') -Msi (Join-Path $output 'PixelHelper.msi') -Dotnet $Dotnet }

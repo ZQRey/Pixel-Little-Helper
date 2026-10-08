@@ -1,4 +1,4 @@
-using System.Net.Http;
+﻿using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -21,7 +21,7 @@ public sealed class SuperAdminWindow : Window
     {
         Title = "Кнопки супер админа"; Width = 560; Height = 660; MinWidth = 440; MinHeight = 540;
         WindowStartupLocation = WindowStartupLocation.CenterScreen; ShowInTaskbar = false;
-        Background = Brushes.AliceBlue; Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        Background = (Brush)new BrushConverter().ConvertFromString("#F8FAFC")!; FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"); Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         http = new(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = new Uri(settings.ServerUrl!.TrimEnd('/') + "/api/"), Timeout = TimeSpan.FromSeconds(20) };
         http.DefaultRequestHeaders.Add("X-Client-Key", settings.ClientToken); http.DefaultRequestHeaders.Add("X-Machine-Name", Environment.MachineName);
         panel.Children.Add(new TextBlock { Text = "Вход SuperAdmin", FontSize = 20, Margin = new Thickness(0, 0, 0, 10) });
@@ -95,3 +95,4 @@ public sealed class SuperAdminWindow : Window
         };
     }
 }
+

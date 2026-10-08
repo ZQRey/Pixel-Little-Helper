@@ -594,8 +594,8 @@ public sealed class PetWindow : Window
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        panel.Children.Add(new TextBlock { Text = notice.Sender, FontWeight = FontWeights.Bold, Foreground = Brushes.MidnightBlue, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 6) });
-        var scroll = new ScrollViewer { Content = new TextBlock { Text = notice.Text, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.MidnightBlue, FontSize = 14 }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        panel.Children.Add(new TextBlock { Text = notice.Sender, FontWeight = FontWeights.Bold, Foreground = (Brush)new BrushConverter().ConvertFromString("#4F46E5")!, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 6) });
+        var scroll = new ScrollViewer { Content = new TextBlock { Text = notice.Text, TextWrapping = TextWrapping.Wrap, Foreground = (Brush)new BrushConverter().ConvertFromString("#1E293B")!, FontSize = 14 }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Grid.SetRow(scroll, 1); panel.Children.Add(scroll);
         var close = MakeButton("Закрыть"); close.Margin = new Thickness(0, 8, 0, 0); close.Click += (_, _) => { HideBubbles(); ShowNextAnnouncement(); }; Grid.SetRow(close, 2); panel.Children.Add(close);
         if (notice.ChatPeerId is int peer)
@@ -610,8 +610,8 @@ public sealed class PetWindow : Window
             acknowledge.Click += async (_,_) => { acknowledge.IsEnabled = false; try { if (messenger != null) { if (notice.ChatPeerId < 0) await messenger.ReadAsync(notice.ChatPeerId.Value, messageId); else await messenger.AcknowledgeAsync(messageId); } HideBubbles(); ShowNextAnnouncement(); } catch(Exception ex) { acknowledge.IsEnabled = true; Settings.Log(ex); acknowledge.Content = "Повторить подтверждение"; } };
             var buttons = new StackPanel { Orientation = Orientation.Horizontal }; panel.Children.Remove(close); buttons.Children.Add(acknowledge); buttons.Children.Add(close); Grid.SetRow(buttons,2); panel.Children.Add(buttons);
         }
-        AddBubble(new Border { Background = Brushes.AliceBlue, BorderBrush = Brushes.SteelBlue, BorderThickness = new Thickness(2), CornerRadius = new CornerRadius(14), Child = panel }, 70, 48, 360, 216);
-        var tail = new System.Windows.Shapes.Polygon { Fill = Brushes.AliceBlue, Stroke = Brushes.SteelBlue, StrokeThickness = 2, Points = new PointCollection { new(0, 0), new(22, 0), new(11, 22) } };
+        AddBubble(new Border { Background = Brushes.White, BorderBrush = (Brush)new BrushConverter().ConvertFromString("#E2E8F0")!, BorderThickness = new Thickness(1.5), CornerRadius = new CornerRadius(16), Child = panel, Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 18, ShadowDepth = 3, Opacity = 0.16, Color = Color.FromRgb(15, 23, 42) } }, 70, 48, 360, 216);
+        var tail = new System.Windows.Shapes.Polygon { Fill = Brushes.White, Stroke = (Brush)new BrushConverter().ConvertFromString("#E2E8F0")!, StrokeThickness = 1.5, Points = new PointCollection { new(0, 0), new(22, 0), new(11, 22) } };
         AddBubble(tail, SpriteLeft + 36, 262, 22, 22);
         announcementUntil = DateTime.UtcNow.AddSeconds(notice.DurationSeconds); KeepMenuVisible(); UpdateRegion();
     }
@@ -755,3 +755,4 @@ public sealed class PetWindow : Window
         return Task.CompletedTask;
     }
 }
+

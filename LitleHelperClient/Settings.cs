@@ -19,6 +19,7 @@ public sealed class Settings
     public bool ChatPreview { get; set; } = true;
     public bool ChatDoNotDisturb { get; set; }
     public bool ChatUrgentOverridesQuiet { get; set; } = true;
+    public List<string> ChatCommandsShown { get; set; } = new();
     public List<string> UrgentNotificationsShown { get; set; } = new();
     public bool ChatWindowsNotifications { get; set; } = true;
     public bool ChatComicNotifications { get; set; } = true;

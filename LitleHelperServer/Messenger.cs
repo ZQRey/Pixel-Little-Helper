@@ -20,6 +20,7 @@ public class ChatMessage
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
     public DateTime? ReadAt { get; set; }
     public bool IsUrgent { get; set; }
+    public string? Command { get; set; }
     public string? BroadcastId { get; set; }
     public DateTime? AcknowledgedAt { get; set; }
 }
@@ -171,7 +172,7 @@ public static class Messenger
         {
             var me = await UserAsync(db, p);
             var users = await db.Users.AsNoTracking().Where(u => u.Id != me.Id && u.PasswordHash == "!AD" && (u.IsActive || db.ChatMessages.Any(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id)))
-                .OrderBy(u => u.FullName).Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(), unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null), lastId = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).Select(m => (long?)m.Id).Max(), lastAt = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => (DateTime?)m.SentAt).FirstOrDefault(), lastText = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => m.Body).FirstOrDefault() }).ToListAsync();
+                .OrderBy(u => u.FullName).Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(), unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null && m.Body != ""), lastId = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).Select(m => (long?)m.Id).Max(), lastAt = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => (DateTime?)m.SentAt).FirstOrDefault(), lastText = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => m.Body).FirstOrDefault() }).ToListAsync();
             return users.Select(u => new ChatListItem(u.Id, u.FullName, u.Username, u.IsActive, u.branch, u.unread, u.lastId, presence.Online(u.Id), u.lastAt, u.lastText)).Concat(await ChatGroups.ListAsync(db, me.Id));
         });
         api.MapGet("/history/{peer:int}", async (int peer, long? before, HelperDb db, ClaimsPrincipal p) =>
@@ -187,14 +188,15 @@ public static class Messenger
             if (request.RecipientId < 0) return await ChatGroups.SendAsync(request, db, me.Id, hub, gate);
             if (request.RecipientId == me.Id || !Guid.TryParse(request.ClientId, out _) || string.IsNullOrWhiteSpace(request.Body) || request.Body.Length > 4000 || request.Body.Any(c => char.IsControl(c) && c is not '\n' and not '\r' and not '\t')) throw new ArgumentException("Сообщение: от 1 до 4000 символов, выберите получателя.");
             var recipient = await db.Users.SingleOrDefaultAsync(u => u.Id == request.RecipientId && u.IsActive && u.PasswordHash == "!AD") ?? throw new ArgumentException("Получатель недоступен.");
+            var content = ChatCommands.Parse(request.Body);
             string clientId = Guid.Parse(request.ClientId).ToString("N");
             var message = await db.ChatMessages.SingleOrDefaultAsync(m => m.SenderId == me.Id && m.ClientId == clientId);
             if (message != null)
             {
-                if (message.RecipientId != request.RecipientId || message.Body != request.Body.Trim()) throw new ArgumentException("Идентификатор сообщения уже использован.");
+                if (message.RecipientId != request.RecipientId || message.Body != content.Body || message.IsUrgent != content.Urgent || message.Command != content.Command) throw new ArgumentException("Идентификатор сообщения уже использован.");
                 return Results.Ok(message);
             }
-            message = new() { SenderId = me.Id, RecipientId = recipient.Id, Body = request.Body.Trim(), ClientId = clientId };
+            message = new() { SenderId = me.Id, RecipientId = recipient.Id, Body = content.Body, IsUrgent = content.Urgent, Command = content.Command, ClientId = clientId };
             db.ChatMessages.Add(message);
             try { await db.SaveChangesAsync(); }
             catch (DbUpdateException)
@@ -202,7 +204,7 @@ public static class Messenger
                 db.Entry(message).State = EntityState.Detached;
                 message = await db.ChatMessages.SingleOrDefaultAsync(m => m.SenderId == me.Id && m.ClientId == clientId);
                 if (message == null) throw;
-                if (message.RecipientId != request.RecipientId || message.Body != request.Body.Trim()) throw new ArgumentException("Идентификатор сообщения уже использован.");
+                if (message.RecipientId != request.RecipientId || message.Body != content.Body || message.IsUrgent != content.Urgent || message.Command != content.Command) throw new ArgumentException("Идентификатор сообщения уже использован.");
                 return Results.Ok(message);
             }
             await hub.Clients.Groups("Chat:" + recipient.Id, "Chat:" + me.Id).SendAsync("ChatMessage", message);

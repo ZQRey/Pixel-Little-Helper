@@ -74,6 +74,7 @@ public static class ChatFiles
             var uploads = form.Files.ToArray();
             if (uploads.Length is < 1 or > 10 || uploads.Any(f => f.Length > MaxFile) || uploads.Sum(f => f.Length) > MaxTotal) throw new ArgumentException("Не более 10 файлов: до 50 МБ каждый и до 100 МБ на сообщение.");
             if (body.Length == 0) body = "Вложения: " + string.Join(", ", uploads.Select(f => Name(f.FileName)));
+            var content = ChatCommands.Parse(body); body = content.Body;
             string directory = Folder(config); Directory.CreateDirectory(directory); var saved = new List<ChatFile>(); bool committed = false;
             await gate.Semaphore.WaitAsync(cancellation);
             try
@@ -91,22 +92,22 @@ public static class ChatFiles
                     await using var data = File.OpenRead(Path.Combine(directory, file.Id)); file.Sha256 = Convert.ToHexString(await SHA256.HashDataAsync(data, cancellation));
                 }
                 string clientId = key.ToString("N"); ChatMessage? old;
-                if (peer < 0) { var group = await db.ChatGroupMessages.SingleOrDefaultAsync(m => m.SenderId == me.Id && m.ClientId == clientId, cancellation); old = group == null ? null : new() { Id = group.Id, SenderId = group.SenderId, RecipientId = -group.GroupId, Body = group.Body, ClientId = group.ClientId, SentAt = group.SentAt, SenderName = me.FullName }; }
+                if (peer < 0) { var group = await db.ChatGroupMessages.SingleOrDefaultAsync(m => m.SenderId == me.Id && m.ClientId == clientId, cancellation); old = group == null ? null : new() { Id = group.Id, SenderId = group.SenderId, RecipientId = -group.GroupId, Body = group.Body, IsUrgent = group.IsUrgent, Command = group.Command, ClientId = group.ClientId, SentAt = group.SentAt, SenderName = me.FullName }; }
                 else old = await db.ChatMessages.SingleOrDefaultAsync(m => m.SenderId == me.Id && m.ClientId == clientId, cancellation);
                 if (old != null)
                 {
                     var previous = await db.ChatFiles.Where(f => f.SenderId == me.Id && f.PeerId == peer && f.MessageId == old.Id).OrderBy(f => f.Order).ToListAsync(cancellation);
-                    if (old.RecipientId != peer || old.Body != body || !previous.Select(f => (f.Name, f.Size, f.Sha256)).SequenceEqual(saved.Select(f => (f.Name, f.Size, f.Sha256)))) throw new ArgumentException("Идентификатор сообщения уже использован.");
+                    if (old.RecipientId != peer || old.Body != body || old.IsUrgent != content.Urgent || old.Command != content.Command || !previous.Select(f => (f.Name, f.Size, f.Sha256)).SequenceEqual(saved.Select(f => (f.Name, f.Size, f.Sha256)))) throw new ArgumentException("Идентификатор сообщения уже использован.");
                     await PopulateAsync(db, [old]); return Results.Ok(old);
                 }
                 await using var transaction = await db.Database.BeginTransactionAsync(cancellation);
                 ChatMessage result;
                 if (peer < 0)
                 {
-                    var message = new ChatGroupMessage { SenderId = me.Id, GroupId = -peer, Body = body, ClientId = clientId }; db.ChatGroupMessages.Add(message); await db.SaveChangesAsync(cancellation);
-                    result = new() { Id = message.Id, SenderId = me.Id, RecipientId = peer, Body = body, ClientId = clientId, SentAt = message.SentAt, SenderName = me.FullName };
+                    var message = new ChatGroupMessage { SenderId = me.Id, GroupId = -peer, Body = body, IsUrgent = content.Urgent, Command = content.Command, ClientId = clientId }; db.ChatGroupMessages.Add(message); await db.SaveChangesAsync(cancellation);
+                    result = new() { Id = message.Id, SenderId = me.Id, RecipientId = peer, Body = body, IsUrgent = content.Urgent, Command = content.Command, ClientId = clientId, SentAt = message.SentAt, SenderName = me.FullName };
                 }
-                else { result = new() { SenderId = me.Id, RecipientId = peer, Body = body, ClientId = clientId }; db.ChatMessages.Add(result); await db.SaveChangesAsync(cancellation); }
+                else { result = new() { SenderId = me.Id, RecipientId = peer, Body = body, IsUrgent = content.Urgent, Command = content.Command, ClientId = clientId }; db.ChatMessages.Add(result); await db.SaveChangesAsync(cancellation); }
                 foreach (var file in saved) file.MessageId = result.Id;
                 db.ChatFiles.AddRange(saved); await db.SaveChangesAsync(cancellation); await transaction.CommitAsync(cancellation); committed = true;
                 result.Attachments = saved.Select(f => new ChatFileInfo(f.Id, f.Name, f.Size)).ToList();

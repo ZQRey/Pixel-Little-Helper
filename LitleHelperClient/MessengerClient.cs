@@ -23,7 +23,7 @@ public record ChatAttachment(string Id, string Name, long Size)
     public bool IsImage => new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" }.Contains(Path.GetExtension(Name).ToLowerInvariant());
     public string Label => Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
 }
-public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null, bool IsSystem = false);
+public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null, bool IsSystem = false, string? Command = null);
 internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false, bool IsAdmin = false, bool IsOwner = false)
 {
     public string Label => (IsOnline ? "● " : "○ ") + FullName;
@@ -167,7 +167,7 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal Task<ChatEntry> SendAsync(int peer, string text, string clientId) => Request<ChatEntry>("api/messenger/send", new { recipientId = peer, body = text, clientId });
     internal async Task AcknowledgeAsync(long id) { using var response = await http.PostAsJsonAsync("api/messenger/ack/" + id, new { }, lifetime.Token); response.EnsureSuccessStatusCode(); Changed?.Invoke(); }
     internal Task<JsonElement> BroadcastsAsync() => Request<JsonElement>("api/messenger/broadcasts");
-    internal Task<List<ChatEntry>> UrgentAsync() => Request<List<ChatEntry>>("api/messenger/urgent");
+    internal Task<List<ChatEntry>> UrgentAsync() => Request<List<ChatEntry>>("api/messenger/effects");
     internal async Task<JsonElement> BroadcastAsync(string body, string audience, bool urgent, string id, IEnumerable<string> paths, IEnumerable<int>? recipients = null)
     {
         using var form = new MultipartFormDataContent(); form.Add(new StringContent(body), "body"); form.Add(new StringContent(audience), "audience"); form.Add(new StringContent(urgent ? "true" : "false"), "urgent"); form.Add(new StringContent(id), "clientId");

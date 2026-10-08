@@ -32,6 +32,8 @@ public class ChatGroupDeparture
 }
 public class ChatGroupMessage
 {
+    public bool IsUrgent { get; set; }
+    public string? Command { get; set; }
     public long Id { get; set; }
     public int GroupId { get; set; }
     public int SenderId { get; set; }
@@ -99,7 +101,7 @@ public static class ChatGroups
         return member;
     }
     internal static IQueryable<ChatGroupMessage> Visible(HelperDb db, ChatGroupMember member) => db.ChatGroupMessages.AsNoTracking().Where(m => m.GroupId == member.GroupId && m.Id > member.JoinedAfterId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == member.UserId && m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt));
-    private static ChatMessage View(ChatGroupMessage message, long readThrough, string sender) => new() { Id = message.Id, SenderId = message.SenderId, RecipientId = -message.GroupId, Body = message.Body, ClientId = message.ClientId, SentAt = message.SentAt, SenderName = sender, ReadAt = message.Id <= readThrough ? message.SentAt : null };
+    private static ChatMessage View(ChatGroupMessage message, long readThrough, string sender) => new() { Id = message.Id, SenderId = message.SenderId, RecipientId = -message.GroupId, Body = message.Body, IsUrgent = message.IsUrgent, Command = message.Command, ClientId = message.ClientId, SentAt = message.SentAt, SenderName = sender, ReadAt = message.Id <= readThrough ? message.SentAt : null };
     public static async Task<List<ChatListItem>> ListAsync(HelperDb db, int user)
     {
         var memberships = await db.ChatGroupMembers.AsNoTracking().Where(m => m.UserId == user).ToListAsync(); var list = new List<ChatListItem>();
@@ -110,7 +112,7 @@ public static class ChatGroups
             var visible = Visible(db, member);
             var suspendedUntil = await db.ChatGroupRestrictions.Where(r => r.GroupId == group.Id && r.UserId == user && r.EndsAt > DateTime.UtcNow).Select(r => (DateTime?)r.EndsAt).MaxAsync(); bool suspended = suspendedUntil != null;
             var last = await visible.OrderByDescending(m => m.Id).FirstOrDefaultAsync();
-            int unread = await visible.CountAsync(m => m.Id > member.ReadThroughId && m.SenderId != user);
+            int unread = await visible.CountAsync(m => m.Id > member.ReadThroughId && m.SenderId != user && m.Body != "");
             list.Add(new(-group.Id, group.Name, "", !group.IsClosed && !suspended, null, suspended ? 0 : unread, last?.Id, false, last?.SentAt, last?.Body, true, group.OwnerId, suspendedUntil, member.IsAdmin));
         }
         return list;
@@ -126,6 +128,7 @@ public static class ChatGroups
     public static async Task<IResult> SendAsync(ChatSend request, HelperDb db, int user, IHubContext<MessengerHub> hub, ChatGroupGate gate)
     {
         if (request.RecipientId == int.MinValue || !Guid.TryParse(request.ClientId, out _) || string.IsNullOrWhiteSpace(request.Body) || request.Body.Length > 4000 || request.Body.Any(c => char.IsControl(c) && c is not '\n' and not '\r' and not '\t')) throw new ArgumentException("Некорректное сообщение.");
+        var content = ChatCommands.Parse(request.Body);
         int group = -request.RecipientId; string clientId = Guid.Parse(request.ClientId).ToString("N");
         await gate.Semaphore.WaitAsync();
         try
@@ -134,8 +137,8 @@ public static class ChatGroups
             if ((await db.ChatGroups.SingleAsync(g => g.Id == group)).IsClosed) throw new ArgumentException("Группа закрыта. История доступна для чтения.");
             var old = await db.ChatGroupMessages.SingleOrDefaultAsync(m => m.SenderId == user && m.ClientId == clientId);
             if (old != null)
-            { if (old.GroupId != group || old.Body != request.Body.Trim()) throw new ArgumentException("Идентификатор сообщения уже использован."); return Results.Ok(View(old, 0, (await db.Users.FindAsync(user))!.FullName)); }
-            var message = new ChatGroupMessage { GroupId = group, SenderId = user, Body = request.Body.Trim(), ClientId = clientId }; db.ChatGroupMessages.Add(message); await db.SaveChangesAsync();
+            { if (old.GroupId != group || old.Body != content.Body || old.IsUrgent != content.Urgent || old.Command != content.Command) throw new ArgumentException("Идентификатор сообщения уже использован."); return Results.Ok(View(old, 0, (await db.Users.FindAsync(user))!.FullName)); }
+            var message = new ChatGroupMessage { GroupId = group, SenderId = user, Body = content.Body, IsUrgent = content.Urgent, Command = content.Command, ClientId = clientId }; db.ChatGroupMessages.Add(message); await db.SaveChangesAsync();
             var recipients = await db.ChatGroupMembers.Where(m => m.GroupId == group && db.Users.Any(u => u.Id == m.UserId && u.IsActive) && !db.ChatGroupRestrictions.Any(r => r.GroupId == group && r.UserId == m.UserId && r.EndsAt > DateTime.UtcNow)).Select(m => "Chat:" + m.UserId).ToArrayAsync();
             var result = View(message, 0, (await db.Users.FindAsync(user))!.FullName);
             await hub.Clients.Groups(recipients).SendAsync("ChatMessage", result); return Results.Ok(result);

@@ -10,6 +10,7 @@ internal sealed class MessengerPreferences : Window
         Title = "Оформление и уведомления"; Width = 440; Height = 650; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         MessengerDialog.Apply(this,settings);
         var panel = new StackPanel { Margin = new Thickness(20) }; Content = new ScrollViewer { Content = panel };
+        var help = new Expander { Header = "Помощь · команды сообщений", Margin = new Thickness(0,0,0,10), Content = new TextBlock { Text = "/срочно Текст — срочное уведомление поверх окон.\n/танец — помощник получателя танцует.\n/танец Текст — танец и обычный текст.\nКоманды пишутся в начале и не показываются в переписке. Их можно сочетать: /срочно /танец Текст.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8) } }; panel.Children.Add(help);
         ComboBox Choice(string label, string[] labels, int selected)
         {
             panel.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 12, 0, 5) });

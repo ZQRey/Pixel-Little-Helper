@@ -11,6 +11,7 @@ public class ChatBroadcast
     public string Body { get; set; } = "";
     public string Audience { get; set; } = "all";
     public bool Urgent { get; set; }
+    public string? Command { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 public static class ChatBroadcasts
@@ -32,11 +33,16 @@ public static class ChatBroadcasts
         string date = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT", boolean = db.Database.IsNpgsql() ? "boolean" : "INTEGER";
         await Column(db, "ChatMessages", "IsUrgent", boolean + " NOT NULL DEFAULT " + (db.Database.IsNpgsql() ? "FALSE" : "0"));
         await Column(db, "ChatMessages", "BroadcastId", "TEXT NULL"); await Column(db, "ChatMessages", "AcknowledgedAt", date + " NULL");
+        await Column(db, "ChatMessages", "Command", "TEXT NULL");
+        await Column(db, "ChatGroupMessages", "Command", "TEXT NULL");
+        await Column(db, "ChatGroupMessages", "IsUrgent", boolean + " NOT NULL DEFAULT " + (db.Database.IsNpgsql() ? "FALSE" : "0"));
         await Column(db, "ChatFiles", "StorageKey", "TEXT NOT NULL DEFAULT ''");
         string sql = $"CREATE TABLE IF NOT EXISTS \"ChatBroadcasts\" (\"Id\" TEXT PRIMARY KEY, \"SenderId\" INTEGER NOT NULL, \"Body\" TEXT NOT NULL, \"Audience\" TEXT NOT NULL, \"Urgent\" {boolean} NOT NULL, \"CreatedAt\" {date} NOT NULL)"; await db.Database.ExecuteSqlRawAsync(sql);
+        await Column(db, "ChatBroadcasts", "Command", "TEXT NULL");
     }
     public static void Map(RouteGroupBuilder api)
     {
+        api.MapGet("/effects", async (HelperDb db, ClaimsPrincipal p) => await ChatCommands.PendingAsync(db, (await Messenger.UserAsync(db,p)).Id));
         api.MapGet("/capabilities", async (HelperDb db, ClaimsPrincipal p) => { await Messenger.UserAsync(db, p); return new { canBroadcast = true }; });
         api.MapGet("/urgent", async (HelperDb db, ClaimsPrincipal p) =>
         {
@@ -66,6 +72,7 @@ public static class ChatBroadcasts
             if (selected.Count > 5000 || audience == "selected" && selected.Count == 0) throw new ArgumentException("Выберите получателей.");
             var uploads = form.Files.ToArray(); if (uploads.Length > 10 || uploads.Any(f => f.Length > ChatFiles.MaxFile) || uploads.Sum(f => f.Length) > ChatFiles.MaxTotal) throw new ArgumentException("Вложения: до 10 файлов, до 50 МБ каждый и 100 МБ всего.");
             if (body.Length == 0 && uploads.Length > 0) body = "Вложения: " + string.Join(", ", uploads.Select(f => ChatFiles.Name(f.FileName))); if (body.Length == 0) throw new ArgumentException("Введите сообщение.");
+            var content = ChatCommands.Parse(body); body = content.Body; urgent |= content.Urgent;
             var saved = new List<ChatFile>(); string directory = ChatFiles.Folder(config); Directory.CreateDirectory(directory); bool committed = false;
             await gate.Semaphore.WaitAsync(token);
             try
@@ -79,7 +86,7 @@ public static class ChatBroadcasts
                 string id = key.ToString("N"); var old = await db.ChatBroadcasts.SingleOrDefaultAsync(b => b.Id == id, token);
                 if (old != null)
                 {
-                    if (old.SenderId != me.Id || old.Body != body || old.Audience != audience || old.Urgent != urgent) throw new ArgumentException("Идентификатор рассылки уже использован.");
+                    if (old.SenderId != me.Id || old.Body != body || old.Audience != audience || old.Urgent != urgent || old.Command != content.Command) throw new ArgumentException("Идентификатор рассылки уже использован.");
                     if (audience == "selected" && !selected.SetEquals(await db.ChatMessages.Where(m => m.BroadcastId == id).Select(m => m.RecipientId).ToListAsync(token))) throw new ArgumentException("Получатели рассылки изменились.");
                     var first = await db.ChatMessages.Where(m => m.BroadcastId == id).OrderBy(m => m.Id).FirstAsync(token);
                     var files = await db.ChatFiles.Where(f => f.MessageId == first.Id && f.PeerId == first.RecipientId && f.SenderId == me.Id).OrderBy(f => f.Order).ToListAsync(token);
@@ -92,8 +99,8 @@ public static class ChatBroadcasts
                 var minute = DateTime.UtcNow.AddMinutes(-1);
                 if (await db.ChatBroadcasts.AnyAsync(b => b.SenderId == me.Id && b.CreatedAt > minute, token)) return Results.Json(new { error = "Массовая рассылка доступна раз в минуту. Повторите позже." }, statusCode: 429);
                 await using var transaction = await db.Database.BeginTransactionAsync(token);
-                db.ChatBroadcasts.Add(new() { Id = id, SenderId = me.Id, Body = body, Audience = audience, Urgent = urgent });
-                var messages = recipients.Select(user => new ChatMessage { SenderId = me.Id, RecipientId = user, Body = body, IsUrgent = urgent, BroadcastId = id, ClientId = Guid.NewGuid().ToString("N") }).ToArray(); db.ChatMessages.AddRange(messages); await db.SaveChangesAsync(token);
+                db.ChatBroadcasts.Add(new() { Id = id, SenderId = me.Id, Body = body, Audience = audience, Urgent = urgent, Command = content.Command });
+                var messages = recipients.Select(user => new ChatMessage { SenderId = me.Id, RecipientId = user, Body = body, IsUrgent = urgent, Command = content.Command, BroadcastId = id, ClientId = Guid.NewGuid().ToString("N") }).ToArray(); db.ChatMessages.AddRange(messages); await db.SaveChangesAsync(token);
                 foreach (var message in messages) foreach (var file in saved) db.ChatFiles.Add(new() { Id = Guid.NewGuid().ToString("N"), StorageKey = file.Id, SenderId = me.Id, PeerId = message.RecipientId, MessageId = message.Id, Name = file.Name, Size = file.Size, Sha256 = file.Sha256, Order = file.Order });
                 await db.SaveChangesAsync(token); await transaction.CommitAsync(token); committed = true; await ChatFiles.PopulateAsync(db, messages);
                 foreach (var message in messages) await hub.Clients.Groups("Chat:" + message.RecipientId, "Chat:" + me.Id).SendAsync("ChatMessage", message, token);

@@ -119,6 +119,7 @@ internal sealed class MessengerWindow : Window
         if (client.CanBroadcast) { var broadcast = new MenuItem { Header = "Рассылка пользователям…" }; broadcast.Click += (_,_) => new ChatBroadcastWindow(client,settings) { Owner=this }.ShowDialog(); actionsMenu.Items.Add(broadcast); }
         toolbar.Children.Clear(); var menuButton = Button("☰",(_,_) => { actionsMenu.PlacementTarget=toolbar; actionsMenu.IsOpen=true; }); toolbar.Children.Add(menuButton);
         toolbar.Children.Add(new TextBlock { Text="PixelHelper · " + client.FullName, FontWeight=FontWeights.SemiBold, Margin=new Thickness(12,10,12,8) });
+        toolbar.Children.Add(Button("📣 Рассылка", (_,_) => new ChatBroadcastWindow(client,settings) { Owner=this }.ShowDialog()));
         toolbar.Children.Add(Button("ⓘ Информация", async (_,_) => { detailsOpen=!detailsOpen;AdjustDrawer();await LoadDetailsAsync();root.UpdateLayout();RenderHistory(false); }));
         toolbar.Children.Add(Button("⌕ Поиск",(_,_)=>SearchHistory()));
         Grid.SetColumnSpan(toolbar, 3); root.Children.Add(toolbar);
@@ -248,8 +249,9 @@ internal sealed class MessengerWindow : Window
         if (messages.Count == 0) history.Children.Add(new TextBlock { Text = "Начните переписку", Foreground = muted, Margin = new Thickness(12) });
         DateTime? date = null;
         var systemEntries = eventsPeer==peer && peer<0 ? groupEvents.Where(e=>messages.Count==0 || e.SentAt>=messages.Min(m=>m.SentAt)).Select(e=>new ChatEntry(-1,0,peer,e.Body,e.Id,e.SentAt,null,IsSystem:true)) : [];
-        foreach (var message in messages.Concat(systemEntries).Concat(pendingMessage != null && pendingMessage.RecipientId==peer ? new[]{pendingMessage} : Array.Empty<ChatEntry>()).OrderBy(m=>m.SentAt))
+        foreach (var message in messages.Concat(systemEntries).Concat(pendingMessage != null && pendingMessage.RecipientId==peer ? new[]{pendingMessage} : Array.Empty<ChatEntry>()).Select(m => m with { Body = System.Text.RegularExpressions.Regex.Replace(m.Body, @"^(?:(?:/срочно|/танец)(?:\s+|$))+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase) }).OrderBy(m=>m.SentAt))
         {
+            if (string.IsNullOrWhiteSpace(message.Body) && message.Attachments?.Count is not > 0) continue;
             var day = message.SentAt.ToLocalTime().Date;
             if (date != day) { history.Children.Add(new TextBlock { Text=day.ToString("dd MMMM"), HorizontalAlignment=HorizontalAlignment.Center, Foreground=muted, FontSize=Math.Max(11,FontSize-2), Margin=new Thickness(0,10,0,10) }); date=day; }
             if (message.IsSystem) { history.Children.Add(new TextBlock { Text=message.SentAt.ToLocalTime().ToString("HH:mm") + " · " + message.Body, Foreground=muted, TextWrapping=TextWrapping.Wrap, HorizontalAlignment=HorizontalAlignment.Center, Margin=new Thickness(12,8,12,8), MaxWidth=600 }); continue; }

@@ -56,7 +56,7 @@ services:
       ASPNETCORE_URLS: http://+:5000
       ReverseProxy__Enabled: "true"
       Database__Provider: Postgres
-      ConnectionStrings__Database: Host=db;Database=litlehelper;Username=litlehelper
+      ConnectionStrings__Database: Host=db;Database=litlehelper;Username=litlehelper;Maximum Pool Size=40;Connection Idle Lifetime=60;Connection Pruning Interval=10;Application Name=PixelHelper
       Database__PasswordFile: /run/helper-secrets/postgres-password
       Jwt__SigningKey: ${JWT_SIGNING_KEY:-}
       Glpi__BaseUrl: ${GLPI_BASE_URL:-http://glpi.gp1.loc/apirest.php}

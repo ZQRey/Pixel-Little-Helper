@@ -182,10 +182,23 @@ public sealed class HubConnectionService : IAsyncDisposable
     public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room) =>
         await CreateTicketAtAsync(title, description, branchId, room, CancellationToken.None);
 
-    public async Task TriggerEmergencyAlertAsync(string code, string cabinet, string? notes, CancellationToken token = default)
+    public async Task TriggerEmergencyAlertAsync(string code, string cabinet, string? notes, string? imageBase64 = null, string? department = null, CancellationToken token = default)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
-        await connection.InvokeAsync("TriggerEmergencyAlert", code, cabinet, notes, token);
+        await connection.InvokeAsync("TriggerEmergencyAlert", code, cabinet, notes, imageBase64, department, token);
+    }
+
+    public async Task<List<string>> GetSpecialistDepartmentsAsync(CancellationToken token = default)
+    {
+        if (!IsOnline) return new() { "Дежурный врач", "Реаниматолог", "Хирург", "Травматолог", "Охрана / Служба безопасности" };
+        try
+        {
+            return await connection.InvokeAsync<List<string>>("GetSpecialistDepartments", token);
+        }
+        catch
+        {
+            return new() { "Дежурный врач", "Реаниматолог", "Хирург", "Травматолог", "Охрана / Служба безопасности" };
+        }
     }
 
     public async Task AcknowledgeSpecialistCallAsync(int callId, bool accepted, CancellationToken token = default)

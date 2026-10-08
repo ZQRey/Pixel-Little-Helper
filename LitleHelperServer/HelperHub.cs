@@ -151,7 +151,10 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         finally { ticketGate.Semaphore.Release(); }
     }
 
-    public async Task TriggerEmergencyAlert(string code, string cabinet, string? notes)
+    public Task TriggerEmergencyAlert(string code, string cabinet, string? notes) =>
+        TriggerEmergencyAlert(code, cabinet, notes, null, null);
+
+    public async Task TriggerEmergencyAlert(string code, string cabinet, string? notes, string? imageBase64, string? department)
     {
         var c = await Agent();
         var em = settings.Emergency();
@@ -166,11 +169,31 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             "CODE_BLUE" => "КОД СИНИЙ: Реанимация / Остановка сердца",
             "CODE_WHITE" => "КОД БЕЛЫЙ: Агрессия / Нападение",
             "CODE_PINK" => "КОД РОЗОВЫЙ: Потеря / Похищение ребёнка",
+            "SPECIALIST_CALL" => string.IsNullOrWhiteSpace(department) ? "СРОЧНЫЙ ВЫЗОВ СПЕЦИАЛИСТА" : $"СРОЧНЫЙ ВЫЗОВ: {department.Trim()}",
             _ => "ЭКСТРЕННОЕ ОПОВЕЩЕНИЕ"
         };
-        var notice = new EmergencyAlertNotice(upperCode, title, string.IsNullOrWhiteSpace(cabinet) ? c.MachineName : cabinet.Trim(), notes?.Trim(), null, null, null, 300, null, null);
-        await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
-        db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "emergency_trigger", CommandPayload = upperCode + " / " + cabinet + " / " + (notes ?? ""), Status = "Completed", Result = "Оповещение разослано агентам" });
+        int? callId = upperCode == "SPECIALIST_CALL" ? Random.Shared.Next(10000, 99999) : null;
+        var notice = new EmergencyAlertNotice(upperCode, title, string.IsNullOrWhiteSpace(cabinet) ? c.MachineName : cabinet.Trim(), notes?.Trim(), null, imageBase64, null, 300, callId, department);
+
+        if (!string.IsNullOrWhiteSpace(department) && em.Departments?.Count > 0)
+        {
+            var dept = em.Departments.FirstOrDefault(d => d.Name.Equals(department, StringComparison.OrdinalIgnoreCase) || d.Id.ToString() == department);
+            if (dept != null && dept.ResponsibleUsers.Count > 0)
+            {
+                foreach (var u in dept.ResponsibleUsers)
+                    await Clients.Group("AgentUser:" + u.Trim().ToLowerInvariant()).SendAsync("EmergencyAlertNotice", notice);
+            }
+            else
+            {
+                await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
+            }
+        }
+        else
+        {
+            await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
+        }
+
+        db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "emergency_trigger", CommandPayload = upperCode + " / " + cabinet + " / " + (notes ?? "") + (!string.IsNullOrWhiteSpace(department) ? " / " + department : ""), Status = "Completed", Result = "Оповещение разослано агентам" });
         await db.SaveChangesAsync();
 
         if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl) && httpFactory != null)
@@ -180,7 +203,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
                 var http = httpFactory.CreateClient();
                 http.Timeout = TimeSpan.FromSeconds(3);
                 var endpoint = em.ServerUrl.TrimEnd('/') + "/api/broadcast/client/alert";
-                var body = new { code = upperCode, cabinet = cabinet?.Trim(), notes = notes?.Trim(), client_name = c.MachineName };
+                var body = new { code = upperCode, cabinet = cabinet?.Trim(), notes = notes?.Trim(), client_name = c.MachineName, image = imageBase64, department };
                 using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
                 if (!string.IsNullOrWhiteSpace(em.ApiKey)) req.Headers.Add("X-Client-Key", em.ApiKey);
                 req.Content = System.Net.Http.Json.JsonContent.Create(body);
@@ -188,6 +211,17 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             }
             catch { }
         }
+    }
+
+    public Task<List<string>> GetSpecialistDepartments()
+    {
+        var em = settings.Emergency();
+        var depts = em.Departments?.Select(d => d.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Distinct().ToList() ?? new();
+        if (depts.Count == 0)
+        {
+            depts = new List<string> { "Дежурный врач", "Реаниматолог", "Хирург", "Травматолог", "Охрана / Служба безопасности" };
+        }
+        return Task.FromResult(depts);
     }
 
     public async Task AcknowledgeSpecialistCall(int callId, bool accepted, string? reason)

@@ -22,6 +22,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action<CartridgeReadyNotice>? CartridgeReadyReceived;
     public event Action<TicketReplyNotice>? TicketReplyReceived;
     public event Action<EmergencyAlertNotice>? EmergencyAlertReceived;
+    public event Action<string>? RoomUpdated;
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
@@ -57,6 +58,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On<CartridgeReadyNotice>("CartridgeReadyNotice", notice => CartridgeReadyReceived?.Invoke(notice));
         created.On<TicketReplyNotice>("TicketReplyNotice", notice => TicketReplyReceived?.Invoke(notice));
         created.On<EmergencyAlertNotice>("EmergencyAlertNotice", notice => EmergencyAlertReceived?.Invoke(notice));
+        created.On<string>("ClientRoomUpdated", room => RoomUpdated?.Invoke(room));
         created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
         created.Closed += _ => { if (ReferenceEquals(connection,created)) Offline(); return Task.CompletedTask; };
 
@@ -205,6 +207,19 @@ public sealed class HubConnectionService : IAsyncDisposable
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
         await connection.InvokeAsync("AcknowledgeSpecialistCall", callId, accepted, token);
+    }
+
+    public async Task UpdateClientRoomAsync(string room, CancellationToken token = default)
+    {
+        if (!IsOnline) return;
+        try
+        {
+            await connection.InvokeAsync("UpdateClientRoom", room, token);
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
     }
 
     public async ValueTask DisposeAsync()

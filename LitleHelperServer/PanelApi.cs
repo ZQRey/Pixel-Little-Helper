@@ -126,12 +126,12 @@ public static class PanelApi
             ValidateUser(request, true); string name = Security.Login(request.Username);
             if (await db.Users.AnyAsync(u => u.Username == name)) return Results.Conflict(new { error = "Логин уже существует" });
             var user = new PanelUser { Username = name, FullName = request.FullName.Trim(), Role = request.Role, IsActive = request.IsActive,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password!, 12), MustChangePassword = true, Permissions = request.Permissions ?? new() };
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password!, 12), MustChangePassword = true, Permissions = request.Permissions ?? new(), Room = (request.Room ?? "").Trim() };
             user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
             await Branches.ValidateUserAsync(db, request.BranchId); user.BranchId = request.BranchId;
             db.Users.Add(user); await db.SaveChangesAsync(); return Results.Ok(user);
         }).RequireAuthorization("users.manage");
-        app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, ClaimsPrincipal p, HelperDb db, PanelSessions sessions, AnnouncementService announcements, CancellationToken token) =>
+        app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, ClaimsPrincipal p, HelperDb db, PanelSessions sessions, AnnouncementService announcements, IHubContext<HelperHub> hub, CancellationToken token) =>
         {
             ValidateUser(request, false); var user = await db.Users.FindAsync(id); if (user == null) return Results.NotFound();
             if (user.AuthSource == "AD" && (Security.Login(request.Username) != user.Username || !string.IsNullOrEmpty(request.Password))) return Results.BadRequest(new { error = "Логин и пароль AD изменяются в Active Directory." });
@@ -145,9 +145,24 @@ public static class PanelApi
             }
             if (request.Role != Roles.SuperAdmin) user.AssistantMachine = "";
             await Branches.ValidateUserAsync(db, request.BranchId); user.BranchId = request.BranchId;
+            string newRoom = (request.Room ?? "").Trim();
+            bool roomChanged = user.Room != newRoom;
+            user.Room = newRoom;
             user.Username = name; user.FullName = request.FullName.Trim(); user.Role = request.Role; user.IsActive = request.IsActive; if (request.Permissions != null) user.Permissions = request.Permissions; user.SecurityVersion++;
             if (!string.IsNullOrEmpty(request.Password)) { user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password, 12); user.MustChangePassword = true; }
-            await db.SaveChangesAsync(); sessions.Revoke(user.Id); await announcements.RefreshAvailabilityAsync(token); return Results.Ok(user);
+            await db.SaveChangesAsync(); sessions.Revoke(user.Id); await announcements.RefreshAvailabilityAsync(token);
+            if (roomChanged)
+            {
+                var comp = await db.Computers.FirstOrDefaultAsync(c => c.CurrentUser.ToLower() == user.Username.ToLower(), token);
+                if (comp != null)
+                {
+                    comp.Room = newRoom;
+                    await db.SaveChangesAsync(token);
+                    await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(comp), cancellationToken: token);
+                }
+                await hub.Clients.Group("AgentUser:" + user.Username.ToLowerInvariant()).SendAsync("ClientRoomUpdated", newRoom, cancellationToken: token);
+            }
+            return Results.Ok(user);
         }).RequireAuthorization("users.manage");
         app.MapDelete("/api/users/{id:int}", async (int id, HelperDb db, PanelSessions sessions) =>
         {
@@ -221,6 +236,8 @@ public static class PanelApi
     private static void ValidateUser(UserRequest request, bool requirePassword)
     {
         Access.Validate(request.Permissions);
+        if (request.Room != null && (request.Room.Length > 100 || request.Room.Any(char.IsControl)))
+            throw new ArgumentException("Кабинет: до 100 символов без управляющих символов.");
         if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 100 || request.Username.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '-' or '_' or '@' or '\\')) ||
             request.FullName.Length > 150 || !Roles.All.Contains(request.Role) || ((requirePassword || !string.IsNullOrEmpty(request.Password)) && !Security.PasswordValid(request.Password)))
             throw new ArgumentException("Проверьте логин, роль и пароль (8–72 символа)");

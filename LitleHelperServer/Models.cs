@@ -20,6 +20,8 @@ public class Computer
     public DateTime LastSeen { get; set; }
     public string HardwareJson { get; set; } = "{}";
     public string SoftwareJson { get; set; } = "[]";
+    public int? BranchId { get; set; }
+    public string Room { get; set; } = "";
     [JsonIgnore] public string? ConnectionId { get; set; }
     [JsonIgnore] public string AdMachineObjectId { get; set; } = "";
     [JsonIgnore] public string AgentKeyHash { get; set; } = "";
@@ -46,6 +48,7 @@ public class PanelUser
     public string Role { get; set; } = Roles.User;
     public string AssistantMachine { get; set; } = "";
     public int? BranchId { get; set; }
+    public string Room { get; set; } = "";
     [JsonIgnore] public string PermissionOverrides { get; set; } = "{}";
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
     public Dictionary<string, bool> Permissions
@@ -140,7 +143,7 @@ public record MachineInfo(string MachineName, string UserName, string DomainName
 public record CommandEnvelope(string TaskId, string Type, string Payload);
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
-public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null);
+public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null, string? Room = null);
 public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
 public record AgentRegistrationRequest(string MachineName, string ClientKey);

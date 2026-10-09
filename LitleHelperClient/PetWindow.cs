@@ -81,9 +81,10 @@ public sealed class PetWindow : Window
         Background = null;
         ShowInTaskbar = false;
         ShowActivated = false;
-        if (settings.DisplayMode is not ("Topmost" or "Normal" or "Background")) settings.DisplayMode = "Background";
+        if (settings.DisplayMode is not ("Topmost" or "Normal" or "Background")) settings.DisplayMode = "Topmost";
         if (diagnostics) settings.DisplayMode = "Background";
-        Topmost = !diagnostics && settings.DisplayMode == "Topmost";
+        else { settings.DisplayMode = "Topmost"; settings.AssistantHidden = false; }
+        Topmost = settings.DisplayMode == "Topmost";
         Title = "PixelHelper";
         Content = canvas;
         actions = ApiClient.Defaults();
@@ -117,7 +118,9 @@ public sealed class PetWindow : Window
                 admin.Click += (_, _) => OpenSuperAdminWindow();
                 menu.Items.Add(admin);
             }
-            AddDisplayMenu(menu);
+            var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
+            quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
+            menu.Items.Add(quiet);
             var exit = new MenuItem { Header = "Выход" };
             exit.Click += (_, _) => Close();
             menu.Items.Add(exit);
@@ -140,6 +143,10 @@ public sealed class PetWindow : Window
             }
             if (!diagnostics) React(PetState.Greeting, 3);
             if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
+            if (!diagnostics && string.IsNullOrWhiteSpace(settings.TicketRoom))
+            {
+                _ = Dispatcher.BeginInvoke(new Action(PromptForRoom), System.Windows.Threading.DispatcherPriority.Background);
+            }
         };
         LocationChanged += (_, _) => ApplyDisplayMode();
         animation.Tick += (_, _) =>
@@ -244,17 +251,39 @@ public sealed class PetWindow : Window
     internal void RestoreDisplayPreferences()
     {
         if (diagnostics) return;
-        SetDisplayMode(settings.DisplayMode);
-        if (settings.AssistantHidden) SetAssistantHidden(true);
+        settings.DisplayMode = "Topmost";
+        settings.AssistantHidden = false;
+        SetDisplayMode("Topmost");
+    }
+    private void PromptForRoom()
+    {
+        if (diagnostics || hub == null) return;
+        try
+        {
+            var dlg = new RoomPromptWindow(settings, hub) { Owner = this };
+            dlg.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }
+    private void HandleRoomUpdated(string room)
+    {
+        if (string.IsNullOrWhiteSpace(room)) return;
+        string trimmed = room.Trim();
+        if (settings.TicketRoom != trimmed)
+        {
+            settings.TicketRoom = trimmed;
+            if (!diagnostics) settings.Save();
+            ReceiveAnnouncement(new ClientNotice($"Кабинет обновлен: {trimmed}", "PixelHelper", 8) { LocalAnimation = PetState.Joy });
+        }
     }
     private void AddDisplayMenu(ContextMenu menu)
     {
-        var modes = new MenuItem { Header = "Отображение помощника" };
-        foreach (var (value, label) in new[] { ("Topmost", "Поверх всех окон"), ("Normal", "Обычный режим"), ("Background", "Фон · под окнами") })
-        { var item = new MenuItem { Header = label, IsCheckable = true, IsChecked = settings.DisplayMode == value }; item.Click += (_, _) => SetDisplayMode(value); modes.Items.Add(item); }
-        menu.Items.Add(modes);
-        var hide = new MenuItem { Header = settings.AssistantHidden ? "Показать помощника" : "Скрыть помощника" }; hide.Click += (_, _) => SetAssistantHidden(!settings.AssistantHidden); menu.Items.Add(hide);
-        var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb }; quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); }; menu.Items.Add(quiet);
+        var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
+        quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
+        menu.Items.Add(quiet);
     }
     private void InitializeHub()
     {
@@ -266,6 +295,7 @@ public sealed class PetWindow : Window
                 hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
                 hub.TicketReplyReceived += notice => Dispatcher.InvokeAsync(() => HandleTicketReply(notice));
                 hub.EmergencyAlertReceived += notice => Dispatcher.InvokeAsync(() => HandleEmergencyAlert(notice));
+                hub.RoomUpdated += room => Dispatcher.InvokeAsync(() => HandleRoomUpdated(room));
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (!online) { React(PetState.Error, 4); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
@@ -667,7 +697,9 @@ public sealed class PetWindow : Window
                 if (urgentShown.Contains(key) || settings.UrgentNotificationsShown.Contains(key) || announcements.Count >= 10) continue;
                 var sender = users.FirstOrDefault(u => u.Id == urgent.SenderId);
                 ReceiveAnnouncement(new ClientNotice("СРОЧНО · " + HelperEmojis.PlainText(urgent.Body[..Math.Min(970,urgent.Body.Length)]), sender?.FullName ?? "Сотрудник", 60, urgent.RecipientId < 0 ? urgent.RecipientId : urgent.SenderId) { UrgentMessageId = urgent.Id, UrgentKey = key, ExpiresAt = urgent.SentAt.ToUniversalTime().AddHours(1) });
-                urgentShown.Add(key); if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
+                urgentShown.Add(key);
+                React(PetState.Dance, 5);
+                if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
             }
             tray?.SetUnread(users.Any(u => u.Unread > 0));
             var notifications = new List<(string Title, string Text, int Peer)>();
@@ -694,6 +726,7 @@ public sealed class PetWindow : Window
             }
             if (notifications.Count > 0)
             {
+                React(PetState.Dance, 5);
                 bool play = settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
                 if (settings.ChatWindowsNotifications && tray != null)
                 {

@@ -27,7 +27,10 @@ internal sealed class TrayIcon : IDisposable
     private void Add()
     {
         icon = CreateIcon(sprite, unread);
-        var data = Base(1 | 2 | 4); Registered = ShellNotifyIcon(0, ref data); data.Version = 4; ShellNotifyIcon(4, ref data);
+        var data = Base(1 | 2 | 4);
+        Registered = ShellNotifyIcon(0, ref data);
+        data.Version = 4;
+        ShellNotifyIcon(4, ref data);
     }
     internal void SetUnread(bool value)
     {
@@ -82,7 +85,7 @@ internal sealed class TrayIcon : IDisposable
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string Title;
         public uint InfoFlags; public Guid Guid; public nint BalloonIcon;
     }
-    [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconW", CharSet = CharSet.Unicode)] private static extern bool ShellNotifyIcon(uint operation, ref Data data);
+    [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconW", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool ShellNotifyIcon(uint operation, ref Data data);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterWindowMessage(string name);
     [DllImport("user32.dll")] private static extern nint CreateIconFromResourceEx(byte[] data, uint size, [MarshalAs(UnmanagedType.Bool)] bool icon, uint version, int width, int height, uint flags);
     [DllImport("user32.dll")] internal static extern bool DestroyIcon(nint icon);

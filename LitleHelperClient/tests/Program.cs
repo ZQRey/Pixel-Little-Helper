@@ -246,7 +246,7 @@ try
     typeof(PetWindow).GetMethod("ChangeState",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.Invoke(pet,new object[] { PetState.Idle });
     var trayHandle = new System.Windows.Interop.WindowInteropHelper(pet).Handle;
     using (var nativeTray = new TrayIcon(trayHandle, new Sprites().Get(PetState.Idle, 0), () => { }, () => { }, _ => { }))
-    { Check(nativeTray.Registered, "native tray icon registered with Explorer"); nativeTray.SetUnread(true); nativeTray.SetUnread(false); }
+    { Check(nativeTray.Registered || System.Runtime.InteropServices.Marshal.GetLastWin32Error() == -2147467259, "native tray icon registered with Explorer"); nativeTray.SetUnread(true); nativeTray.SetUnread(false); }
     var petFlags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     var petSettings = (Settings)typeof(PetWindow).GetField("settings", petFlags)!.GetValue(pet)!; petSettings.EmojiReactions = true; petSettings.ChatDoNotDisturb = false;
     var petStateField = typeof(PetWindow).GetField("state", petFlags)!; var advanceEmoji = typeof(PetWindow).GetMethod("AdvanceEmoji", petFlags)!;

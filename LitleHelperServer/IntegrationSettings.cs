@@ -27,7 +27,8 @@ public record EmergencyOptions(
     bool AllowStandalone = true,
     bool AllowClientTrigger = true,
     List<string>? AllowedRoles = null,
-    List<SpecialistDepartmentConfig>? Departments = null
+    List<SpecialistDepartmentConfig>? Departments = null,
+    List<string>? CodeBlueResponsibleUsers = null
 );
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)

@@ -9,7 +9,7 @@ namespace LitleHelperServer;
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
 public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, IHttpClientFactory? httpFactory = null) : Hub
 {
-    public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen };
+    public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen, c.BranchId, c.Room };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
         b.TargetGroup.Equals("domain:" + c.DomainName, StringComparison.OrdinalIgnoreCase) || b.TargetGroup.Equals("pc:" + c.MachineName, StringComparison.OrdinalIgnoreCase);
     public static async Task<List<ActionButton>> Buttons(HelperDb db, Computer c) =>
@@ -30,6 +30,10 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             await Groups.AddToGroupAsync(Context.ConnectionId, "All");
             await Groups.AddToGroupAsync(Context.ConnectionId, "AllAgents");
             await Groups.AddToGroupAsync(Context.ConnectionId, "AgentMachine:" + computer.MachineName.ToLowerInvariant());
+            if (computer.BranchId != null)
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, "BranchAgents:" + computer.BranchId);
+            }
             if (!string.IsNullOrWhiteSpace(computer.CurrentUser))
             {
                 await Groups.AddToGroupAsync(Context.ConnectionId, "AgentUser:" + computer.CurrentUser.ToLowerInvariant());
@@ -75,9 +79,34 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             throw new HubException("Неверная регистрация");
         c.CurrentUser = Security.Login(info.UserName); c.DomainName = info.DomainName; c.IpAddress = info.IpAddress;
         c.OsVersion = info.OsVersion; c.LastSeen = DateTime.UtcNow;
+
+        var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
+        var matchedBranch = Branches.FindByComputerName(allBranches, c.MachineName);
+        if (matchedBranch != null)
+        {
+            c.BranchId = matchedBranch.Id;
+            if (!string.IsNullOrWhiteSpace(c.CurrentUser))
+            {
+                string ticketUser = Security.TicketUser(c.CurrentUser).ToLowerInvariant();
+                var user = await db.Users.FirstOrDefaultAsync(u => u.Username.ToLower() == ticketUser || u.Username.ToLower() == c.CurrentUser.ToLower());
+                if (user != null && user.Role != Roles.SuperAdmin && user.Role != Roles.Admin)
+                {
+                    user.BranchId = matchedBranch.Id;
+                    if (!string.IsNullOrWhiteSpace(user.Room) && string.IsNullOrWhiteSpace(c.Room))
+                        c.Room = user.Room;
+                    else if (!string.IsNullOrWhiteSpace(c.Room) && string.IsNullOrWhiteSpace(user.Room))
+                        user.Room = c.Room;
+                }
+            }
+        }
         await db.SaveChangesAsync();
+
         await Groups.AddToGroupAsync(Context.ConnectionId, "AllAgents");
         await Groups.AddToGroupAsync(Context.ConnectionId, "AgentMachine:" + c.MachineName.ToLowerInvariant());
+        if (c.BranchId != null)
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, "BranchAgents:" + c.BranchId);
+        }
         if (!string.IsNullOrWhiteSpace(c.CurrentUser))
         {
             await Groups.AddToGroupAsync(Context.ConnectionId, "AgentUser:" + c.CurrentUser.ToLowerInvariant());
@@ -86,7 +115,28 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
         var buttons = await Buttons(db, c); await Clients.Caller.SendAsync("OnButtonsUpdated", buttons);
         await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName));
+        if (!string.IsNullOrWhiteSpace(c.Room))
+            await Clients.Caller.SendAsync("ClientRoomUpdated", c.Room);
         return buttons;
+    }
+    public async Task UpdateClientRoom(string room)
+    {
+        var c = await Agent();
+        if (room != null && (room.Length > 100 || room.Any(char.IsControl)))
+            throw new HubException("Кабинет: до 100 символов без управляющих символов.");
+        string cleanRoom = (room ?? "").Trim();
+        c.Room = cleanRoom;
+        if (!string.IsNullOrWhiteSpace(c.CurrentUser))
+        {
+            string ticketUser = Security.TicketUser(c.CurrentUser).ToLowerInvariant();
+            var user = await db.Users.FirstOrDefaultAsync(u => u.Username.ToLower() == ticketUser || u.Username.ToLower() == c.CurrentUser.ToLower());
+            if (user != null)
+            {
+                user.Room = cleanRoom;
+            }
+        }
+        await db.SaveChangesAsync();
+        await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
     }
     public async Task Heartbeat() { var c = await Agent(); c.LastSeen = DateTime.UtcNow; await db.SaveChangesAsync(); await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName)); }
     public async Task UpdateHardwareAndSoftware(JsonElement hardware, JsonElement software)
@@ -169,10 +219,62 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             "SPECIALIST_CALL" => string.IsNullOrWhiteSpace(department) ? "СРОЧНЫЙ ВЫЗОВ СПЕЦИАЛИСТА" : $"СРОЧНЫЙ ВЫЗОВ: {department.Trim()}",
             _ => "ЭКСТРЕННОЕ ОПОВЕЩЕНИЕ"
         };
+        string activeCabinet = !string.IsNullOrWhiteSpace(cabinet) ? cabinet.Trim() : (!string.IsNullOrWhiteSpace(c.Room) ? c.Room : c.MachineName);
         int? callId = upperCode == "SPECIALIST_CALL" ? Random.Shared.Next(10000, 99999) : null;
-        var notice = new EmergencyAlertNotice(upperCode, title, string.IsNullOrWhiteSpace(cabinet) ? c.MachineName : cabinet.Trim(), notes?.Trim(), null, imageBase64, null, 300, callId, department);
+        var notice = new EmergencyAlertNotice(upperCode, title, activeCabinet, notes?.Trim(), null, imageBase64, null, 300, callId, department);
 
-        if (!string.IsNullOrWhiteSpace(department) && em.Departments?.Count > 0)
+        var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
+        var branch = c.BranchId != null
+            ? allBranches.FirstOrDefault(b => b.Id == c.BranchId)
+            : Branches.FindByComputerName(allBranches, c.MachineName);
+
+        if (upperCode == "CODE_BLUE")
+        {
+            var targetUsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (em.CodeBlueResponsibleUsers?.Count > 0)
+            {
+                foreach (var u in em.CodeBlueResponsibleUsers.Where(s => !string.IsNullOrWhiteSpace(s)))
+                    targetUsers.Add(u.Trim());
+            }
+            var blueDept = em.Departments?.FirstOrDefault(d => d.Name.Contains("Реаним", StringComparison.OrdinalIgnoreCase) || d.Name.Contains("Синий", StringComparison.OrdinalIgnoreCase));
+            if (blueDept?.ResponsibleUsers?.Count > 0)
+            {
+                foreach (var u in blueDept.ResponsibleUsers.Where(s => !string.IsNullOrWhiteSpace(s)))
+                    targetUsers.Add(u.Trim());
+            }
+
+            if (targetUsers.Count > 0)
+            {
+                var specialists = await db.Users.AsNoTracking()
+                    .Where(u => u.IsActive && targetUsers.Contains(u.Username))
+                    .ToListAsync();
+
+                var matchingLogins = specialists
+                    .Where(u => branch == null || u.BranchId == null || u.BranchId == branch.Id || u.Role == Roles.SuperAdmin || u.Role == Roles.Admin)
+                    .Select(u => u.Username.ToLowerInvariant())
+                    .Distinct()
+                    .ToList();
+
+                if (matchingLogins.Count > 0)
+                {
+                    foreach (var login in matchingLogins)
+                        await Clients.Group("AgentUser:" + login).SendAsync("EmergencyAlertNotice", notice);
+                }
+                else
+                {
+                    foreach (var u in targetUsers)
+                        await Clients.Group("AgentUser:" + u.ToLowerInvariant()).SendAsync("EmergencyAlertNotice", notice);
+                }
+            }
+            else
+            {
+                if (branch != null)
+                    await Clients.Group("BranchAgents:" + branch.Id).SendAsync("EmergencyAlertNotice", notice);
+                else
+                    await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(department) && em.Departments?.Count > 0)
         {
             var dept = em.Departments.FirstOrDefault(d => d.Name.Equals(department, StringComparison.OrdinalIgnoreCase) || d.Id.ToString() == department);
             if (dept != null && dept.ResponsibleUsers.Count > 0)
@@ -182,15 +284,23 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             }
             else
             {
-                await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
+                if (branch != null)
+                    await Clients.Group("BranchAgents:" + branch.Id).SendAsync("EmergencyAlertNotice", notice);
+                else
+                    await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
             }
         }
         else
         {
-            await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
+            if (branch != null)
+                await Clients.Group("BranchAgents:" + branch.Id).SendAsync("EmergencyAlertNotice", notice);
+            else
+                await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
         }
 
-        db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "emergency_trigger", CommandPayload = upperCode + " / " + cabinet + " / " + (notes ?? "") + (!string.IsNullOrWhiteSpace(department) ? " / " + department : ""), Status = "Completed", Result = "Оповещение разослано агентам" });
+        await Clients.Group("PanelStaff").SendAsync("EmergencyAlertTriggered", new { notice, branchId = branch?.Id, branchName = branch?.Name, machine = c.MachineName });
+
+        db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "emergency_trigger", CommandPayload = upperCode + " / " + activeCabinet + " / " + (notes ?? "") + (!string.IsNullOrWhiteSpace(department) ? " / " + department : "") + (branch != null ? " / " + branch.Name : ""), Status = "Completed", Result = "Оповещение разослано агентам" });
         await db.SaveChangesAsync();
 
         if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl) && httpFactory != null)
@@ -200,7 +310,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
                 var http = httpFactory.CreateClient();
                 http.Timeout = TimeSpan.FromSeconds(3);
                 var endpoint = em.ServerUrl.TrimEnd('/') + "/api/broadcast/client/alert";
-                var body = new { code = upperCode, cabinet = cabinet?.Trim(), notes = notes?.Trim(), client_name = c.MachineName, image = imageBase64, department };
+                var body = new { code = upperCode, cabinet = activeCabinet, notes = notes?.Trim(), client_name = c.MachineName, image = imageBase64, department, branch_name = branch?.Name };
                 using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
                 if (!string.IsNullOrWhiteSpace(em.ApiKey)) req.Headers.Add("X-Client-Key", em.ApiKey);
                 req.Content = System.Net.Http.Json.JsonContent.Create(body);

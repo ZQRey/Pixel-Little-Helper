@@ -83,7 +83,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         c.OsVersion = info.OsVersion; c.LastSeen = DateTime.UtcNow;
 
         var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
-        var matchedBranch = Branches.FindByComputerName(allBranches, c.MachineName);
+        var matchedBranch = Branches.FindByComputerName(allBranches, c.MachineName, c.IpAddress);
         if (matchedBranch != null)
         {
             c.BranchId = matchedBranch.Id;
@@ -233,7 +233,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
         var branch = c.BranchId != null
             ? allBranches.FirstOrDefault(b => b.Id == c.BranchId)
-            : Branches.FindByComputerName(allBranches, c.MachineName);
+            : Branches.FindByComputerName(allBranches, c.MachineName, c.IpAddress);
 
         if (upperCode == "CODE_BLUE")
         {

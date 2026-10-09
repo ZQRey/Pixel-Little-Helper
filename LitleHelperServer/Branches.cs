@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Net;
 using System.Security.Claims;
 
 namespace LitleHelperServer;
@@ -8,24 +9,127 @@ public class Branch
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public string ComputerPrefixes { get; set; } = "";
+    public string IpSubnets { get; set; } = "";
     public bool IsActive { get; set; } = true;
 }
 public static class Branches
 {
-    public static Branch? FindByComputerName(IEnumerable<Branch> branches, string machineName)
+    public static bool MatchesIpSubnet(string? pattern, string? ipStr)
+    {
+        if (string.IsNullOrWhiteSpace(pattern) || string.IsNullOrWhiteSpace(ipStr)) return false;
+        if (!IPAddress.TryParse(ipStr.Trim(), out var ip)) return false;
+        var bytes = ip.GetAddressBytes();
+
+        var subnets = pattern.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var sub in subnets)
+        {
+            if (sub.Contains('*'))
+            {
+                string prefix = sub.Replace("*", "").TrimEnd('.');
+                if (ipStr.Trim().StartsWith(prefix)) return true;
+            }
+            else if (sub.Contains('/'))
+            {
+                var parts = sub.Split('/');
+                if (parts.Length == 2 && IPAddress.TryParse(parts[0], out var netIp) && int.TryParse(parts[1], out int maskBits))
+                {
+                    var netBytes = netIp.GetAddressBytes();
+                    if (netBytes.Length == bytes.Length && maskBits is >= 0 and <= 32)
+                    {
+                        uint mask = maskBits == 0 ? 0 : uint.MaxValue << (32 - maskBits);
+                        uint ipVal = BitConverter.ToUInt32(bytes.Reverse().ToArray(), 0);
+                        uint netVal = BitConverter.ToUInt32(netBytes.Reverse().ToArray(), 0);
+                        if ((ipVal & mask) == (netVal & mask)) return true;
+                    }
+                }
+            }
+            else if (string.Equals(sub, ipStr.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static Branch? FindByComputerName(IEnumerable<Branch> branches, string machineName, string? ipAddress = null)
     {
         if (string.IsNullOrWhiteSpace(machineName)) return null;
         string name = machineName.Trim().ToUpperInvariant();
-        foreach (var b in branches.Where(b => b.IsActive))
+        var activeBranches = branches.Where(b => b.IsActive).ToList();
+
+        // Level 1: Match by IP subnet if present
+        if (!string.IsNullOrWhiteSpace(ipAddress))
         {
-            var prefixes = (b.ComputerPrefixes ?? "")
-                .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(p => p.ToUpperInvariant())
-                .ToList();
-            if (prefixes.Any(p => name.StartsWith(p))) return b;
+            foreach (var b in activeBranches)
+            {
+                if (MatchesIpSubnet(b.IpSubnets, ipAddress)) return b;
+            }
         }
+
+        // Level 2: Longest Prefix Matching across all active branches
+        var prefixPairs = activeBranches
+            .SelectMany(b => (b.ComputerPrefixes ?? "")
+                .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(p => (Prefix: p.ToUpperInvariant(), Branch: b)))
+            .OrderByDescending(x => x.Prefix.Length)
+            .ToList();
+
+        foreach (var pair in prefixPairs)
+        {
+            if (name.StartsWith(pair.Prefix)) return pair.Branch;
+        }
+
         return null;
     }
+
+    public static async Task<object> SyncAllAsync(HelperDb db)
+    {
+        var activeBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
+        var computers = await db.Computers.ToListAsync();
+        var users = await db.Users.ToListAsync();
+        int updatedComputers = 0, updatedUsers = 0;
+
+        foreach (var c in computers)
+        {
+            var matched = FindByComputerName(activeBranches, c.MachineName, c.IpAddress);
+            if (matched != null && c.BranchId != matched.Id)
+            {
+                c.BranchId = matched.Id;
+                updatedComputers++;
+            }
+        }
+
+        foreach (var u in users)
+        {
+            if (u.Role is Roles.SuperAdmin or Roles.Admin && u.BranchId == null) continue;
+            string uname = u.Username.ToLowerInvariant();
+            var matchedPc = computers.FirstOrDefault(c =>
+                !string.IsNullOrWhiteSpace(c.CurrentUser) &&
+                (c.CurrentUser.Equals(uname, StringComparison.OrdinalIgnoreCase) ||
+                 Security.TicketUser(c.CurrentUser).Equals(uname, StringComparison.OrdinalIgnoreCase)));
+
+            if (matchedPc != null)
+            {
+                if (matchedPc.BranchId != null && u.BranchId != matchedPc.BranchId)
+                {
+                    u.BranchId = matchedPc.BranchId;
+                    updatedUsers++;
+                }
+                if (string.IsNullOrWhiteSpace(u.Room) && !string.IsNullOrWhiteSpace(matchedPc.Room))
+                {
+                    u.Room = matchedPc.Room;
+                }
+                else if (!string.IsNullOrWhiteSpace(u.Room) && string.IsNullOrWhiteSpace(matchedPc.Room))
+                {
+                    matchedPc.Room = u.Room;
+                }
+            }
+        }
+
+        await db.SaveChangesAsync();
+        return new { success = true, updatedComputers, updatedUsers, message = $"Синхронизировано: {updatedComputers} рабочих станций, {updatedUsers} пользователей." };
+    }
+
     public static bool CanHandle(PanelUser user, TicketRecord ticket) => user.Role == Roles.SuperAdmin || (user.Role == Roles.Admin && user.BranchId == null) || ticket.BranchId == null || user.BranchId == ticket.BranchId;
     public static void Require(PanelUser user, TicketRecord ticket)
     { if (!CanHandle(user, ticket)) throw new UnauthorizedAccessException("Заявка относится к другому филиалу. Проверьте филиал в профиле пользователя."); }
@@ -51,6 +155,7 @@ public static class Branches
         await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS \"Branches\" (\"Id\" " + key + ", \"Name\" TEXT NOT NULL, \"IsActive\" " + (pg ? "BOOLEAN" : "INTEGER") + " NOT NULL)");
         foreach (var (table, column, type) in new[] {
             ("Branches", "ComputerPrefixes", "TEXT NOT NULL DEFAULT ''"),
+            ("Branches", "IpSubnets", "TEXT NOT NULL DEFAULT ''"),
             ("Users", "BranchId", "INTEGER NULL"),
             ("Users", "Room", "TEXT NOT NULL DEFAULT ''"),
             ("Computers", "BranchId", "INTEGER NULL"),
@@ -73,10 +178,22 @@ public static class Branches
     public static void MapBranchApi(this WebApplication app)
     {
         app.MapGet("/api/branches", async (HelperDb db) => Results.Ok(await db.Branches.AsNoTracking().OrderBy(b => b.Name).ToListAsync())).RequireAuthorization("Panel");
+        app.MapPost("/api/branches/sync", async (HelperDb db) => Results.Ok(await SyncAllAsync(db))).RequireAuthorization("settings.manage");
         app.MapPost("/api/branches", async (Branch branch, HelperDb db) =>
-        { await ValidateAsync(branch, db); branch.Id = 0; db.Branches.Add(branch); await db.SaveChangesAsync(); return Results.Ok(branch); }).RequireAuthorization("settings.manage");
+        {
+            await ValidateAsync(branch, db); branch.Id = 0; db.Branches.Add(branch);
+            await db.SaveChangesAsync();
+            _ = SyncAllAsync(db);
+            return Results.Ok(branch);
+        }).RequireAuthorization("settings.manage");
         app.MapPut("/api/branches/{id:int}", async (int id, Branch input, HelperDb db) =>
-        { input.Id = id; await ValidateAsync(input, db); var branch = await db.Branches.FindAsync(id); if (branch == null) return Results.NotFound(); branch.Name = input.Name; branch.ComputerPrefixes = input.ComputerPrefixes; branch.IsActive = input.IsActive; await db.SaveChangesAsync(); return Results.Ok(branch); }).RequireAuthorization("settings.manage");
+        {
+            input.Id = id; await ValidateAsync(input, db); var branch = await db.Branches.FindAsync(id); if (branch == null) return Results.NotFound();
+            branch.Name = input.Name; branch.ComputerPrefixes = input.ComputerPrefixes; branch.IpSubnets = input.IpSubnets; branch.IsActive = input.IsActive;
+            await db.SaveChangesAsync();
+            _ = SyncAllAsync(db);
+            return Results.Ok(branch);
+        }).RequireAuthorization("settings.manage");
         app.MapDelete("/api/branches/{id:int}", async (int id, HelperDb db) =>
         {
             var branch = await db.Branches.FindAsync(id); if (branch == null) return Results.NotFound();
@@ -88,8 +205,11 @@ public static class Branches
     {
         branch.Name = branch.Name.Trim();
         branch.ComputerPrefixes = (branch.ComputerPrefixes ?? "").Trim();
+        branch.IpSubnets = (branch.IpSubnets ?? "").Trim();
         if (branch.Name.Length is < 1 or > 100 || branch.Name.Any(char.IsControl)) throw new ArgumentException("Название филиала: от 1 до 100 символов.");
         if (branch.ComputerPrefixes.Length > 200 || branch.ComputerPrefixes.Any(char.IsControl)) throw new ArgumentException("Префиксы ПК: до 200 символов без управляющих символов.");
+        if (branch.IpSubnets.Length > 255 || branch.IpSubnets.Any(char.IsControl)) throw new ArgumentException("IP-подсети: до 255 символов.");
         if (await db.Branches.AnyAsync(b => b.Id != branch.Id && b.Name.ToLower() == branch.Name.ToLower())) throw new ArgumentException("Филиал с таким названием уже существует.");
     }
 }
+

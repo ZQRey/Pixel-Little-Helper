@@ -2,7 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
 namespace LitleHelperServer;
-public record ChatOptions(bool Enabled = true, int RetentionDays = 0);
+public record ChatOptions(bool Enabled = true, int RetentionDays = 0, int UnreadReminderMinutes = 5);
 public class MessengerSettings
 {
     private readonly object gate = new();
@@ -13,6 +13,7 @@ public class MessengerSettings
     public void Save(ChatOptions request)
     {
         if (request.RetentionDays != 0 && request.RetentionDays is < 30 or > 3650) throw new ArgumentException("Хранение: 0 (без ограничения) либо от 30 до 3650 дней.");
+        if (request.UnreadReminderMinutes is < 1 or > 1440) throw new ArgumentException("Интервал напоминания о непрочитанных сообщениях должен быть от 1 до 1440 минут.");
         lock (gate)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file)!); File.WriteAllText(file + ".tmp", JsonSerializer.Serialize(request)); File.Move(file + ".tmp", file, true); options = request;

@@ -66,6 +66,8 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal string FullName => session?.FullName ?? "";
     internal string IdentityContext => server + ":" + UserId;
     internal bool CanBroadcast { get; private set; }
+    internal int UnreadReminderMinutes { get; private set; } = 5;
+    internal event Action<int>? ReminderSettingsUpdated;
     internal string ConnectionStatus => !SignedIn ? SignInStatus : connection?.State == HubConnectionState.Connected ? "В сети · " + FullName : "Нет соединения · повторная попытка";
     internal string SignInStatus { get; private set; } = "Подключение под текущей учётной записью Windows…";
     internal event Action<ChatEntry>? MessageReceived;
@@ -108,7 +110,7 @@ internal sealed class MessengerClient : IAsyncDisposable
         {
             while (!lifetime.IsCancellationRequested)
             {
-                try { await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token); if (!SignedIn || DateTime.UtcNow >= renewAt) await SignInWindowsAsync(); if (SignedIn) { await Request<object>("api/messenger/me"); await ConnectAsync(); Changed?.Invoke(); } }
+                try { await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token); if (!SignedIn || DateTime.UtcNow >= renewAt) await SignInWindowsAsync(); if (SignedIn) { var me = await Request<JsonElement>("api/messenger/me"); if (me.TryGetProperty("unreadReminderMinutes", out var rem) && rem.TryGetInt32(out int mins) && mins >= 1 && mins <= 1440) { UnreadReminderMinutes = mins; ReminderSettingsUpdated?.Invoke(mins); } await ConnectAsync(); Changed?.Invoke(); } }
                 catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { return; }
                 catch (Exception ex) { Settings.Log(ex); }
             }
@@ -136,6 +138,12 @@ internal sealed class MessengerClient : IAsyncDisposable
             SignInStatus = "Вход выполнен: " + FullName;
             await ConnectAsync();
             var capabilities = await Request<JsonElement>("api/messenger/capabilities"); CanBroadcast = capabilities.GetProperty("canBroadcast").GetBoolean();
+            var me = await Request<JsonElement>("api/messenger/me");
+            if (me.TryGetProperty("unreadReminderMinutes", out var rem) && rem.TryGetInt32(out int mins) && mins >= 1 && mins <= 1440)
+            {
+                UnreadReminderMinutes = mins;
+                ReminderSettingsUpdated?.Invoke(mins);
+            }
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex) { SignInStatus = ex is InvalidOperationException ? ex.Message : "Нет связи с сервером. Автоматическая повторная попытка через минуту."; Settings.Log(ex); }
@@ -155,6 +163,14 @@ internal sealed class MessengerClient : IAsyncDisposable
                 connection.On<ChatEntry>("ChatMessage", message => MessageReceived?.Invoke(message));
                 connection.On("ChatChanged", () => Changed?.Invoke());
                 connection.On<JsonElement>("Typing",m=>TypingReceived?.Invoke(m.GetProperty("peer").GetInt32(),m.GetProperty("fullName").GetString()??""));
+                connection.On<int>("MessengerSettingsUpdated", minutes =>
+                {
+                    if (minutes >= 1 && minutes <= 1440)
+                    {
+                        UnreadReminderMinutes = minutes;
+                        ReminderSettingsUpdated?.Invoke(minutes);
+                    }
+                });
                 connection.Reconnected += async _ =>
                 {
                     if (windowOpen) try { await connection.InvokeAsync("SetMessengerOpen", true, lifetime.Token); } catch { }

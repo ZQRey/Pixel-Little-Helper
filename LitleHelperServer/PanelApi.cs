@@ -90,6 +90,42 @@ public static class PanelApi
             if (c.IsOnline) return Results.Conflict(new { error = "Отключите ПК перед удалением регистрации" });
             db.Computers.Remove(c); await db.SaveChangesAsync(); return Results.NoContent();
         }).RequireAuthorization("computers.delete");
+        app.MapPut("/api/computers/{id:int}", async (int id, UpdateComputerLocationRequest request, HelperDb db, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        {
+            var c = await db.Computers.FindAsync(id);
+            if (c == null) return Results.NotFound();
+
+            string newRoom = (request.Room ?? "").Trim();
+            if (newRoom.Length > 100 || newRoom.Any(char.IsControl))
+                return Results.BadRequest(new { error = "Кабинет: до 100 символов без управляющих символов." });
+
+            if (request.BranchId.HasValue && !await db.Branches.AnyAsync(b => b.Id == request.BranchId.Value))
+                return Results.BadRequest(new { error = "Выбранный филиал не существует." });
+
+            c.Room = newRoom;
+            c.BranchId = request.BranchId;
+
+            if (!string.IsNullOrWhiteSpace(c.CurrentUser))
+            {
+                string ticketUser = Security.TicketUser(c.CurrentUser).ToLowerInvariant();
+                var u = await db.Users.FirstOrDefaultAsync(user => user.Username.ToLower() == ticketUser || user.Username.ToLower() == c.CurrentUser.ToLower());
+                if (u != null && u.Role != Roles.SuperAdmin && u.Role != Roles.Admin)
+                {
+                    u.BranchId = request.BranchId;
+                    u.Room = newRoom;
+                }
+            }
+
+            await db.SaveChangesAsync();
+
+            if (c.IsOnline)
+            {
+                await hub.Clients.Group("AgentMachine:" + c.MachineName.ToLowerInvariant()).SendAsync("ClientRoomUpdated", c.Room);
+            }
+            await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
+
+            return Results.Ok(HelperHub.Status(c));
+        }).RequireAuthorization("computers.manage");
         app.MapGet("/api/scripts", (IConfiguration config) => Results.Ok(config.GetSection("Scripts").GetChildren().Select(s => new { id = s.Key, title = s["Title"] ?? s.Key }))).RequireAuthorization("commands.execute");
         app.MapPost("/api/commands", async (CommandRequest request, ClaimsPrincipal p, CommandService service, CancellationToken token) => Results.Ok(await service.SendAsync(p, request, token))).RequireAuthorization("commands.execute");
         app.MapGet("/api/tasks/{taskId}", async (string taskId, ClaimsPrincipal p, HelperDb db) =>
@@ -253,4 +289,5 @@ public static class PanelApi
             throw new ArgumentException("Разрешены HTTP(S) и search-ms");
     }
     public record TicketStatus(int Status);
+    public record UpdateComputerLocationRequest(string? Room, int? BranchId);
 }

@@ -32,6 +32,7 @@ public sealed class PetWindow : Window
     private readonly DispatcherTimer inactivity = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer refresh = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(30) };
     private readonly DispatcherTimer outsideClick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
+    private readonly DispatcherTimer unreadReminderTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(5) };
     private readonly Dictionary<(PetState, int, double, double), nint> regionCache = new();
     private HwndSource? source;
     private nint handle;
@@ -94,6 +95,7 @@ public sealed class PetWindow : Window
         Title = "PixelHelper";
         Content = canvas;
         actions = ApiClient.Defaults();
+        unreadReminderTimer.Tick += (_, _) => CheckUnreadReminder();
         if (!diagnostics)
         {
             try
@@ -101,6 +103,7 @@ public sealed class PetWindow : Window
                 messenger = new MessengerClient(settings);
                 messenger.Changed += () => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
                 messenger.MessageReceived += message => Dispatcher.BeginInvoke(new Action(async () => { ReceiveEmoji(message); await CheckChatAsync(); }));
+                messenger.ReminderSettingsUpdated += minutes => Dispatcher.BeginInvoke(new Action(() => unreadReminderTimer.Interval = TimeSpan.FromMinutes(Math.Clamp(minutes, 1, 1440))));
             }
             catch (Exception ex) { Settings.Log(ex); }
             InitializeHub();
@@ -140,6 +143,7 @@ public sealed class PetWindow : Window
         {
             
             animation.Start(); inactivity.Start(); refresh.Start();
+            if (!diagnostics) unreadReminderTimer.Start();
             if (!diagnostics) hub?.Start();
             if (!diagnostics && messenger != null) _ = messenger.StartAsync();
             if (!diagnostics && hub != null)
@@ -740,7 +744,24 @@ public sealed class PetWindow : Window
         }
         if (messengerWindow.WindowState == WindowState.Minimized) messengerWindow.WindowState = WindowState.Normal;
         messengerWindow.Activate();
-        if (peer != null && messenger.SignedIn) await messengerWindow.OpenPeerAsync(peer.Value);
+        if (peer != null && peer.Value != 0 && messenger.SignedIn) await messengerWindow.OpenPeerAsync(peer.Value);
+    }
+    private void CheckUnreadReminder()
+    {
+        if (unreadChatsCount <= 0 || messenger == null || !messenger.SignedIn) return;
+        if (messengerWindow != null && messengerWindow.IsActive && messengerWindow.IsVisible) return;
+        if (settings.ChatDoNotDisturb && !settings.ChatUrgentOverridesQuiet || !ChatDesktop.Unlocked() || settings.AssistantHidden) return;
+
+        if (announcements.Count < 10)
+        {
+            ReceiveAnnouncement(new ClientNotice($"У вас есть непрочитанные сообщения ({unreadChatsCount}) ✉️ Нажмите, чтобы открыть", "Мессенджер", 15) { ChatPeerId = 0 });
+        }
+        React(PetState.Dance, 5);
+        if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
+        {
+            try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+            lastChatSound = DateTime.UtcNow;
+        }
     }
     private async Task CheckChatAsync()
     {

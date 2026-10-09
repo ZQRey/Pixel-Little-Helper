@@ -957,6 +957,12 @@ internal sealed class MessengerWindow : Window
         try
         {
             contacts = await client.UsersAsync();
+            int unreadCount = contacts.Count(c => c.Unread > 0);
+            foreach (var chip in filterChipButtons)
+            {
+                if ((string)chip.Tag == "unread")
+                    chip.Content = unreadCount > 0 ? $"Непрочитанные ({unreadCount})" : "Непрочитанные";
+            }
             if (peer < 0 && !contacts.Any(c => c.Id == peer))
             {
                 peer = 0;

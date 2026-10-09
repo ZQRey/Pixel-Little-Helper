@@ -30,19 +30,17 @@ public class EmergencySyncWorker(
                 var http = httpFactory.CreateClient();
                 http.Timeout = TimeSpan.FromSeconds(3);
                 var endpoint = em.ServerUrl.TrimEnd('/') + "/api/clients/heartbeat";
+                string key = !string.IsNullOrWhiteSpace(em.ApiKey) ? em.ApiKey.Trim() : "art_helper_bridge_secret";
                 var body = new
                 {
                     client_id = "little-helper-bridge",
-                    auth_token = em.ApiKey,
+                    auth_token = key,
                     cabinet = "Сервер помощника"
                 };
 
                 using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
-                if (!string.IsNullOrWhiteSpace(em.ApiKey))
-                {
-                    req.Headers.Add("X-Client-Key", em.ApiKey);
-                    req.Headers.Add("X-Auth-Token", em.ApiKey);
-                }
+                req.Headers.Add("X-Client-Key", key);
+                req.Headers.Add("X-Auth-Token", key);
                 req.Content = JsonContent.Create(body);
 
                 using var response = await http.SendAsync(req, token);

@@ -184,24 +184,73 @@ public static class IntegrationApi
 
             if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl))
             {
-                try
+                string effectiveKey = !string.IsNullOrWhiteSpace(em.ApiKey) ? em.ApiKey : "art_helper_bridge_secret";
+                var http = httpFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(3);
+                foreach (var path in new[] { "/api/broadcast/cancel", "/api/broadcast/abort" })
                 {
-                    var http = httpFactory.CreateClient();
-                    http.Timeout = TimeSpan.FromSeconds(3);
-                    var endpoint = em.ServerUrl.TrimEnd('/') + "/api/broadcast/cancel";
-                    using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
-                    if (!string.IsNullOrWhiteSpace(em.ApiKey))
+                    try
                     {
-                        req.Headers.Add("X-Client-Key", em.ApiKey);
-                        req.Headers.Add("X-Auth-Token", em.ApiKey);
+                        var endpoint = em.ServerUrl.TrimEnd('/') + path;
+                        using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                        req.Headers.Add("X-Client-Key", effectiveKey);
+                        req.Headers.Add("X-Auth-Token", effectiveKey);
+                        req.Content = JsonContent.Create(new { client_id = "little-helper-bridge", auth_token = effectiveKey });
+                        await http.SendAsync(req, CancellationToken.None);
                     }
-                    req.Content = JsonContent.Create(new { client_id = "little-helper-bridge", auth_token = em.ApiKey });
-                    await http.SendAsync(req, CancellationToken.None);
+                    catch { }
                 }
-                catch { }
             }
 
             return Results.Ok(new { success = true, message = "Оповещение успешно сброшено (Отбой тревоги отправлен на все ПК)" });
+        }).RequireAuthorization("settings.manage");
+
+        app.MapPost("/api/settings/emergency/ping", async (EmergencyPingRequest? pingReq, IntegrationSettings settings, IHttpClientFactory httpFactory) =>
+        {
+            var em = settings.Emergency();
+            string targetUrl = (!string.IsNullOrWhiteSpace(pingReq?.ServerUrl) ? pingReq.ServerUrl : em.ServerUrl)?.Trim().TrimEnd('/') ?? "http://172.16.16.63:8085";
+            string key = !string.IsNullOrWhiteSpace(pingReq?.ApiKey) ? pingReq.ApiKey.Trim() : (!string.IsNullOrWhiteSpace(em.ApiKey) ? em.ApiKey.Trim() : "art_helper_bridge_secret");
+
+            var http = httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(5);
+
+            try
+            {
+                var endpoint = targetUrl + "/api/clients/heartbeat";
+                using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                req.Headers.Add("X-Client-Key", key);
+                req.Headers.Add("X-Auth-Token", key);
+                req.Content = JsonContent.Create(new
+                {
+                    client_id = "little-helper-bridge",
+                    auth_token = key,
+                    cabinet = "Сервер помощника"
+                });
+
+                using var response = await http.SendAsync(req);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Results.BadRequest(new { error = $"Сервер AudioRONGTA вернул HTTP {(int)response.StatusCode} {response.ReasonPhrase}" });
+                }
+
+                using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+                var root = doc.RootElement;
+                string clientStatus = root.TryGetProperty("client_status", out var cs) ? (cs.GetString() ?? "approved") : "approved";
+                bool isBusy = root.TryGetProperty("is_busy", out var ib) && ib.GetBoolean();
+
+                return Results.Ok(new
+                {
+                    success = true,
+                    serverUrl = targetUrl,
+                    clientStatus,
+                    isBusy,
+                    message = $"Связь с AudioRONGTA успешно установлена! Статус допуска клиента: {clientStatus}."
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = $"Не удалось связаться с AudioRONGTA ({targetUrl}): {ex.Message}" });
+            }
         }).RequireAuthorization("settings.manage");
 
         app.MapPost("/api/integrations/emergency/alert", async (EmergencyAlertRequest req, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, IntegrationSettings settings, HelperDb db, TelegramClient telegram, System.Security.Claims.ClaimsPrincipal user, IHttpClientFactory httpFactory) =>

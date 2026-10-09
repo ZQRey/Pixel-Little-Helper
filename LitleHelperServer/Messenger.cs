@@ -182,11 +182,12 @@ public static class Messenger
             if (!string.IsNullOrEmpty(verified.ResponseToken)) http.Response.Headers.WWWAuthenticate = "Negotiate " + verified.ResponseToken;
             return Results.Ok(new { token = Token(user, config), user.Id, user.FullName });
         }).RequireRateLimiting("login");
-        app.MapGet("/api/settings/messenger", async (MessengerSettings settings, HelperDb db) => new { settings.Value.Enabled, settings.Value.RetentionDays, storedMessages = await db.ChatMessages.CountAsync() + await db.ChatGroupMessages.CountAsync() }).RequireAuthorization("settings.manage");
-        app.MapPut("/api/settings/messenger", (ChatOptions request, MessengerSettings settings, ChatPresence presence) =>
+        app.MapGet("/api/settings/messenger", async (MessengerSettings settings, HelperDb db) => new { settings.Value.Enabled, settings.Value.RetentionDays, settings.Value.UnreadReminderMinutes, storedMessages = await db.ChatMessages.CountAsync() + await db.ChatGroupMessages.CountAsync() }).RequireAuthorization("settings.manage");
+        app.MapPut("/api/settings/messenger", async (ChatOptions request, MessengerSettings settings, ChatPresence presence, IHubContext<MessengerHub> hub) =>
         {
             settings.Save(request);
             if (!request.Enabled) presence.CloseAll();
+            await hub.Clients.All.SendAsync("MessengerSettingsUpdated", settings.Value.UnreadReminderMinutes);
             return Results.Ok(settings.Value);
         }).RequireAuthorization("settings.manage");
         app.MapHub<MessengerHub>("/messengerHub", o => o.CloseOnAuthenticationExpiration = true);
@@ -208,7 +209,8 @@ public static class Messenger
         ChatBroadcasts.Map(api);
         ChatExtras.Map(api);
         api.AddEndpointFilter(async (context, next) => context.HttpContext.RequestServices.GetRequiredService<MessengerSettings>().Value.Enabled ? await next(context) : Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403));
-        api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName }; });
+        api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p, MessengerSettings settings) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName, unreadReminderMinutes = settings.Value.UnreadReminderMinutes }; });
+        api.MapGet("/config", (MessengerSettings settings) => new { settings.Value.Enabled, settings.Value.RetentionDays, settings.Value.UnreadReminderMinutes });
         api.MapGet("/users", async (HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>
         {
             var me = await UserAsync(db, p);

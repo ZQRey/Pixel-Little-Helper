@@ -20,6 +20,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Ticket panel checks failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Process panel checks failed' }
 & node (Join-Path $PSScriptRoot 'settings-panel.cjs')
 if ($LASTEXITCODE -ne 0) { throw 'Settings panel checks failed' }
+& node (Join-Path $PSScriptRoot 'messenger-i18n.cjs')
+if ($LASTEXITCODE -ne 0) { throw 'Messenger i18n checks failed' }
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $serverPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $mockPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $serverUrl = "http://127.0.0.1:$serverPort"

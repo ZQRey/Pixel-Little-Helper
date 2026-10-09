@@ -154,7 +154,17 @@ internal sealed class MessengerWindow : Window
     private List<ChatEntry> messages = [];
 
     private void OnChanged() => Dispatcher.BeginInvoke(new Action(async () => { if (!closing) await RefreshAsync(); }));
-    private void OnMessage(ChatEntry message) => OnChanged();
+    private void OnMessage(ChatEntry message)
+    {
+        if (message.SenderId != client.UserId)
+        {
+            if (message.IsUrgent)
+                SoundManager.Play(SoundEvent.Urgent, settings);
+            else
+                SoundManager.Play(SoundEvent.MessageReceived, settings);
+        }
+        OnChanged();
+    }
 
     private void OnTyping(int id, string name) => Dispatcher.BeginInvoke(new Action(async () =>
     {
@@ -1509,6 +1519,7 @@ internal sealed class MessengerWindow : Window
             pendingMessage = null;
             if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingFiles.Clear(); RenderPendingFiles(); pendingId = null; }
             await LoadHistoryAsync();
+            SoundManager.Play(SoundEvent.MessageSent, settings);
         }
         catch (Exception ex)
         {

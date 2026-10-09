@@ -31,12 +31,33 @@ internal sealed class MessengerPreferences : Window
         Toggle("Реакции помощника на эмодзи", settings.EmojiReactions, v => settings.EmojiReactions = v);
         Toggle("Реакции на входящие эмодзи", settings.IncomingEmojiReactions, v => settings.IncomingEmojiReactions = v);
         Toggle("Звук", settings.ChatSound, v => settings.ChatSound = v);
+        string[] soundProfiles = ["Sound", "VoiceAdult", "VoiceChild"];
+        string[] soundLabels = ["🔔 Звуковые сигналы (sci-fi)", "🤖 Голос помощника (робот)", "🧸 Голос помощника (детский)"];
+        int selectedSoundProfile = Math.Max(0, Array.IndexOf(soundProfiles, settings.SoundProfile));
+
+        panel.Children.Add(new TextBlock { Text = "Звуковая схема", Margin = new Thickness(0, 12, 0, 5) });
+        var soundDock = new DockPanel();
+        var previewBtn = new Button { Content = "▶ Прослушать", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 5, 10, 5), VerticalAlignment = VerticalAlignment.Center, Cursor = System.Windows.Input.Cursors.Hand };
+        var soundBox = new ComboBox { ItemsSource = soundLabels, SelectedIndex = selectedSoundProfile, Padding = new Thickness(6) };
+        previewBtn.Click += (_, _) =>
+        {
+            int idx = soundBox.SelectedIndex;
+            if (idx >= 0 && idx < soundProfiles.Length)
+            {
+                SoundManager.PlayPreview(soundProfiles[idx], SoundEvent.MessageReceived);
+            }
+        };
+        DockPanel.SetDock(previewBtn, Dock.Right);
+        soundDock.Children.Add(previewBtn);
+        soundDock.Children.Add(soundBox);
+        panel.Children.Add(soundDock);
+
         Toggle("Показывать текст уведомления", settings.ChatPreview, v => settings.ChatPreview = v);
         Toggle("Уведомления Windows", settings.ChatWindowsNotifications, v => settings.ChatWindowsNotifications = v);
         Toggle("Облачко помощника", settings.ChatComicNotifications, v => settings.ChatComicNotifications = v);
         Toggle("Не беспокоить", settings.ChatDoNotDisturb, v => settings.ChatDoNotDisturb = v);
         panel.Children.Add(new TextBlock { Text = "Срочные рассылки показывают помощника поверх окон на срок до 60 секунд и обходят «Не беспокоить».", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,8,0,0) });
         var apply = new Button { Content = "Применить", Margin = new Thickness(0, 16, 0, 0), Padding = new Thickness(10), IsDefault = true };
-        apply.Click += (_, _) => { settings.ChatTheme = themes[theme.SelectedIndex]; settings.ChatFontSize = sizes[font.SelectedIndex]; settings.ChatBackground = backgrounds[background.SelectedIndex]; settings.ChatBackgroundImage = image; settings.ChatBackgroundDim = dim.Value; foreach (var save in saves) save(); settings.Save(); DialogResult = true; }; panel.Children.Add(apply);
+        apply.Click += (_, _) => { settings.ChatTheme = themes[theme.SelectedIndex]; settings.ChatFontSize = sizes[font.SelectedIndex]; settings.ChatBackground = backgrounds[background.SelectedIndex]; settings.ChatBackgroundImage = image; settings.ChatBackgroundDim = dim.Value; settings.SoundProfile = soundProfiles[soundBox.SelectedIndex]; foreach (var save in saves) save(); settings.Save(); DialogResult = true; }; panel.Children.Add(apply);
     }
 }

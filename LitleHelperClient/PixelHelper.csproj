@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>PixelHelper</AssemblyName>
-    <Version>1.2.35</Version>
+    <Version>1.2.36</Version>
     <ApplicationIcon>Assets\PixelHelper.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ServerGarbageCollection>false</ServerGarbageCollection>
@@ -28,6 +28,9 @@
     <Resource Include="Assets\PixelHelper.ico" />
     <None Update="Assets\PixelHelper.ico" CopyToOutputDirectory="PreserveNewest" />
     <None Update="config.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Sounds\**\*.wav">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>
 

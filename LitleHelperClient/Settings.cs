@@ -16,6 +16,7 @@ public sealed class Settings
     public int? TicketBranchId { get; set; }
     public string TicketRoom { get; set; } = "";
     public bool ChatSound { get; set; } = true;
+    public string SoundProfile { get; set; } = "Sound";
     public bool ChatPreview { get; set; } = true;
     public bool ChatDoNotDisturb { get; set; }
     public bool ChatUrgentOverridesQuiet { get; set; } = true;

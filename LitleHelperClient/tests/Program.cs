@@ -382,6 +382,34 @@ try
     string tooLarge = Path.Combine(temp, "oversize.bin"); using (var large = File.Create(tooLarge)) large.SetLength(50 * 1024 * 1024 + 1);
     chatWindow.AddFiles([tooLarge]); Check(pendingAttachments.Count == 2, "oversized selection leaves existing attachments intact");
     string pastedFile = pendingAttachments[1]; chatWindow.Close(); Check(!File.Exists(pastedFile) && File.Exists(attachmentPath), "window cleanup removes only owned temporary images"); chatClient.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    // SoundManager and Audio assets verification
+    Check(SoundManager.NormalizeProfile("Sound") == "Sound", "sound profile normalization Sound");
+    Check(SoundManager.NormalizeProfile("VoiceAdult") == "VoiceAdult", "sound profile normalization VoiceAdult");
+    Check(SoundManager.NormalizeProfile("VoiceChild") == "VoiceChild", "sound profile normalization VoiceChild");
+    Check(SoundManager.NormalizeProfile("unknown") == "Sound", "sound profile fallback to Sound");
+
+    string assetsSoundDir = SoundManager.GetSoundBaseDir();
+    string[] soundProfiles = ["Sound", "VoiceAdult", "VoiceChild"];
+    string[] soundEvents = ["send.wav", "receive.wav", "dance.wav", "urgent.wav"];
+    foreach (var prof in soundProfiles)
+    {
+        foreach (var ev in soundEvents)
+        {
+            string wavPath = Path.Combine(assetsSoundDir, prof, ev);
+            Check(File.Exists(wavPath) && new FileInfo(wavPath).Length > 1000, $"audio asset {prof}/{ev} exists and non-empty");
+        }
+    }
+
+    settings.ChatSound = true;
+    SoundManager.Play(SoundEvent.MessageSent, settings);
+    SoundManager.Play(SoundEvent.MessageReceived, settings);
+    SoundManager.Play(SoundEvent.Dance, settings);
+    SoundManager.Play(SoundEvent.Urgent, settings);
+    SoundManager.PlayPreview("VoiceAdult", SoundEvent.MessageReceived);
+    SoundManager.PlayPreview("VoiceChild", SoundEvent.MessageSent);
+    Check(true, "SoundManager plays events safely without exceptions");
+
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

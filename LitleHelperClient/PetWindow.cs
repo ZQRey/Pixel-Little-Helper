@@ -413,7 +413,7 @@ public sealed class PetWindow : Window
         faceStatusUntil = DateTime.UtcNow.AddSeconds(seconds);
         faceHeartFrame = 0;
         Wake();
-        try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+        SoundManager.Play(SoundEvent.MessageReceived, settings);
         Draw();
     }
     internal void ShowConnectionResult(bool connected)
@@ -484,7 +484,7 @@ public sealed class PetWindow : Window
         {
             Wake();
             React(PetState.Laugh, 4);
-            try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+            SoundManager.Play(SoundEvent.MessageReceived, settings);
             return true;
         }
 
@@ -812,7 +812,7 @@ public sealed class PetWindow : Window
         React(PetState.Dance, 5);
         if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
         {
-            try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+            SoundManager.Play(SoundEvent.MessageReceived, settings);
             lastChatSound = DateTime.UtcNow;
         }
     }
@@ -828,14 +828,19 @@ public sealed class PetWindow : Window
             if (ChatDesktop.Unlocked()) foreach (var urgent in await messenger.UrgentAsync())
             {
                 string key = messenger.UserId + ":" + urgent.RecipientId + ":" + urgent.Id;
-                if (urgent.Command == "dance" && !settings.ChatCommandsShown.Contains(key) && !dances.Any(d => d.Key == key) && dances.Count < 50) { dances.Enqueue((key, urgent.SentAt.ToUniversalTime().AddHours(1))); }
+                if (urgent.Command == "dance" && !settings.ChatCommandsShown.Contains(key) && !dances.Any(d => d.Key == key) && dances.Count < 50)
+                {
+                    dances.Enqueue((key, urgent.SentAt.ToUniversalTime().AddHours(1)));
+                    React(PetState.Dance, 5);
+                    SoundManager.Play(SoundEvent.Dance, settings);
+                }
                 if (!urgent.IsUrgent || string.IsNullOrWhiteSpace(urgent.Body)) continue;
                 if (urgentShown.Contains(key) || settings.UrgentNotificationsShown.Contains(key) || announcements.Count >= 10) continue;
                 var sender = users.FirstOrDefault(u => u.Id == urgent.SenderId);
                 ReceiveAnnouncement(new ClientNotice("СРОЧНО · " + HelperEmojis.PlainText(urgent.Body[..Math.Min(970,urgent.Body.Length)]), sender?.FullName ?? "Сотрудник", 60, urgent.RecipientId < 0 ? urgent.RecipientId : urgent.SenderId) { UrgentMessageId = urgent.Id, UrgentKey = key, ExpiresAt = urgent.SentAt.ToUniversalTime().AddHours(1) });
                 urgentShown.Add(key);
                 React(PetState.Dance, 5);
-                if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
+                if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { SoundManager.Play(SoundEvent.Urgent, settings); lastChatSound = DateTime.UtcNow; }
             }
             int prevUnread = unreadChatsCount;
             unreadChatsCount = users.Count(u => u.Unread > 0);
@@ -877,7 +882,7 @@ public sealed class PetWindow : Window
                     else tray.Notify("Новые сообщения · " + notifications.Count + " чатов", string.Join("\n", notifications.Take(3).Select(n => n.Title)), 0, play);
                 }
                 else if (play)
-                { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
+                { SoundManager.Play(SoundEvent.MessageReceived, settings); lastChatSound = DateTime.UtcNow; }
                 if (play) lastChatSound = DateTime.UtcNow;
             }
         }
@@ -972,7 +977,7 @@ public sealed class PetWindow : Window
     {
         Wake();
         React(PetState.Joy, 5);
-        try { System.Media.SystemSounds.Exclamation.Play(); } catch { }
+        SoundManager.Play(SoundEvent.MessageReceived, settings);
         string title = Loc.T("CartridgeReadyTitle");
         string body = Loc.T("CartridgeReadyBody", notice.Username, notice.Marker, notice.Model, notice.Cabinet, notice.ItOffice);
         ReceiveAnnouncement(new ClientNotice($"{title}\n\n{body}", "Склад картриджей", 25) { LocalAnimation = PetState.Joy });
@@ -982,7 +987,7 @@ public sealed class PetWindow : Window
     {
         Wake();
         React(PetState.Surprise, 5);
-        try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+        SoundManager.Play(SoundEvent.MessageReceived, settings);
         string title = Loc.T("GlpiReplyTitle", notice.GlpiId);
         string by = Loc.T("GlpiReplyBy", notice.Author);
         ReceiveAnnouncement(new ClientNotice($"{title}\n{by}\n\n{notice.Text}", "GLPI HelpDesk", 25) { LocalAnimation = PetState.Surprise });
@@ -992,6 +997,7 @@ public sealed class PetWindow : Window
     {
         Wake();
         try { activeAlertWindow?.Close(); } catch { }
+        SoundManager.Play(SoundEvent.Urgent, settings);
         var window = new EmergencyAlertWindow(notice, accepted =>
         {
             if (notice.CallId.HasValue && hub != null)

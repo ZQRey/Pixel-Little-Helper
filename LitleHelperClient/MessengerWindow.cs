@@ -1336,14 +1336,15 @@ internal sealed class MessengerWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(16),
             Padding = new Thickness(12),
-            Width = 360,
-            Height = 320,
+            Width = 380,
+            Height = 340,
             Effect = new DropShadowEffect { BlurRadius = 24, ShadowDepth = 4, Opacity = 0.25, Color = Colors.Black }
         };
 
         var dock = new DockPanel();
         var tabsHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
         var emojiContent = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var emojiFont = new FontFamily("Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, Segoe UI Symbol");
 
         void SwitchTab(string category, string[] emojis)
         {
@@ -1352,30 +1353,48 @@ internal sealed class MessengerWindow : Window
             {
                 foreach (var emoji in HelperEmojis.All)
                 {
-                    var btn = new Button
+                    var cardBtn = new Border
                     {
-                        Width = 100, Height = 48, Margin = new Thickness(3),
+                        Width = 104, Height = 46, Margin = new Thickness(3),
                         Background = raised, BorderBrush = line, BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(8),
                         Cursor = Cursors.Hand
                     };
-                    var p = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
-                    p.Children.Add(HelperEmojis.AnimatedImage(emoji, 28, settings.AnimatedChatEmojis));
-                    p.Children.Add(new TextBlock { Text = emoji.Name, FontSize = 11, Foreground = ink, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
-                    btn.Content = p;
-                    btn.Click += (_, _) => { InsertEmoji(emoji); emojiPopup.IsOpen = false; };
-                    wrap.Children.Add(btn);
+                    var p = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                    p.Children.Add(HelperEmojis.AnimatedImage(emoji, 26, settings.AnimatedChatEmojis));
+                    p.Children.Add(new TextBlock { Text = emoji.Name, FontSize = 11, Foreground = ink, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
+                    cardBtn.Child = p;
+                    cardBtn.MouseEnter += (_, _) => cardBtn.Background = (Brush)new BrushConverter().ConvertFromString("#30818CF8")!;
+                    cardBtn.MouseLeave += (_, _) => cardBtn.Background = raised;
+                    cardBtn.MouseLeftButtonDown += (_, _) => { InsertEmoji(emoji); emojiPopup.IsOpen = false; };
+                    wrap.Children.Add(cardBtn);
                 }
             }
             else
             {
                 foreach (string em in emojis)
                 {
-                    var btn = new Button
+                    var tile = new Border
                     {
-                        Content = em, FontSize = 18, Width = 36, Height = 36, Margin = new Thickness(2),
-                        Background = Brushes.Transparent, BorderThickness = new Thickness(0), Cursor = Cursors.Hand
+                        Width = 40, Height = 40, Margin = new Thickness(3),
+                        Background = raised, BorderBrush = line, BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(8),
+                        Cursor = Cursors.Hand
                     };
-                    btn.Click += (_, _) =>
+                    var tb = new TextBlock
+                    {
+                        Text = em,
+                        FontFamily = emojiFont,
+                        FontSize = 22,
+                        Foreground = ink,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        TextAlignment = TextAlignment.Center
+                    };
+                    tile.Child = tb;
+                    tile.MouseEnter += (_, _) => { tile.Background = (Brush)new BrushConverter().ConvertFromString("#35818CF8")!; tile.BorderBrush = accent; };
+                    tile.MouseLeave += (_, _) => { tile.Background = raised; tile.BorderBrush = line; };
+                    tile.MouseLeftButtonDown += (_, _) =>
                     {
                         if (input != null && input.IsEnabled)
                         {
@@ -1386,7 +1405,7 @@ internal sealed class MessengerWindow : Window
                         }
                         emojiPopup.IsOpen = false;
                     };
-                    wrap.Children.Add(btn);
+                    wrap.Children.Add(tile);
                 }
             }
             emojiContent.Content = wrap;
@@ -1395,9 +1414,10 @@ internal sealed class MessengerWindow : Window
         var tabCategories = new[]
         {
             ("Помощник", Array.Empty<string>()),
-            ("Смайлы", new[] { "😀","😁","😂","🤣","😃","😄","😅","😆","😉","😊","😋","😎","😍","😘","😗","😙","😚","☺️","🙂","🤗","🤩","🤔","🤨","😐","😑","😶","🙄","😏","😣","😥","😮","🤐","😯","😪","😫","😴","😌","😛","😜","🤪","😝","🤤","😒","😓","😔","😕","🙃","🤑","😲","🙁","😖","😞","😟","😤","😢","😭","😦","😧","😨","😩","🤯","😬","😰","😱","🥵","🥶","😳","😵","😡","😠","🤬","😷","🤒","🤕","🤢","🤧","😇","🤠","🥳","🥺" }),
-            ("Жесты", new[] { "👍","👎","👏","🙌","🤝","👊","✊","🤛","🤜","🤞","✌️","🤟","🤘","👌","🤏","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🙏","✍️" }),
-            ("Сердца", new[] { "❤️","🧡","💛","💚","💙","💜","🖤","🤍","🤎","💔","❣️","💕","💞","💓","💗","💖","💘","💝","💟" }),
+            ("Смайлы", new[] { "😁","❤️","🤦‍♂️","😀","😂","🤣","😃","😄","😅","😆","😉","😊","😋","😎","😍","🥰","😘","😗","😙","😚","☺️","🙂","🤗","🤩","🤔","🤨","😐","😑","😶","🙄","😏","😣","😥","😮","🤐","😯","😪","😫","😴","😌","😛","😜","🤪","😝","🤤","😒","😓","😔","😕","🙃","🤑","😲","🙁","😖","😞","😟","😤","😢","😭","😦","😧","😨","😩","🤯","😬","😰","😱","🥵","🥶","😳","😵","😡","😠","🤬","😷","🤒","🤕","🤢","🤧","😇","🤠","🥳","🥺" }),
+            ("Жесты", new[] { "👍","👎","👏","🙌","🤝","👊","✊","🤛","🤜","🤞","✌️","🤟","🤘","👌","🤌","🤏","👈","👉","👆","👇","☝️","✋","🤚","🖐️","🖖","👋","🤙","💪","🙏","✍️" }),
+            ("Сердца", new[] { "❤️","💖","💓","💕","💞","💗","💘","💝","💟","❣️","💔","🧡","💛","💚","💙","💜","🖤","🤍","🤎" }),
+            ("Реакции", new[] { "🔥","✨","🎉","⭐","⚡","💥","🚀","💯","🏆","🎯","☕","💡","👍","👎","👏","🤝","💪","🙌" }),
             ("Работа", new[] { "💻","🖥️","🖨️","📱","📞","✉️","📧","📨","📩","📦","📁","📂","📄","📃","📊","📈","📉","📋","📌","📍","📎","⏰","⏳","💡","🔍","🔎","🔒","🔑","🛠️","⚙️","☕","🚀","🎯","🏆","📅","🏢" })
         };
 

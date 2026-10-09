@@ -4,7 +4,7 @@ using System.Windows.Media.Imaging;
 
 namespace PixelHelper;
 
-internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, Joy, Sad, Surprise, Laugh, Think, Celebrate, Offended, Twirl, Dance, Workout, Charging }
+internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, Joy, Sad, Surprise, Laugh, Think, Celebrate, Offended, Twirl, Dance, Workout, Charging, Facepalm }
 internal sealed class SpriteFrame
 {
     internal BitmapSource Image { get; }
@@ -39,13 +39,14 @@ internal sealed class SpriteFrame
         }
     }
 }
-internal enum FaceNoticeStatus { None, Connected, Disconnected }
+internal enum FaceNoticeStatus { None, Connected, Disconnected, Heart }
 internal sealed class FaceBadges
 {
     private readonly BitmapSource connected;
     private readonly BitmapSource disconnected;
     private readonly BitmapSource[] unreadDigits;
     private readonly BitmapSource unreadPlus;
+    private readonly BitmapSource[] heartFrames;
 
     internal FaceBadges()
     {
@@ -53,12 +54,14 @@ internal sealed class FaceBadges
         disconnected = new SpriteFrame("face_disconnected").Image;
         unreadDigits = Enumerable.Range(1, 9).Select(i => new SpriteFrame($"face_unread_{i}").Image).ToArray();
         unreadPlus = new SpriteFrame("face_unread_plus").Image;
+        heartFrames = Enumerable.Range(1, 4).Select(i => new SpriteFrame($"face_heart_{i}").Image).ToArray();
     }
 
-    internal BitmapSource? Get(FaceNoticeStatus status, int unreadCount)
+    internal BitmapSource? Get(FaceNoticeStatus status, int unreadCount, int heartPhase = 0)
     {
         if (status == FaceNoticeStatus.Connected) return connected;
         if (status == FaceNoticeStatus.Disconnected) return disconnected;
+        if (status == FaceNoticeStatus.Heart) return heartFrames[heartPhase % heartFrames.Length];
         if (unreadCount <= 0) return null;
         return unreadCount <= 9 ? unreadDigits[unreadCount - 1] : unreadPlus;
     }

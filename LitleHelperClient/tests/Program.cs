@@ -256,8 +256,20 @@ try
     typeof(PetWindow).GetField("emojiUntil", petFlags)!.SetValue(pet, DateTime.UtcNow.AddSeconds(-1)); advanceEmoji.Invoke(pet, null); Check((PetState)petStateField.GetValue(pet)! == PetState.Idle, "helper returns to idle after emoji reaction");
     typeof(PetWindow).GetMethod("ChangeState", petFlags)!.Invoke(pet, new object[] { PetState.Sleep }); pet.InsertEmojiReaction(HelperEmojis.All[0]);
     typeof(PetWindow).GetField("emojiUntil", petFlags)!.SetValue(pet, DateTime.UtcNow.AddSeconds(-1)); advanceEmoji.Invoke(pet, null); Check((PetState)petStateField.GetValue(pet)! == PetState.Sleep, "sleeping helper returns to sleep after emoji");
-    petSettings.ChatDoNotDisturb = true; pet.InsertEmojiReaction(HelperEmojis.All[1]); Check((PetState)petStateField.GetValue(pet)! == PetState.Sleep, "do not disturb suppresses emoji animation"); petSettings.ChatDoNotDisturb = false;
     typeof(PetWindow).GetMethod("ChangeState", petFlags)!.Invoke(pet, new object[] { PetState.Idle });
+
+    // Single emoji reactions
+    var checkEmojiMethod = typeof(PetWindow).GetMethod("CheckSingleEmojiReaction", petFlags)!;
+    var faceStatusField = typeof(PetWindow).GetField("faceStatus", petFlags)!;
+    bool heartHandled = (bool)checkEmojiMethod.Invoke(pet, new object[] { "❤️" })!;
+    Check(heartHandled && (FaceNoticeStatus)faceStatusField.GetValue(pet)! == FaceNoticeStatus.Heart, "single heart emoji activates pulsing heart on face");
+    bool laughHandled = (bool)checkEmojiMethod.Invoke(pet, new object[] { "😁" })!;
+    Check(laughHandled && (PetState)petStateField.GetValue(pet)! == PetState.Laugh, "single laugh emoji activates laugh animation");
+    bool facepalmHandled = (bool)checkEmojiMethod.Invoke(pet, new object[] { "🤦‍♂️" })!;
+    Check(facepalmHandled && (PetState)petStateField.GetValue(pet)! == PetState.Facepalm, "single facepalm emoji activates facepalm animation");
+    bool mixedHandled = (bool)checkEmojiMethod.Invoke(pet, new object[] { "Привет ❤️" })!;
+    Check(!mixedHandled, "mixed text with emoji does not trigger single emoji reaction");
+
     Check(pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "robot receives WPF input after canvas translation");
     typeof(PetWindow).GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();

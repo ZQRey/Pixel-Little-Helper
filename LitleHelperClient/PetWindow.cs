@@ -26,6 +26,7 @@ public sealed class PetWindow : Window
     private readonly Image faceOverlay = new() { Width = 30, Height = 22, IsHitTestVisible = false };
     private FaceNoticeStatus faceStatus = FaceNoticeStatus.None;
     private DateTime faceStatusUntil;
+    private int faceHeartFrame;
     private int unreadChatsCount;
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherTimer animation = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
@@ -376,6 +377,7 @@ public sealed class PetWindow : Window
         PetState.Idle => (f % 4) switch { 1 => 1, 3 => -1, _ => 0 },
         PetState.Charging => (f % 4) switch { 1 or 3 => 1, _ => 0 },
         PetState.Workout => (f % 8) switch { 1 or 3 => -1, 4 or 6 => 1, 5 => 2, 7 => -1, _ => 0 },
+        PetState.Facepalm => (f % 2) == 1 ? 1 : 0,
         PetState.Joy or PetState.Laugh or PetState.Celebrate => -(f % 2) * 2,
         _ => 0
     };
@@ -386,7 +388,12 @@ public sealed class PetWindow : Window
             faceStatus = FaceNoticeStatus.None;
         }
 
-        var badge = faceBadges.Get(faceStatus, faceStatus == FaceNoticeStatus.None ? unreadChatsCount : 0);
+        if (faceStatus == FaceNoticeStatus.Heart)
+        {
+            faceHeartFrame++;
+        }
+
+        var badge = faceBadges.Get(faceStatus, faceStatus == FaceNoticeStatus.None ? unreadChatsCount : 0, faceHeartFrame);
         if (badge != null)
         {
             int bob = GetHeadBob(state, frame);
@@ -399,6 +406,15 @@ public sealed class PetWindow : Window
         {
             faceOverlay.Visibility = Visibility.Collapsed;
         }
+    }
+    internal void ShowFaceHeart(double seconds = 4)
+    {
+        faceStatus = FaceNoticeStatus.Heart;
+        faceStatusUntil = DateTime.UtcNow.AddSeconds(seconds);
+        faceHeartFrame = 0;
+        Wake();
+        try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+        Draw();
     }
     internal void ShowConnectionResult(bool connected)
     {
@@ -443,15 +459,52 @@ public sealed class PetWindow : Window
         animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Twirl ? 150 : value == PetState.Offended ? 450 : value == PetState.Sleep ? 250 : 100);
         Draw();
     }
-    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance;
+    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance or PetState.Facepalm;
     internal void React(PetState value, double seconds)
     { emojiAnimating = false; actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
     private bool EmojiAllowed => settings.EmojiReactions && !settings.ChatDoNotDisturb && !settings.AssistantHidden && IsVisible && (diagnostics || ChatDesktop.Unlocked());
     internal void InsertEmojiReaction(HelperEmoji emoji)
     { if (EmojiAllowed) { emojiReactions.Insert(emoji); AdvanceEmoji(); } }
+    private bool CheckSingleEmojiReaction(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (!EmojiAllowed) return false;
+
+        string trimmed = text.Trim();
+
+        // 1. Single Heart ❤️ -> Pulsing heart on robot face for 4 seconds
+        if (trimmed is "❤️" or "\u2764" or "\u2764\uFE0F" or "💖" or "💓")
+        {
+            ShowFaceHeart(4);
+            return true;
+        }
+
+        // 2. Single Laugh 😁 -> Laughing animation for 4 seconds
+        if (trimmed is "😁" or "\U0001F601" or "\uD83D\uDE01")
+        {
+            Wake();
+            React(PetState.Laugh, 4);
+            try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+            return true;
+        }
+
+        // 3. Single Facepalm 🤦‍♂️ -> Facepalm animation for 5 seconds
+        if (trimmed is "🤦‍♂️" or "🤦" or "🤦‍♀️" or "\U0001F926\u200D\u2642\uFE0F" or "\U0001F926" or "\U0001F926\u200D\u2640\uFE0F")
+        {
+            Wake();
+            React(PetState.Facepalm, 5);
+            return true;
+        }
+
+        return false;
+    }
     private void ReceiveEmoji(ChatEntry message)
     {
         if (messenger?.SignedIn != true || message.SenderId == messenger.UserId) return;
+        if (string.IsNullOrWhiteSpace(message.Body)) return;
+
+        if (CheckSingleEmojiReaction(message.Body.Trim())) return;
+
         emojiReactions.Incoming(messenger.IdentityContext, message, EmojiAllowed && settings.IncomingEmojiReactions); AdvanceEmoji();
     }
     private void AdvanceEmoji()

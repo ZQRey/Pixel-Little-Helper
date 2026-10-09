@@ -622,6 +622,11 @@ small, .muted {
   box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
 }
 
+.avatar .presence.available {
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.7);
+}
+
 .contact-content {
   flex: 1;
   min-width: 0;

@@ -16,6 +16,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     private bool registrationSent;
     public bool IsOnline => registered && connection.State == HubConnectionState.Connected;
     public event Action<bool>? OnlineChanged;
+    public event Action? Connecting;
     public event Action<List<ActionButton>>? ButtonsUpdated;
     public event Action<bool>? SuperAdminAvailable;
     public event Func<ClientNotice, Task<string>>? NoticeReceived;
@@ -81,6 +82,7 @@ public sealed class HubConnectionService : IAsyncDisposable
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); attempt.CancelAfter(TimeSpan.FromSeconds(25));
                 if (connection.State == HubConnectionState.Disconnected)
                 {
+                    Connecting?.Invoke();
                     Stage("Регистрация клиента");
                     if (!registrationSent)
                     {

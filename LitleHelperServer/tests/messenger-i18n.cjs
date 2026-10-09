@@ -259,6 +259,12 @@ for (const lang of ['kk', 'en', 'zh']) {
   check(missingKeys.length === 0, `'${lang}' has 100% key parity with 'ru' (missing: ${missingKeys.join(', ')})`);
 }
 
+// Check presence status translations (online, available, offline)
+check(I18N.ru.available === 'Доступен', 'ru has available = Доступен');
+check(I18N.kk.available === 'Қолжетімді', 'kk has available = Қолжетімді');
+check(I18N.en.available === 'Available', 'en has available = Available');
+check(I18N.zh.available === '可用', 'zh has available = 可用');
+
 // 3. Test language switching and reactivity
 const setLang = vm.runInContext('setLang', context);
 const currentLang = vm.runInContext('currentLang', context);

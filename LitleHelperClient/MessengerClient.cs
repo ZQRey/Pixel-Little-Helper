@@ -7,15 +7,16 @@ using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace PixelHelper;
-public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false, bool IsAdmin = false)
+public record ChatContact(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId, bool IsOnline, DateTime? LastAt = null, string? LastText = null, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false, bool IsAdmin = false, string Status = "offline")
 {
     public string Label => (Pinned ? "📌 " : "") + (IsGroup ? "👥 " : "") + FullName + (Muted ? " · ◌" : "");
     public string DirectoryLabel => FullName + " (" + Username + ")";
-    public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsOnline ? "● Online" : "○ Offline") + (Branch == null ? "" : " · " + Branch) : HelperEmojis.PlainText(LastText).Replace('\n', ' ');
+    public string StatusLabel => Status == "online" ? "● В сети" : Status == "available" ? "◐ Доступен" : "○ Не в сети";
+    public string Subtitle => LastText == null ? IsGroup ? IsActive ? "Группа" : "Группа закрыта" : (IsGroup ? "" : StatusLabel) + (Branch == null ? "" : (IsGroup ? "" : " · ") + Branch) : HelperEmojis.PlainText(LastText).Replace('\n', ' ');
     public string TimeLabel => LastAt?.ToLocalTime().ToString("dd.MM HH:mm") ?? "";
     public bool HasUnread => Unread > 0;
     public string Initials => string.Concat(FullName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(n => char.ToUpperInvariant(n[0])));
-    public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : IsOnline ? "● Online" : "○ Offline" : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
+    public override string ToString() => (IsGroup ? "👥 " : "") + FullName + (Unread > 0 ? "  ● " + Unread : "") + "\n" + (LastText == null ? IsGroup ? "Группа" : StatusLabel : LastText[..Math.Min(50, LastText.Length)].Replace('\n', ' '));
     public static IEnumerable<ChatContact> Ordered(IEnumerable<ChatContact> contacts) => contacts.OrderByDescending(u => u.Pinned).ThenByDescending(u => u.Unread > 0).ThenByDescending(u => u.LastAt).ThenBy(u => u.FullName);
 }
 public record ChatAttachment(string Id, string Name, long Size)
@@ -59,6 +60,7 @@ internal sealed class MessengerClient : IAsyncDisposable
     private readonly CancellationTokenSource lifetime = new();
     private HubConnection? connection;
     private ChatSession? session;
+    private bool windowOpen;
     internal bool SignedIn => session != null;
     internal int UserId => session?.Id ?? 0;
     internal string FullName => session?.FullName ?? "";
@@ -71,6 +73,16 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal event Action<int,string>? TypingReceived;
     internal async Task TypingAsync(int peer)
     {try{if(connection?.State==HubConnectionState.Connected)await connection.InvokeAsync("Typing",peer,lifetime.Token);}catch(Exception ex){Settings.Log(ex);}}
+    internal async Task SetWindowOpenAsync(bool isOpen)
+    {
+        windowOpen = isOpen;
+        try
+        {
+            if (connection?.State == HubConnectionState.Connected)
+                await connection.InvokeAsync("SetMessengerOpen", isOpen, lifetime.Token);
+        }
+        catch (Exception ex) { Settings.Log(ex); }
+    }
     internal MessengerClient(Settings settings)
     {
         var uri = new Uri(settings.ServerUrl ?? "https://helper.gp1.loc");
@@ -143,10 +155,20 @@ internal sealed class MessengerClient : IAsyncDisposable
                 connection.On<ChatEntry>("ChatMessage", message => MessageReceived?.Invoke(message));
                 connection.On("ChatChanged", () => Changed?.Invoke());
                 connection.On<JsonElement>("Typing",m=>TypingReceived?.Invoke(m.GetProperty("peer").GetInt32(),m.GetProperty("fullName").GetString()??""));
-                connection.Reconnected += _ => { Changed?.Invoke(); return Task.CompletedTask; };
+                connection.Reconnected += async _ =>
+                {
+                    if (windowOpen) try { await connection.InvokeAsync("SetMessengerOpen", true, lifetime.Token); } catch { }
+                    Changed?.Invoke();
+                };
                 connection.Closed += _ => { Changed?.Invoke(); return Task.CompletedTask; };
             }
-            if (connection.State == HubConnectionState.Disconnected) { using var timeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(25)); await connection.StartAsync(timeout.Token); }
+            if (connection.State == HubConnectionState.Disconnected)
+            {
+                using var timeout=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(25));
+                await connection.StartAsync(timeout.Token);
+                if (windowOpen) try { await connection.InvokeAsync("SetMessengerOpen", true, lifetime.Token); } catch { }
+            }
         }
         finally { connectLock.Release(); }
     }

@@ -76,11 +76,20 @@ internal sealed class MessengerWindow : Window
         client.Changed += OnChanged;
         client.MessageReceived += OnMessage;
         client.TypingReceived += OnTyping;
-        Loaded += async (_, _) => await RefreshAsync();
+        Loaded += async (_, _) =>
+        {
+            _ = client.SetWindowOpenAsync(true);
+            await RefreshAsync();
+        };
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is bool visible) _ = client.SetWindowOpenAsync(visible);
+        };
         Activated += async (_, _) => await MarkReadAsync();
         SizeChanged += (_, _) => AdjustDrawer();
         Closed += (_, _) =>
         {
+            _ = client.SetWindowOpenAsync(false);
             closing = true;
             client.Changed -= OnChanged;
             client.MessageReceived -= OnMessage;
@@ -546,8 +555,11 @@ internal sealed class MessengerWindow : Window
                           <Style TargetType="Ellipse">
                             <Setter Property="Fill" Value="#64748B"/>
                             <Style.Triggers>
-                              <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                              <DataTrigger Binding="{Binding Status}" Value="online">
                                 <Setter Property="Fill" Value="#10B981"/>
+                              </DataTrigger>
+                              <DataTrigger Binding="{Binding Status}" Value="available">
+                                <Setter Property="Fill" Value="#38BDF8"/>
                               </DataTrigger>
                               <DataTrigger Binding="{Binding IsGroup}" Value="True">
                                 <Setter Property="Visibility" Value="Collapsed"/>
@@ -989,10 +1001,15 @@ internal sealed class MessengerWindow : Window
             chatStatus.Text = "Рабочая группа";
             chatStatus.Foreground = muted;
         }
-        else if (contact.IsOnline)
+        else if (contact.Status == "online")
         {
             chatStatus.Text = "● В сети";
             chatStatus.Foreground = (Brush)new BrushConverter().ConvertFromString("#10B981")!;
+        }
+        else if (contact.Status == "available")
+        {
+            chatStatus.Text = "◐ Доступен";
+            chatStatus.Foreground = (Brush)new BrushConverter().ConvertFromString("#38BDF8")!;
         }
         else
         {
@@ -1586,7 +1603,9 @@ internal sealed class MessengerWindow : Window
         details.Children.Add(new TextBlock { Text = contact.FullName, FontSize = FontSize + 4, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10), Foreground = ink });
         if (!contact.IsGroup)
         {
-            details.Children.Add(new TextBlock { Text = contact.IsOnline ? "● В сети" : "○ Не в сети", Foreground = contact.IsOnline ? (Brush)new BrushConverter().ConvertFromString("#10B981")! : muted, FontSize = 12 });
+            var statusText = contact.Status == "online" ? "● В сети" : contact.Status == "available" ? "◐ Доступен" : "○ Не в сети";
+            var statusBrush = contact.Status == "online" ? (Brush)new BrushConverter().ConvertFromString("#10B981")! : contact.Status == "available" ? (Brush)new BrushConverter().ConvertFromString("#38BDF8")! : muted;
+            details.Children.Add(new TextBlock { Text = statusText, Foreground = statusBrush, FontSize = 12 });
             details.Children.Add(new TextBlock { Text = contact.Username + "\n" + contact.Branch, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), Foreground = muted, FontSize = 12.5 });
             return;
         }

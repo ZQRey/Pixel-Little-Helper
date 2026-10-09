@@ -22,6 +22,11 @@ public sealed class PetWindow : Window
     private PetState? localNoticeAnimation;
     private HubConnectionService? hub;
     private readonly Sprites sprites = new();
+    private readonly FaceBadges faceBadges = new();
+    private readonly Image faceOverlay = new() { Width = 30, Height = 22, IsHitTestVisible = false };
+    private FaceNoticeStatus faceStatus = FaceNoticeStatus.None;
+    private DateTime faceStatusUntil;
+    private int unreadChatsCount;
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherTimer animation = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
     private readonly DispatcherTimer inactivity = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
@@ -101,8 +106,10 @@ public sealed class PetWindow : Window
             InitializeHub();
         }
         RenderOptions.SetBitmapScalingMode(robot, BitmapScalingMode.NearestNeighbor);
+        RenderOptions.SetBitmapScalingMode(faceOverlay, BitmapScalingMode.NearestNeighbor);
         Canvas.SetLeft(robot, SpriteLeft); Canvas.SetTop(robot, SpriteTop);
         canvas.Children.Add(robot);
+        canvas.Children.Add(faceOverlay);
         robot.MouseEnter += (_, _) => Wake();
         robot.MouseLeftButtonDown += MouseDownRobot;
         robot.MouseMove += MouseMoveRobot;
@@ -166,9 +173,16 @@ public sealed class PetWindow : Window
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
             else if (!exposed && animation.IsEnabled) animation.Stop();
-            if (!emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn) &&
+            if (!emojiAnimating && !menuOpen && !mouseDown && ticket == null && state != PetState.Charging &&
+                (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(30) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(30)))
+            {
+                if (state != PetState.Workout) ChangeState(PetState.Workout);
+            }
+            else if (!emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn or PetState.Workout or PetState.Charging) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
+            {
                 React(PetState.Yawn, 2);
+            }
         };
         refresh.Tick += async (_, _) => await RefreshActions();
         outsideClick.Tick += (_, _) =>
@@ -298,9 +312,14 @@ public sealed class PetWindow : Window
                 hub.EmergencyAlertReceived += notice => Dispatcher.InvokeAsync(() => HandleEmergencyAlert(notice));
                 hub.EmergencyAlertCanceled += () => Dispatcher.InvokeAsync(HandleEmergencyAlertCanceled);
                 hub.RoomUpdated += room => Dispatcher.InvokeAsync(() => HandleRoomUpdated(room));
+                hub.Connecting += () => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (!mouseDown && !menuOpen && !IsTemporary(state) && state != PetState.Drag) ChangeState(PetState.Charging);
+                }));
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (!online) { React(PetState.Error, 4); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
+                    ShowConnectionResult(online);
+                    if (!online) { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
                 }));
                 hub.ButtonsUpdated += buttons => Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -348,10 +367,51 @@ public sealed class PetWindow : Window
         menu.Items.Add(langMenu);
         menu.Items.Add(new Separator()); var exit = new MenuItem { Header = Loc.T("TrayExit") }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
     }
+    private static int GetHeadBob(PetState s, int f) => s switch
+    {
+        PetState.Idle => (f % 4) switch { 1 => 1, 3 => -1, _ => 0 },
+        PetState.Charging => (f % 4) switch { 1 or 3 => 1, _ => 0 },
+        PetState.Workout => (f % 8) switch { 1 or 3 => -1, 4 or 6 => 1, 5 => 2, 7 => -1, _ => 0 },
+        PetState.Joy or PetState.Laugh or PetState.Celebrate => -(f % 2) * 2,
+        _ => 0
+    };
+    private void UpdateFaceOverlay()
+    {
+        if (DateTime.UtcNow >= faceStatusUntil && faceStatus != FaceNoticeStatus.None)
+        {
+            faceStatus = FaceNoticeStatus.None;
+        }
+
+        var badge = faceBadges.Get(faceStatus, faceStatus == FaceNoticeStatus.None ? unreadChatsCount : 0);
+        if (badge != null)
+        {
+            int bob = GetHeadBob(state, frame);
+            Canvas.SetLeft(faceOverlay, SpriteLeft + 16 * Scale);
+            Canvas.SetTop(faceOverlay, SpriteTop + (12 + bob) * Scale);
+            faceOverlay.Source = badge;
+            faceOverlay.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            faceOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+    internal void ShowConnectionResult(bool connected)
+    {
+        faceStatus = connected ? FaceNoticeStatus.Connected : FaceNoticeStatus.Disconnected;
+        faceStatusUntil = DateTime.UtcNow.AddSeconds(4);
+        if (state == PetState.Charging) ChangeState(PetState.Idle);
+        if (connected)
+        {
+            try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+        }
+        Draw();
+    }
     private void Draw()
     {
         current = sprites.Get(state, frame);
         robot.Source = current.Image;
+        UpdateFaceOverlay();
         UpdateRegion();
     }
     private void UpdateRegion()
@@ -402,7 +462,7 @@ public sealed class PetWindow : Window
         emojiAnimating = true; emojiUntil = now.AddSeconds(emoji.Seconds); ChangeState(emoji.State);
         if (!animation.IsEnabled && IsExposed()) animation.Start();
     }
-    private void Wake() { lastInteraction = DateTime.UtcNow; if (state is PetState.Sleep or PetState.Yawn) React(PetState.Wake, 2); }
+    private void Wake() { lastInteraction = DateTime.UtcNow; if (state is PetState.Sleep or PetState.Yawn or PetState.Workout) React(PetState.Wake, 2); }
     private void FollowCursor()
     {
         if (state is not (PetState.Idle or PetState.LookLeft or PetState.LookRight or PetState.LookUp or PetState.LookDown) || mouseDown || !IsVisible || !NativeMethods.GetCursorPos(out var cursor)) return;
@@ -703,7 +763,14 @@ public sealed class PetWindow : Window
                 React(PetState.Dance, 5);
                 if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { System.Media.SystemSounds.Asterisk.Play(); lastChatSound = DateTime.UtcNow; }
             }
-            tray?.SetUnread(users.Any(u => u.Unread > 0));
+            int prevUnread = unreadChatsCount;
+            unreadChatsCount = users.Count(u => u.Unread > 0);
+            if (prevUnread > 0 && unreadChatsCount == 0)
+            {
+                React(PetState.Joy, 2);
+            }
+            Draw();
+            tray?.SetUnread(unreadChatsCount > 0);
             var notifications = new List<(string Title, string Text, int Peer)>();
             foreach (var user in users)
             {

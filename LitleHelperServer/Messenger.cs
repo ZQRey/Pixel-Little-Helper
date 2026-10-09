@@ -27,16 +27,57 @@ public class ChatMessage
 public record ChatSend(int RecipientId, string Body, string ClientId);
 public class ChatPresence
 {
-    private readonly Dictionary<string, int> connections = new();
-    private readonly Dictionary<string, Action> aborts = new();
-    public void Add(string connection, int user, Action abort) { lock (connections) { connections[connection] = user; aborts[connection] = abort; } }
-    public void Remove(string connection) { lock (connections) { connections.Remove(connection); aborts.Remove(connection); } }
-    public void CloseAll() { Action[] actions; lock (connections) actions = aborts.Values.ToArray(); foreach (var abort in actions) abort(); }
-    public bool Online(int user) { lock (connections) return connections.ContainsValue(user); }
+    private record PresenceEntry(int UserId, bool IsOpen, Action Abort);
+    private readonly Dictionary<string, PresenceEntry> connections = new();
+
+    public void Add(string connection, int user, Action abort, bool isOpen = false)
+    {
+        lock (connections) { connections[connection] = new PresenceEntry(user, isOpen, abort); }
+    }
+    public void SetMessengerOpen(string connection, bool isOpen)
+    {
+        lock (connections)
+        {
+            if (connections.TryGetValue(connection, out var entry))
+                connections[connection] = entry with { IsOpen = isOpen };
+        }
+    }
+    public void Remove(string connection)
+    {
+        lock (connections) { connections.Remove(connection); }
+    }
+    public void CloseAll()
+    {
+        Action[] actions;
+        lock (connections) actions = connections.Values.Select(v => v.Abort).ToArray();
+        foreach (var abort in actions) abort();
+    }
+    public string GetStatus(int user)
+    {
+        lock (connections)
+        {
+            bool hasConnection = false;
+            foreach (var entry in connections.Values)
+            {
+                if (entry.UserId == user)
+                {
+                    hasConnection = true;
+                    if (entry.IsOpen) return "online";
+                }
+            }
+            return hasConnection ? "available" : "offline";
+        }
+    }
+    public bool Online(int user) => GetStatus(user) != "offline";
 }
 [Authorize(AuthenticationSchemes = "Bearer")]
 public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence presence, MessengerSettings settings) : Hub
 {
+    public async Task SetMessengerOpen(bool isOpen)
+    {
+        presence.SetMessengerOpen(Context.ConnectionId, isOpen);
+        await Clients.All.SendAsync("ChatChanged");
+    }
     public async Task Typing(int peer)
     {
         if(!settings.Value.Enabled)return;
@@ -173,7 +214,11 @@ public static class Messenger
             var me = await UserAsync(db, p);
             var users = await db.Users.AsNoTracking().Where(u => u.Id != me.Id && u.PasswordHash == "!AD" && (u.IsActive || db.ChatMessages.Any(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id)))
                 .OrderBy(u => u.FullName).Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(), unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null && m.Body != ""), lastId = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).Select(m => (long?)m.Id).Max(), lastAt = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => (DateTime?)m.SentAt).FirstOrDefault(), lastText = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => m.Body).FirstOrDefault() }).ToListAsync();
-            return users.Select(u => new ChatListItem(u.Id, u.FullName, u.Username, u.IsActive, u.branch, u.unread, u.lastId, presence.Online(u.Id), u.lastAt, u.lastText)).Concat(await ChatGroups.ListAsync(db, me.Id));
+            return users.Select(u =>
+            {
+                var status = presence.GetStatus(u.Id);
+                return new ChatListItem(u.Id, u.FullName, u.Username, u.IsActive, u.branch, u.unread, u.lastId, status != "offline", u.lastAt, u.lastText, Status: status);
+            }).Concat(await ChatGroups.ListAsync(db, me.Id));
         });
         api.MapGet("/history/{peer:int}", async (int peer, long? before, HelperDb db, ClaimsPrincipal p) =>
         {

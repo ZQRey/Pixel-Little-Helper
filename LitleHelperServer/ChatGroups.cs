@@ -42,7 +42,7 @@ public class ChatGroupMessage
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
 }
 public record ChatListItem(int Id, string FullName, string Username, bool IsActive, string? Branch, int Unread, long? LastId,
-    bool IsOnline, DateTime? LastAt, string? LastText, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool IsAdmin = false);
+    bool IsOnline, DateTime? LastAt, string? LastText, bool IsGroup = false, int? OwnerId = null, DateTime? SuspendedUntil = null, bool IsAdmin = false, string Status = "offline");
 public class ChatGroupEvent
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -113,7 +113,7 @@ public static class ChatGroups
             var suspendedUntil = await db.ChatGroupRestrictions.Where(r => r.GroupId == group.Id && r.UserId == user && r.EndsAt > DateTime.UtcNow).Select(r => (DateTime?)r.EndsAt).MaxAsync(); bool suspended = suspendedUntil != null;
             var last = await visible.OrderByDescending(m => m.Id).FirstOrDefaultAsync();
             int unread = await visible.CountAsync(m => m.Id > member.ReadThroughId && m.SenderId != user && m.Body != "");
-            list.Add(new(-group.Id, group.Name, "", !group.IsClosed && !suspended, null, suspended ? 0 : unread, last?.Id, false, last?.SentAt, last?.Body, true, group.OwnerId, suspendedUntil, member.IsAdmin));
+            list.Add(new(-group.Id, group.Name, "", !group.IsClosed && !suspended, null, suspended ? 0 : unread, last?.Id, false, last?.SentAt, last?.Body, true, group.OwnerId, suspendedUntil, member.IsAdmin, "group"));
         }
         return list;
     }

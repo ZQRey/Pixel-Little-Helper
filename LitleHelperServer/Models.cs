@@ -155,4 +155,5 @@ public record TicketReplyNotice(int GlpiId, string Title, string Author, string 
 public record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department);
 public record CartridgeReadyRequest(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
 public record EmergencyAlertRequest(string Code, string? Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int? DurationSeconds, int? CallId, string? Department);
+public record EmergencyPingRequest(string? ServerUrl, string? ApiKey);
 

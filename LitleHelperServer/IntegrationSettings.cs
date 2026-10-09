@@ -28,7 +28,10 @@ public record EmergencyOptions(
     bool AllowClientTrigger = true,
     List<string>? AllowedRoles = null,
     List<SpecialistDepartmentConfig>? Departments = null,
-    List<string>? CodeBlueResponsibleUsers = null
+    List<string>? CodeBlueResponsibleUsers = null,
+    bool TelegramAlertsEnabled = true,
+    string TelegramChatId = "",
+    int TelegramThreadId = 0
 );
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)

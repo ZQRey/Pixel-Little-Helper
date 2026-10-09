@@ -104,6 +104,7 @@ vm.runInContext(source, context);
   assert(body.includes('AudioRONGTA'), 'emergency panel must render AudioRONGTA section');
   assert(body.includes('dept-list'), 'emergency panel must render department list');
   assert(body.includes('manual-alert-code'), 'emergency panel must render manual alert selector');
+  assert(body.includes('telegramAlertsEnabled'), 'emergency panel must render telegram alerts toggle');
 
   // Switch to cartridge tab
   await context.switchTab('cartridge');

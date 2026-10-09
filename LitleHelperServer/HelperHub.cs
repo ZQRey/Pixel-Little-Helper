@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace LitleHelperServer;
 
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
-public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, IHttpClientFactory? httpFactory = null) : Hub
+public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, TelegramClient? telegram = null, IHttpClientFactory? httpFactory = null) : Hub
 {
     public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen, c.BranchId, c.Room };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
@@ -299,6 +299,11 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         }
 
         await Clients.Group("PanelStaff").SendAsync("EmergencyAlertTriggered", new { notice, branchId = branch?.Id, branchName = branch?.Name, machine = c.MachineName });
+
+        if (telegram != null)
+        {
+            _ = telegram.SendEmergencyAlertAsync(title, upperCode, activeCabinet, branch?.Name, $"{c.CurrentUser} ({c.MachineName})", notes?.Trim(), department);
+        }
 
         db.AuditLogs.Add(new() { AdminUsername = c.CurrentUser, MachineName = c.MachineName, CommandType = "emergency_trigger", CommandPayload = upperCode + " / " + activeCabinet + " / " + (notes ?? "") + (!string.IsNullOrWhiteSpace(department) ? " / " + department : "") + (branch != null ? " / " + branch.Name : ""), Status = "Completed", Result = "Оповещение разослано агентам" });
         await db.SaveChangesAsync();

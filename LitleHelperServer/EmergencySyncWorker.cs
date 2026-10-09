@@ -8,7 +8,8 @@ public class EmergencySyncWorker(
     IntegrationSettings settings,
     IHttpClientFactory httpFactory,
     IHubContext<HelperHub> hub,
-    ILogger<EmergencySyncWorker> logger) : BackgroundService
+    ILogger<EmergencySyncWorker> logger,
+    TelegramClient? telegram = null) : BackgroundService
 {
     private string lastSeenAlarmId = "";
     private int lastSeenCallId = 0;
@@ -61,6 +62,10 @@ public class EmergencySyncWorker(
                             string cabinet = b.TryGetProperty("cabinet", out var cabVal) ? (cabVal.GetString() ?? "") : "";
                             var notice = new EmergencyAlertNotice(code, title, cabinet, null, null, null, null, 300, null, null);
                             await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice, token);
+                            if (telegram != null)
+                            {
+                                _ = telegram.SendEmergencyAlertAsync(title, code, cabinet, null, "AudioRONGTA (ROXTON SOS)", null, null, token);
+                            }
                             logger.LogInformation("Broadcasted emergency alert from AudioRONGTA: {Code} ({Title})", code, title);
                         }
                     }
@@ -100,6 +105,10 @@ public class EmergencySyncWorker(
                             else
                             {
                                 await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice, token);
+                            }
+                            if (telegram != null)
+                            {
+                                _ = telegram.SendEmergencyAlertAsync(notice.Title, "CODE_BLUE", cabinet, null, "AudioRONGTA (ROXTON SOS)", notice.Notes, deptName, token);
                             }
                             logger.LogInformation("Broadcasted specialist call from AudioRONGTA: CallId={CallId}, Dept={Dept}", callId, deptName);
                         }

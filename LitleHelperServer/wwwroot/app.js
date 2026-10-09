@@ -297,6 +297,21 @@ function renderEmergencySettings(data){
           <small style="color:#3b82f6">При активации вызова «Код Синий» (например, из кабинета 120) тревожный полноэкранный экран со звуком срабатывает только на компьютерах этих специалистов данного филиала.</small>
         </div>
 
+        <div style="margin-top:1rem;margin-bottom:1rem;padding:0.75rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">
+          <label class="check-label" style="font-weight:600;color:#166534">
+            <input name="telegramAlertsEnabled" type="checkbox" ${data.telegramAlertsEnabled!==false?'checked':''}>Дублировать экстренные коды и вызовы «Код Синий» в Telegram
+          </label>
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:0.75rem;margin-top:0.5rem">
+            <label style="font-size:0.85rem">Chat ID для оповещений (по умолчанию чат техподдержки)
+              <input name="telegramChatId" value="${escape(data.telegramChatId||'')}" placeholder="Оставьте пустым для основного чата" maxlength="64">
+            </label>
+            <label style="font-size:0.85rem">Thread ID темы (опционально)
+              <input name="telegramThreadId" type="number" value="${data.telegramThreadId||''}" placeholder="0" min="0">
+            </label>
+          </div>
+          <small style="color:#15803d">Экстренные сигналы будут моментально приходить дежурным инженерам и руководству в Telegram со звуковым уведомлением и деталями (филиал, кабинет, инициатор, время).</small>
+        </div>
+
         <div class="form-actions">
           <button class="primary" type="submit">Сохранить настройки</button>
           <button id="emergency-test-btn" type="button">Тестовое оповещение на все ПК</button>
@@ -359,6 +374,9 @@ function renderEmergencySettings(data){
           allowStandalone:form.elements.allowStandalone.checked,
           allowClientTrigger:form.elements.allowClientTrigger.checked,
           codeBlueResponsibleUsers:form.elements.codeBlueResponsibleUsers?form.elements.codeBlueResponsibleUsers.value.split(',').map(s=>s.trim()).filter(Boolean):[],
+          telegramAlertsEnabled:form.elements.telegramAlertsEnabled?form.elements.telegramAlertsEnabled.checked:true,
+          telegramChatId:form.elements.telegramChatId?form.elements.telegramChatId.value.trim():'',
+          telegramThreadId:form.elements.telegramThreadId&&form.elements.telegramThreadId.value?parseInt(form.elements.telegramThreadId.value,10)||0:0,
           departments:depts
         };
         await api('/settings/emergency','PUT',update);

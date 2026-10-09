@@ -131,14 +131,15 @@ public static class IntegrationApi
             return Results.Ok(settings.Emergency());
         }).RequireAuthorization("settings.manage");
 
-        app.MapPost("/api/settings/emergency/test", async (Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, System.Security.Claims.ClaimsPrincipal user) =>
+        app.MapPost("/api/settings/emergency/test", async (Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, TelegramClient telegram, System.Security.Claims.ClaimsPrincipal user) =>
         {
             var notice = new EmergencyAlertNotice("CODE_YELLOW", "ТЕСТ: КОД ЖЁЛТЫЙ (Проверка оповещения)", "Кабинет IT", "Тестовая проверка системы экстренного оповещения Pixel Little Helper.", null, null, null, 15, null, null);
             await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
-            return Results.Ok(new { success = true, message = "Тестовое оповещение отправлено на все подключённые компьютеры" });
+            _ = telegram.SendEmergencyAlertAsync("ТЕСТ: КОД ЖЁЛТЫЙ (Проверка оповещения)", "CODE_YELLOW", "Кабинет IT", null, user.Identity?.Name ?? "Admin", "Тестовая проверка системы экстренного оповещения", null);
+            return Results.Ok(new { success = true, message = "Тестовое оповещение отправлено на все подключённые компьютеры и в Telegram" });
         }).RequireAuthorization("settings.manage");
 
-        app.MapPost("/api/integrations/emergency/alert", async (EmergencyAlertRequest req, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, IntegrationSettings settings, HelperDb db, System.Security.Claims.ClaimsPrincipal user, IHttpClientFactory httpFactory) =>
+        app.MapPost("/api/integrations/emergency/alert", async (EmergencyAlertRequest req, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, IntegrationSettings settings, HelperDb db, TelegramClient telegram, System.Security.Claims.ClaimsPrincipal user, IHttpClientFactory httpFactory) =>
         {
             var em = settings.Emergency();
             string upperCode = req.Code.Trim().ToUpperInvariant();
@@ -175,6 +176,8 @@ public static class IntegrationApi
             }
 
             string operatorName = user.Identity?.Name ?? "External API";
+            _ = telegram.SendEmergencyAlertAsync(title, upperCode, req.Cabinet ?? "Не указан", null, operatorName, req.Notes?.Trim(), req.Department);
+
             db.AuditLogs.Add(new() { AdminUsername = operatorName, MachineName = req.Cabinet ?? "Server", CommandType = "emergency_broadcast", CommandPayload = upperCode + " / " + req.Cabinet, Status = "Completed", Result = "Оповещение запущено" });
             await db.SaveChangesAsync();
 

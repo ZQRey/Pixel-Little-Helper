@@ -46,6 +46,32 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
         if (keyboard != null) body["reply_markup"] = keyboard;
         await CallAsync("sendMessage", body, token);
     }
+    public async Task SendEmergencyAlertAsync(string title, string code, string cabinet, string? branchName, string? initiator, string? notes, string? department, CancellationToken token = default)
+    {
+        var em = settings.Emergency();
+        var tg = settings.Telegram();
+        if (!tg.Enabled || !em.TelegramAlertsEnabled) return;
+        string targetChat = !string.IsNullOrWhiteSpace(em.TelegramChatId) ? em.TelegramChatId.Trim() : tg.ChatId;
+        int targetThread = em.TelegramThreadId > 0 ? em.TelegramThreadId : tg.ThreadId;
+        if (string.IsNullOrWhiteSpace(targetChat)) return;
+
+        string header = code == "CODE_BLUE" ? "🆘 СРОЧНАЯ РЕАНИМАЦИЯ: КОД СИНИЙ!" : $"🚨 ЭКСТРЕННЫЙ ВЫЗОВ: {title}";
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(header);
+        sb.AppendLine($"Код: {code}");
+        if (!string.IsNullOrWhiteSpace(branchName)) sb.AppendLine($"Филиал: {branchName}");
+        sb.AppendLine($"Кабинет: {cabinet}");
+        if (!string.IsNullOrWhiteSpace(initiator)) sb.AppendLine($"Инициатор: {initiator}");
+        if (!string.IsNullOrWhiteSpace(department)) sb.AppendLine($"Направление: {department}");
+        if (!string.IsNullOrWhiteSpace(notes)) sb.AppendLine($"Примечание: {notes}");
+        sb.AppendLine($"Время: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+
+        try
+        {
+            await SendToAsync(targetChat, sb.ToString(), null, token, targetThread);
+        }
+        catch { }
+    }
     public async Task<JsonElement> UpdatesAsync(long offset, CancellationToken token) =>
         await CallAsync("getUpdates", new { offset, timeout = 0, limit = 20, allowed_updates = new[] { "message", "callback_query" } }, token);
     public async Task AnswerCallbackAsync(string id, string text, CancellationToken token) =>

@@ -7,12 +7,43 @@ namespace PixelHelper;
 
 public static class SystemInspector
 {
+    [System.Runtime.InteropServices.DllImport("secur32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto, SetLastError = true)]
+    private static extern int GetUserNameEx(int nameFormat, System.Text.StringBuilder userName, ref uint userNameSize);
+
+    public static string GetUserFullName()
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder(260);
+            uint size = (uint)sb.Capacity;
+            if (GetUserNameEx(3, sb, ref size) != 0 && sb.Length > 0)
+            {
+                string full = sb.ToString().Trim();
+                if (!string.IsNullOrEmpty(full)) return full;
+            }
+        }
+        catch { }
+
+        try
+        {
+            using var searcher = new ManagementObjectSearcher($"SELECT FullName FROM Win32_UserAccount WHERE Name = '{Environment.UserName}'");
+            foreach (ManagementObject user in searcher.Get())
+            {
+                string? fn = user["FullName"]?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(fn)) return fn;
+            }
+        }
+        catch { }
+
+        return Environment.UserName;
+    }
+
     public static MachineInfo Machine()
     {
         string ip = "";
         try { ip = Dns.GetHostAddresses(Environment.MachineName).FirstOrDefault(x => x.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(x))?.ToString() ?? ""; }
         catch (SocketException) { }
-        return new(Environment.MachineName, Environment.UserName, Environment.UserDomainName, ip, Environment.OSVersion.VersionString);
+        return new(Environment.MachineName, Environment.UserName, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName());
     }
     public static InventorySnapshot Collect()
     {

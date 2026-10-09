@@ -77,7 +77,9 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         var c = await Agent();
         if (Security.Canonical(info.MachineName) != c.MachineName || info.UserName.Length is < 1 or > 100 || info.DomainName.Length > 100 || info.OsVersion.Length > 300 || info.IpAddress.Length > 100)
             throw new HubException("Неверная регистрация");
-        c.CurrentUser = Security.Login(info.UserName); c.DomainName = info.DomainName; c.IpAddress = info.IpAddress;
+        c.CurrentUser = Security.Login(info.UserName);
+        c.CurrentUserFullName = !string.IsNullOrWhiteSpace(info.UserFullName) ? info.UserFullName.Trim() : "";
+        c.DomainName = info.DomainName; c.IpAddress = info.IpAddress;
         c.OsVersion = info.OsVersion; c.LastSeen = DateTime.UtcNow;
 
         var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
@@ -173,7 +175,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         => await CreateTicketAt(title, description, null, "");
     public async Task<List<Branch>> GetBranches()
     { await Agent(); return await db.Branches.AsNoTracking().Where(b => b.IsActive).OrderBy(b => b.Name).ToListAsync(); }
-    public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room)
+    public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room, string? userFullName = null)
     {
         var c = await Agent();
         if (string.IsNullOrWhiteSpace(c.CurrentUser) || string.IsNullOrWhiteSpace(description) || description.Length > 8000 || title.Length > 160)
@@ -182,9 +184,14 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         try
         {
             string owner = Security.TicketUser(c.CurrentUser);
+            string fullName = !string.IsNullOrWhiteSpace(userFullName)
+                ? userFullName.Trim()
+                : (!string.IsNullOrWhiteSpace(c.CurrentUserFullName)
+                    ? c.CurrentUserFullName
+                    : (await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Username.ToLower() == owner.ToLower()))?.FullName ?? "");
             var branch = await Branches.ValidateTicketAsync(db, branchId, room);
             int id = await glpi.CreateTicketAsync(owner, c.MachineName, Branches.Description(description, branch, room), Context.ConnectionAborted);
-            var ticket = new TicketRecord { GlpiId = id, Username = owner, MachineName = c.MachineName, Title = title, Description = description, BranchId = branch?.Id, BranchName = branch?.Name ?? "", Room = room.Trim() };
+            var ticket = new TicketRecord { GlpiId = id, Username = owner, UserFullName = fullName, MachineName = c.MachineName, Title = title, Description = description, BranchId = branch?.Id, BranchName = branch?.Name ?? "", Room = room.Trim() };
             db.Tickets.Add(ticket);
             if (settings.Telegram().Enabled) db.TelegramDeliveries.Add(new TelegramDelivery { Ticket = ticket });
             await db.SaveChangesAsync();

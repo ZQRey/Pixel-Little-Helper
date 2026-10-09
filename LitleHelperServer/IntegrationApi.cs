@@ -101,28 +101,53 @@ public static class IntegrationApi
             using var reader = new StreamReader(request.Body);
             string bodyText = await reader.ReadToEndAsync();
             var jsonDoc = System.Text.Json.JsonDocument.Parse(bodyText);
-            var list = new List<CartridgeReadyRequest>();
+            var rawItems = new List<System.Text.Json.JsonElement>();
+
             if (jsonDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
             {
-                foreach (var el in jsonDoc.RootElement.EnumerateArray())
-                    list.Add(System.Text.Json.JsonSerializer.Deserialize<CartridgeReadyRequest>(el.GetRawText(), new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!);
+                foreach (var el in jsonDoc.RootElement.EnumerateArray()) rawItems.Add(el);
             }
             else if (jsonDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
             {
-                list.Add(System.Text.Json.JsonSerializer.Deserialize<CartridgeReadyRequest>(bodyText, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!);
+                if (jsonDoc.RootElement.TryGetProperty("items", out var itemsEl) && itemsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (var el in itemsEl.EnumerateArray()) rawItems.Add(el);
+                }
+                else
+                {
+                    rawItems.Add(jsonDoc.RootElement);
+                }
             }
 
             int count = 0;
-            foreach (var item in list)
+            foreach (var el in rawItems)
             {
-                if (string.IsNullOrWhiteSpace(item.Username)) continue;
-                var notice = new CartridgeReadyNotice(item.Username, item.Marker ?? "", item.Model ?? "", item.Cabinet ?? "", item.ItOffice ?? "Кабинет IT", item.Message ?? "");
-                string cleanUser = Security.TicketUser(item.Username).ToLowerInvariant();
+                string user = "";
+                if (el.TryGetProperty("targetUser", out var tu)) user = tu.GetString() ?? "";
+                else if (el.TryGetProperty("target_user", out var tu2)) user = tu2.GetString() ?? "";
+                else if (el.TryGetProperty("username", out var u)) user = u.GetString() ?? "";
+                else if (el.TryGetProperty("login", out var lg)) user = lg.GetString() ?? "";
+
+                if (string.IsNullOrWhiteSpace(user)) continue;
+
+                string marker = el.TryGetProperty("marker", out var m) ? (m.GetString() ?? "") : "";
+                string model = el.TryGetProperty("model", out var mdl) ? (mdl.GetString() ?? "") : "";
+                string cabinet = el.TryGetProperty("cabinet", out var c) ? (c.GetString() ?? "") : "";
+                string office = "";
+                if (el.TryGetProperty("office", out var ofc)) office = ofc.GetString() ?? "";
+                else if (el.TryGetProperty("itOffice", out var ofc2)) office = ofc2.GetString() ?? "";
+                else if (el.TryGetProperty("it_office", out var ofc3)) office = ofc3.GetString() ?? "";
+                if (string.IsNullOrWhiteSpace(office)) office = "Кабинет IT";
+
+                string message = el.TryGetProperty("message", out var msg) ? (msg.GetString() ?? "") : "";
+
+                var notice = new CartridgeReadyNotice(user, marker, model, cabinet, office, message);
+                string cleanUser = Security.TicketUser(user).ToLowerInvariant();
                 await hub.Clients.Group("AgentUser:" + cleanUser).SendAsync("CartridgeReadyNotice", notice);
                 count++;
             }
             return Results.Ok(new { success = true, notified = count });
-        });
+        }).AllowAnonymous();
 
         app.MapGet("/api/settings/emergency", (IntegrationSettings settings) => Results.Ok(settings.Emergency())).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/emergency", (EmergencyOptions update, IntegrationSettings settings) =>
@@ -137,6 +162,46 @@ public static class IntegrationApi
             await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
             _ = telegram.SendEmergencyAlertAsync("ТЕСТ: КОД ЖЁЛТЫЙ (Проверка оповещения)", "CODE_YELLOW", "Кабинет IT", null, user.Identity?.Name ?? "Admin", "Тестовая проверка системы экстренного оповещения", null);
             return Results.Ok(new { success = true, message = "Тестовое оповещение отправлено на все подключённые компьютеры и в Telegram" });
+        }).RequireAuthorization("settings.manage");
+
+        app.MapPost("/api/settings/emergency/cancel", async (Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, IntegrationSettings settings, TelegramClient telegram, System.Security.Claims.ClaimsPrincipal user, IHttpClientFactory httpFactory) =>
+        {
+            await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertCanceled");
+            await hub.Clients.Group("PanelStaff").SendAsync("EmergencyAlertCanceled");
+
+            var em = settings.Emergency();
+            var tg = settings.Telegram();
+            if (tg.Enabled && em.TelegramAlertsEnabled)
+            {
+                string targetChat = !string.IsNullOrWhiteSpace(em.TelegramChatId) ? em.TelegramChatId.Trim() : tg.ChatId;
+                int targetThread = em.TelegramThreadId > 0 ? em.TelegramThreadId : tg.ThreadId;
+                if (!string.IsNullOrWhiteSpace(targetChat))
+                {
+                    string operatorName = user.Identity?.Name ?? "Администратор";
+                    _ = telegram.SendToAsync(targetChat, $"🟢 ОТБОЙ ТРЕВОГИ: Экстренное оповещение сброшено администратором ({operatorName}). Сигналы на всех ПК отключены.", null, CancellationToken.None, targetThread);
+                }
+            }
+
+            if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl))
+            {
+                try
+                {
+                    var http = httpFactory.CreateClient();
+                    http.Timeout = TimeSpan.FromSeconds(3);
+                    var endpoint = em.ServerUrl.TrimEnd('/') + "/api/broadcast/cancel";
+                    using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                    if (!string.IsNullOrWhiteSpace(em.ApiKey))
+                    {
+                        req.Headers.Add("X-Client-Key", em.ApiKey);
+                        req.Headers.Add("X-Auth-Token", em.ApiKey);
+                    }
+                    req.Content = JsonContent.Create(new { client_id = "little-helper-bridge", auth_token = em.ApiKey });
+                    await http.SendAsync(req, CancellationToken.None);
+                }
+                catch { }
+            }
+
+            return Results.Ok(new { success = true, message = "Оповещение успешно сброшено (Отбой тревоги отправлен на все ПК)" });
         }).RequireAuthorization("settings.manage");
 
         app.MapPost("/api/integrations/emergency/alert", async (EmergencyAlertRequest req, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, IntegrationSettings settings, HelperDb db, TelegramClient telegram, System.Security.Claims.ClaimsPrincipal user, IHttpClientFactory httpFactory) =>

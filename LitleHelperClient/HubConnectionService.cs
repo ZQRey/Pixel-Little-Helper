@@ -22,6 +22,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action<CartridgeReadyNotice>? CartridgeReadyReceived;
     public event Action<TicketReplyNotice>? TicketReplyReceived;
     public event Action<EmergencyAlertNotice>? EmergencyAlertReceived;
+    public event Action? EmergencyAlertCanceled;
     public event Action<string>? RoomUpdated;
     public HubConnectionService(Settings settings)
     {
@@ -58,6 +59,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On<CartridgeReadyNotice>("CartridgeReadyNotice", notice => CartridgeReadyReceived?.Invoke(notice));
         created.On<TicketReplyNotice>("TicketReplyNotice", notice => TicketReplyReceived?.Invoke(notice));
         created.On<EmergencyAlertNotice>("EmergencyAlertNotice", notice => EmergencyAlertReceived?.Invoke(notice));
+        created.On("EmergencyAlertCanceled", () => EmergencyAlertCanceled?.Invoke());
         created.On<string>("ClientRoomUpdated", room => RoomUpdated?.Invoke(room));
         created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
         created.Closed += _ => { if (ReferenceEquals(connection,created)) Offline(); return Task.CompletedTask; };
@@ -175,14 +177,16 @@ public sealed class HubConnectionService : IAsyncDisposable
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
         return await connection.InvokeAsync<List<TicketBranch>>("GetBranches", token);
     }
-    public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, CancellationToken token)
+    public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, string? userFullName, CancellationToken token)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token,lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, timeout.Token);
+        return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, userFullName, timeout.Token);
     }
+    public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, CancellationToken token) =>
+        await CreateTicketAtAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), token);
     public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room) =>
-        await CreateTicketAtAsync(title, description, branchId, room, CancellationToken.None);
+        await CreateTicketAtAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), CancellationToken.None);
 
     public async Task TriggerEmergencyAlertAsync(string code, string cabinet, string? notes, string? imageBase64 = null, string? department = null, CancellationToken token = default)
     {

@@ -312,9 +312,10 @@ function renderEmergencySettings(data){
           <small style="color:#15803d">Экстренные сигналы будут моментально приходить дежурным инженерам и руководству в Telegram со звуковым уведомлением и деталями (филиал, кабинет, инициатор, время).</small>
         </div>
 
-        <div class="form-actions">
+        <div class="form-actions" style="display:flex;flex-wrap:wrap;gap:0.5rem">
           <button class="primary" type="submit">Сохранить настройки</button>
           <button id="emergency-test-btn" type="button">Тестовое оповещение на все ПК</button>
+          <button id="emergency-cancel-btn" type="button" class="danger" style="background:#059669;border-color:#047857;color:#fff;font-weight:600">🟢 Сбросить экстренное оповещение (Отбой тревоги)</button>
         </div>
         <p id="emergency-result" role="status"></p>
       </form>
@@ -341,7 +342,10 @@ function renderEmergencySettings(data){
         <label>Примечание / Инструкция
           <textarea id="manual-alert-notes" rows="2" placeholder="Дополнительная информация (будет выведена на экранах)"></textarea>
         </label>
-        <button id="manual-alert-trigger" class="danger" style="margin-top:0.75rem;font-weight:bold">Запустить экстренное оповещение</button>
+        <div style="display:flex;gap:0.75rem;margin-top:0.75rem">
+          <button id="manual-alert-trigger" class="danger" style="font-weight:bold">Запустить экстренное оповещение</button>
+          <button id="manual-alert-cancel" type="button" class="danger" style="background:#059669;border-color:#047857;color:#fff;font-weight:bold">🟢 Отбой тревоги</button>
+        </div>
       </div>
     </div>`;
 
@@ -391,6 +395,17 @@ function renderEmergencySettings(data){
         result.textContent=r.message;result.className='';toast(r.message);
       }catch(err){result.textContent=err.message;result.className='error';}
     });
+
+    const triggerCancel=async()=>{
+      if(!confirm('Вы уверены, что хотите отправить сигнал ОТБОЙ ТРЕВОГИ и сбросить активные экстренные оповещения на всех ПК?')) return;
+      try{
+        const r=await api('/settings/emergency/cancel','POST',{});
+        result.textContent=r.message;result.className='';toast(r.message);
+      }catch(err){result.textContent=err.message;result.className='error';toast(err.message,true);}
+    };
+
+    $('#emergency-cancel-btn').addEventListener('click',triggerCancel);
+    $('#manual-alert-cancel').addEventListener('click',triggerCancel);
 
     $('#manual-alert-trigger').addEventListener('click',async()=>{
       const code=$('#manual-alert-code').value;

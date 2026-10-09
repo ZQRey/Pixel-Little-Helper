@@ -42,6 +42,7 @@ public sealed class PetWindow : Window
     private bool refreshing;
     private TicketWindow? ticket;
     private SuperAdminWindow? superWindow;
+    private EmergencyAlertWindow? activeAlertWindow;
     private bool superAvailable, announcementVisible;
     private MessengerClient? messenger;
     private MessengerWindow? messengerWindow;
@@ -295,6 +296,7 @@ public sealed class PetWindow : Window
                 hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
                 hub.TicketReplyReceived += notice => Dispatcher.InvokeAsync(() => HandleTicketReply(notice));
                 hub.EmergencyAlertReceived += notice => Dispatcher.InvokeAsync(() => HandleEmergencyAlert(notice));
+                hub.EmergencyAlertCanceled += () => Dispatcher.InvokeAsync(HandleEmergencyAlertCanceled);
                 hub.RoomUpdated += room => Dispatcher.InvokeAsync(() => HandleRoomUpdated(room));
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -848,6 +850,7 @@ public sealed class PetWindow : Window
     private void HandleEmergencyAlert(EmergencyAlertNotice notice)
     {
         Wake();
+        try { activeAlertWindow?.Close(); } catch { }
         var window = new EmergencyAlertWindow(notice, accepted =>
         {
             if (notice.CallId.HasValue && hub != null)
@@ -855,7 +858,22 @@ public sealed class PetWindow : Window
                 _ = hub.AcknowledgeSpecialistCallAsync(notice.CallId.Value, accepted);
             }
         });
-        window.ShowDialog();
+        activeAlertWindow = window;
+        window.Closed += (_, _) => { if (ReferenceEquals(activeAlertWindow, window)) activeAlertWindow = null; };
+        window.Show();
+        window.Activate();
+    }
+
+    private void HandleEmergencyAlertCanceled()
+    {
+        Wake();
+        if (activeAlertWindow != null)
+        {
+            try { activeAlertWindow.Close(); } catch { }
+            activeAlertWindow = null;
+            ShowNotice("🟢 Отбой тревоги: оповещение сброшено");
+            React(PetState.Joy, 3);
+        }
     }
 }
 

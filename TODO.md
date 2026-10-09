@@ -134,6 +134,47 @@
 
 ---
 
+## 🚀 Новый спринт: Заявки (ФИО и филиалы), сброс тревоги и интеграция картриджей IT Hub
+
+### 1. [x] Отправка заявок с полным именем (ФИО) пользователя вместо логина
+- [x] **Определение ФИО в Windows:** В клиенте определять полное имя пользователя через `GetUserNameEx(NameDisplay)` и WMI `Win32_UserAccount.FullName` (локальные и доменные пользователи) в `SystemInspector.GetUserFullName()`.
+- [x] **Передача на сервер:** Передавать `userFullName` при регистрации `RegisterComputer` (`MachineInfo`) и при создании заявки `CreateTicketAt` (`TicketWindow`).
+- [x] **Модель и БД:** Добавлено поле `UserFullName` в `TicketRecord`, `CurrentUserFullName` в `Computer`, выполнена миграция схемы БД в `TelegramTicketManagement.EnsureSchemaAsync`.
+- [x] **Формат в Telegram:** В `TelegramNotifications.Message` формируется: `Пользователь: {ticket.UserFullName} ({ticket.Username})` (или ФИО, если логин совпадает).
+
+---
+
+### 2. [x] Свободный выбор филиала в клиенте для SuperAdmin и Администраторов
+- [x] **Исправление селектора в `TicketWindow`:** Устранен конфликт z-order с хуком `WM_WINDOWPOSCHANGING` (`SetWindowPos HWND_TOPMOST`), выпадающий список ComboBox (`PopupRoot`) стабильно раскрывается поверх окна и выбирается мышью.
+- [x] **Свободный выбор филиала:** Для пользователей с глобальным доступом (`SuperAdmin`, `Admin`) обеспечено свободное переключение между всеми филиалами (Больница, Роддом, Поликлиника и др.).
+- [x] **Сохранение выбора:** Автоматически запоминается выбранный филиал в `settings.TicketBranchId`.
+- [x] **Серверная регистрация:** Исключена перезапись выбранного администратором филиала дефолтным филиалом ПК в `HelperHub.CreateTicketAt`.
+
+---
+
+### 3. [x] Кнопка сброса экстренного оповещения (Отбой тревоги)
+- [x] **Серверный эндпоинт отбоя тревоги (`POST /api/settings/emergency/cancel`):**
+  - Рассылка SignalR-команды `EmergencyAlertCanceled` группе `AllAgents` и `PanelStaff`.
+  - Оповещение об отбое в Telegram-чат дежурных инженеров: `🟢 ОТБОЙ ТРЕВОГИ: Экстренное оповещение сброшено администратором...`.
+  - Отправка команды отбоя на внешний сервер AudioRONGTA (ROXTON SOS) (`POST /api/broadcast/cancel`).
+- [x] **Клиентская часть:** Обработка `EmergencyAlertCanceled` в `PetWindow` и мгновенное закрытие активного окна `EmergencyAlertWindow` с выводом статуса отбоя тревоги.
+- [x] **Веб-панель:** Добавлены кнопки «🟢 Сбросить экстренное оповещение (Отбой тревоги)» в форме настроек и в блоке ручного оповещения в `app.js`.
+
+---
+
+### 4. [x] Исправление интеграции картриджей на IT Hub («Endpoint has no authorization policy»)
+- [x] **Регистрация в `endpoints.json` на сервере `ithub`:** Добавлены политики доступа в `/home/zqrey/REP_ZAP_INV/SHARED/policies/endpoints.json` для:
+  - `CARTRIDGE/app/routers/notifications_router.py:notify_helper_ready_cartridges:POST`
+  - `CARTRIDGE/app/routers/notifications_router.py:get_helper_status:GET`
+  - `CARTRIDGE/app/routers/notifications_router.py:send_helper_test:POST`
+- [x] **Совместимость формата на сервере Помощника (`/api/integrations/cartridges/ready`):**
+  - Поддержка структуры `{"items": [...]}` наряду с плоским массивом `[...]`.
+  - Маппинг полей `targetUser` / `target_user` / `login` в `Username`, и `office` / `it_office` в `ItOffice`.
+  - Явный `.AllowAnonymous()` на эндпоинте вебхука картриджей (с авторизацией по ключу `X-Api-Key`).
+- [x] **Перезапуск и тестирование:** Контейнер `it_unified_portal` на `ithub` перезапущен, маршруты авторизованы.
+
+---
+
 ## ✅ Ранее выполненные задачи
 
 ### Серверная часть и веб-панель

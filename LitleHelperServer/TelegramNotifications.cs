@@ -103,7 +103,12 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
     }
     public static string Message(TicketRecord ticket)
     {
-        string text = $"Новая заявка GLPI #{ticket.GlpiId}\nПользователь: {ticket.Username}\nКомпьютер: {ticket.MachineName}\nФилиал: {(ticket.BranchName.Length > 0 ? ticket.BranchName : "Не указан")}\nКабинет: {(ticket.Room.Length > 0 ? ticket.Room : "Не указан")}\n{ticket.Title}\n\n{ticket.Description}";
+        string userDisplay = string.IsNullOrWhiteSpace(ticket.UserFullName)
+            ? ticket.Username
+            : (string.IsNullOrWhiteSpace(ticket.Username) || ticket.Username.Equals(ticket.UserFullName, StringComparison.OrdinalIgnoreCase)
+                ? ticket.UserFullName
+                : $"{ticket.UserFullName} ({ticket.Username})");
+        string text = $"Новая заявка GLPI #{ticket.GlpiId}\nПользователь: {userDisplay}\nКомпьютер: {ticket.MachineName}\nФилиал: {(ticket.BranchName.Length > 0 ? ticket.BranchName : "Не указан")}\nКабинет: {(ticket.Room.Length > 0 ? ticket.Room : "Не указан")}\n{ticket.Title}\n\n{ticket.Description}";
         // Leave room below Telegram's 4096-character limit; preserve UTF-16 pairs.
         if (text.Length > 3800) { int end = char.IsHighSurrogate(text[3799]) ? 3799 : 3800; text = text[..end] + "\n… Полный текст в веб-панели."; }
         return text;

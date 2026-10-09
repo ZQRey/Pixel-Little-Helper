@@ -190,6 +190,8 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
         await ChatBroadcasts.Column(db,"TelegramDeliveries","GroupMessageId","BIGINT NOT NULL DEFAULT 0");
         await ChatBroadcasts.Column(db,"TelegramDeliveries","GroupChatId","TEXT NOT NULL DEFAULT ''");
         await ChatBroadcasts.Column(db,"TelegramDeliveries","ButtonState","TEXT NOT NULL DEFAULT ''");
+        await ChatBroadcasts.Column(db,"Tickets","UserFullName","TEXT NOT NULL DEFAULT ''");
+        await ChatBroadcasts.Column(db,"Computers","CurrentUserFullName","TEXT NOT NULL DEFAULT ''");
     }
 }
 

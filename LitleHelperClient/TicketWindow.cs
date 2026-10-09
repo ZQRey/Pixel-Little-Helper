@@ -203,7 +203,11 @@ internal sealed class TicketWindow : Window
                 if (branch.Items.Count > 0 && selected == null) throw new ArgumentException("Выберите филиал");
                 if (selected != null && string.IsNullOrWhiteSpace(room.Text)) throw new ArgumentException("Укажите кабинет");
                 Submitting?.Invoke();
-                int id = await createTicket("Заявка от " + Environment.UserName, input.Text.Trim(), selected?.Id, room.Text.Trim(), lifetime.Token);
+                string fullName = SystemInspector.GetUserFullName();
+                string title = !string.IsNullOrWhiteSpace(fullName) && !fullName.Equals(Environment.UserName, StringComparison.OrdinalIgnoreCase)
+                    ? $"Заявка от {fullName} ({Environment.UserName})"
+                    : $"Заявка от {Environment.UserName}";
+                int id = await createTicket(title, input.Text.Trim(), selected?.Id, room.Text.Trim(), lifetime.Token);
                 if (lifetime.IsCancellationRequested) return;
                 settings.TicketBranchId = selected?.Id; settings.TicketRoom = room.Text.Trim();
                 try { settings.Save(); } catch (Exception ex) { Settings.Log(ex); }
@@ -228,22 +232,37 @@ internal sealed class TicketWindow : Window
             var handle = new WindowInteropHelper(this).Handle;
             NativeMethods.ToolWindow(handle, false);
             NativeMethods.SetWindowPos(handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE);
-            source = HwndSource.FromHwnd(handle);
-            source?.AddHook(Hook);
         };
         Loaded += async (_, _) =>
         {
             Topmost = true;
             Activate();
             input.Focus();
-            NativeMethods.SetWindowPos(new WindowInteropHelper(this).Handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE);
             status.Foreground = Brush("#64748B");
             status.Text = "Загрузка филиалов…";
             try
             {
-                branch.ItemsSource = await getBranches(lifetime.Token);
+                var list = await getBranches(lifetime.Token);
                 if (lifetime.IsCancellationRequested) return;
-                branch.SelectedValue = settings.TicketBranchId;
+                branch.ItemsSource = list;
+                if (settings.TicketBranchId.HasValue && list.Any(b => b.Id == settings.TicketBranchId.Value))
+                {
+                    branch.SelectedValue = settings.TicketBranchId.Value;
+                }
+                else if (list.Count > 0)
+                {
+                    string machine = Environment.MachineName.Trim().ToUpperInvariant();
+                    var matched = list.FirstOrDefault(b =>
+                    {
+                        var name = b.Name.ToUpperInvariant();
+                        if (machine.StartsWith("N") && (name.Contains("ПОЛИКЛИНИК") || name.Contains("ДЕТСК"))) return true;
+                        if (machine.StartsWith("R") && name.Contains("РОДДОМ")) return true;
+                        if (machine.StartsWith("D") && (name.Contains("ДЕТСК") || name.Contains("БОЛЬНИЦ"))) return true;
+                        if (machine.StartsWith("B") && name.Contains("БОЛЬНИЦ")) return true;
+                        return false;
+                    }) ?? list[0];
+                    branch.SelectedItem = matched;
+                }
                 status.Text = ""; send.IsEnabled = true;
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
@@ -254,21 +273,7 @@ internal sealed class TicketWindow : Window
                 status.Text = "Не удалось загрузить филиалы. " + ex.Message;
             }
         };
-        Closed += (_, _) => { lifetime.Cancel(); source?.RemoveHook(Hook); lifetime.Dispose(); };
+        Closed += (_, _) => { lifetime.Cancel(); lifetime.Dispose(); };
         KeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Escape) Close(); };
-    }
-
-    private nint Hook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
-    {
-        if (message == NativeMethods.WM_WINDOWPOSCHANGING)
-        {
-            var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
-            if ((pos.Flags & NativeMethods.SWP_NOZORDER) == 0)
-            {
-                pos.HwndInsertAfter = new nint(-1); // HWND_TOPMOST
-                Marshal.StructureToPtr(pos, lParam, false);
-            }
-        }
-        return 0;
     }
 }

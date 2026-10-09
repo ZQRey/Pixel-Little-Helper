@@ -14,6 +14,7 @@ public class Computer
     public string MachineName { get; set; } = "";
     public string DomainName { get; set; } = "";
     public string CurrentUser { get; set; } = "";
+    public string CurrentUserFullName { get; set; } = "";
     public string IpAddress { get; set; } = "";
     public string OsVersion { get; set; } = "";
     public bool IsOnline { get; set; }
@@ -80,6 +81,7 @@ public class TicketRecord
     public int Id { get; set; }
     public int GlpiId { get; set; }
     public string Username { get; set; } = "";
+    public string UserFullName { get; set; } = "";
     public string MachineName { get; set; } = "";
     public string Title { get; set; } = "";
     public string Description { get; set; } = "";
@@ -139,7 +141,7 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
         b.Entity<TicketRecord>().HasIndex(x => x.Username);
     }
 }
-public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion);
+public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "");
 public record CommandEnvelope(string TaskId, string Type, string Payload);
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
@@ -147,7 +149,7 @@ public record UserRequest(string Username, string FullName, string Role, bool Is
 public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
 public record AgentRegistrationRequest(string MachineName, string ClientKey);
-public record TicketRequest(string Title, string Description, int? BranchId = null, string Room = "");
+public record TicketRequest(string Title, string Description, int? BranchId = null, string Room = "", string UserFullName = "");
 public record CartridgeReadyNotice(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
 public record TicketReplyNotice(int GlpiId, string Title, string Author, string Text);
 public record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department);

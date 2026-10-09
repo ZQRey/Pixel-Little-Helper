@@ -151,10 +151,7 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
         finally { ticketGate.Semaphore.Release(); }
     }
 
-    public Task TriggerEmergencyAlert(string code, string cabinet, string? notes) =>
-        TriggerEmergencyAlert(code, cabinet, notes, null, null);
-
-    public async Task TriggerEmergencyAlert(string code, string cabinet, string? notes, string? imageBase64, string? department)
+    public async Task TriggerEmergencyAlert(string code, string cabinet, string? notes = null, string? imageBase64 = null, string? department = null)
     {
         var c = await Agent();
         var em = settings.Emergency();

@@ -11,7 +11,6 @@ public sealed record TicketBranch(int Id, string Name, bool IsActive = true);
 internal sealed class TicketWindow : Window
 {
     private readonly CancellationTokenSource lifetime;
-    private HwndSource? source;
     internal event Action<int>? TicketCreated;
     internal event Action? Submitting;
     internal event Action? SubmissionFailed;

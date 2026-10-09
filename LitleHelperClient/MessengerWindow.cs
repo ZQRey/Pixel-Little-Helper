@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -1678,12 +1679,14 @@ internal sealed class MessengerWindow : Window
                     var copyBtn = ModernButton("Копировать текст", (_, _) =>
                     {
                         try { Clipboard.SetText(content); MessageBox.Show("Текст скопирован в буфер обмена", "Успешно"); } catch { }
-                    }, margin: new Thickness(0, 0, 8, 0));
+                    });
+                    copyBtn.Margin = new Thickness(0, 0, 8, 0);
 
                     var openExternalBtn = ModernButton("Открыть в блокноте", (_, _) =>
                     {
                         try { Process.Start(new ProcessStartInfo { FileName = textPath, UseShellExecute = true }); } catch { }
-                    }, margin: new Thickness(0, 0, 8, 0));
+                    });
+                    openExternalBtn.Margin = new Thickness(0, 0, 8, 0);
 
                     var saveBtn = ModernButton("Сохранить как…", async (_, _) =>
                     {

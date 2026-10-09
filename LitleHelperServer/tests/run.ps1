@@ -11,6 +11,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests build failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Telegram management checks failed' }
 & $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') --messenger
 if ($LASTEXITCODE -ne 0) { throw 'Messenger checks failed' }
+& $Dotnet (Join-Path $PSScriptRoot 'bin\Release\net8.0\IntegrationTests.dll') --emergency
+if ($LASTEXITCODE -ne 0) { throw 'Emergency checks failed' }
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $serverPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $probe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $probe.Start(); $mockPort = $probe.LocalEndpoint.Port; $probe.Stop()
 $serverUrl = "http://127.0.0.1:$serverPort"

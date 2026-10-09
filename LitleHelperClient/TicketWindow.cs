@@ -24,6 +24,7 @@ internal sealed class TicketWindow : Window
         Width = 430; Height = 460;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = true; Background = Brushes.Transparent; ShowInTaskbar = false;
+        Topmost = true;
 
         var card = new Border
         {
@@ -226,11 +227,16 @@ internal sealed class TicketWindow : Window
         {
             var handle = new WindowInteropHelper(this).Handle;
             NativeMethods.ToolWindow(handle, false);
-            source = HwndSource.FromHwnd(handle); source.AddHook(Hook);
+            NativeMethods.SetWindowPos(handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE);
+            source = HwndSource.FromHwnd(handle);
+            source?.AddHook(Hook);
         };
         Loaded += async (_, _) =>
         {
-            input.Focus(); NativeMethods.Bottom(new WindowInteropHelper(this).Handle);
+            Topmost = true;
+            Activate();
+            input.Focus();
+            NativeMethods.SetWindowPos(new WindowInteropHelper(this).Handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE);
             status.Foreground = Brush("#64748B");
             status.Text = "Загрузка филиалов…";
             try
@@ -259,7 +265,7 @@ internal sealed class TicketWindow : Window
             var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
             if ((pos.Flags & NativeMethods.SWP_NOZORDER) == 0)
             {
-                pos.HwndInsertAfter = NativeMethods.DesktopAnchor(hwnd);
+                pos.HwndInsertAfter = new nint(-1); // HWND_TOPMOST
                 Marshal.StructureToPtr(pos, lParam, false);
             }
         }

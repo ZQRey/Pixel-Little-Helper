@@ -355,6 +355,20 @@ public static class Loc
             [AppLanguage.Kazakh] = "NCALayer қосылмады. Қолдау қызметіне #{0} өтінімі автоматты түрде жасалды.",
             [AppLanguage.English] = "NCALayer is not running. Support ticket #{0} created automatically.",
             [AppLanguage.Chinese] = "NCALayer 未运行。已自动创建支持工单 #{0}。"
+        },
+        ["NcaLayerNotFound"] = new()
+        {
+            [AppLanguage.Russian] = "Приложение NCALayer не найдено в системе.",
+            [AppLanguage.Kazakh] = "NCALayer қосымшасы жүйеде табылмады.",
+            [AppLanguage.English] = "NCALayer application was not found on the system.",
+            [AppLanguage.Chinese] = "系统中未找到 NCALayer 应用程序。"
+        },
+        ["SessionDisconnectedUserLoggedOff"] = new()
+        {
+            [AppLanguage.Russian] = "Завершена неактивная сессия пользователя {0} для освобождения ресурсов.",
+            [AppLanguage.Kazakh] = "Ресурстарды босату үшін {0} пайдаланушысының белсенді емес сессиясы жабылды.",
+            [AppLanguage.English] = "Inactive session of user {0} was logged off to free up resources.",
+            [AppLanguage.Chinese] = "已注销用户 {0} 的非活动会话以释放系统资源。"
         }
     };
 }

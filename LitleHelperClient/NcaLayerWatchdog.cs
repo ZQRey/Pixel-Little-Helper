@@ -17,7 +17,7 @@ public sealed class NcaLayerWatchdog
 
     public void StartDelayed(TimeSpan? delay = null)
     {
-        var runDelay = delay ?? TimeSpan.FromMinutes(2.5);
+        var runDelay = delay ?? TimeSpan.FromMinutes(7);
         _ = Task.Run(async () =>
         {
             try
@@ -45,6 +45,7 @@ public sealed class NcaLayerWatchdog
             string? exePath = FindNcaLayerExecutable();
             if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
             {
+                showNotice(Loc.T("NcaLayerNotFound"));
                 await ReportNcaLayerFailureAsync("Исполняемый файл ncalayer.exe не найден в системе по стандартным путям.");
                 return;
             }
@@ -57,7 +58,7 @@ public sealed class NcaLayerWatchdog
                     UseShellExecute = true,
                     WorkingDirectory = Path.GetDirectoryName(exePath) ?? ""
                 };
-                var proc = Process.Start(psi);
+                Process.Start(psi);
                 await Task.Delay(TimeSpan.FromSeconds(5));
 
                 if (Process.GetProcessesByName("ncalayer").Length == 0)
@@ -80,7 +81,55 @@ public sealed class NcaLayerWatchdog
         }
     }
 
-    private static string? FindNcaLayerExecutable()
+    public async Task RestartNcaLayerAsync()
+    {
+        try
+        {
+            var procs = Process.GetProcessesByName("ncalayer");
+            foreach (var proc in procs)
+            {
+                try
+                {
+                    proc.Kill();
+                    proc.WaitForExit(3000);
+                }
+                catch { }
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2));
+
+            string? exePath = FindNcaLayerExecutable();
+            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+            {
+                showNotice(Loc.T("NcaLayerNotFound"));
+                return;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(exePath) ?? ""
+            };
+            Process.Start(psi);
+            await Task.Delay(TimeSpan.FromSeconds(5));
+
+            if (Process.GetProcessesByName("ncalayer").Length > 0)
+            {
+                showNotice(Loc.T("NcaLayerSuccess"));
+            }
+            else
+            {
+                await ReportNcaLayerFailureAsync($"Процесс {exePath} был перезапущен, но не обнаружен в списке активных процессов.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }
+
+    public static string? FindNcaLayerExecutable()
     {
         try
         {

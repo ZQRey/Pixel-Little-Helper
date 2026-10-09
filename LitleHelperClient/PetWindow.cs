@@ -135,7 +135,7 @@ public sealed class PetWindow : Window
             {
                 var ncaWatchdog = new NcaLayerWatchdog(hub, msg => Dispatcher.InvokeAsync(() => ShowNotice(msg)));
                 ncaWatchdog.StartDelayed();
-                var sessionWatchdog = new SessionWatchdog();
+                var sessionWatchdog = new SessionWatchdog(ncaWatchdog, msg => Dispatcher.InvokeAsync(() => ShowNotice(msg)));
                 sessionWatchdog.Start();
             }
             if (!diagnostics) React(PetState.Greeting, 3);
@@ -568,7 +568,7 @@ public sealed class PetWindow : Window
     {
         if (hub?.IsOnline != true || !superAvailable) return;
         if (superWindow != null) { superWindow.Activate(); return; }
-        try { superWindow = new SuperAdminWindow(settings); superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); }
+        try { superWindow = new SuperAdminWindow(settings) { Owner = this, Topmost = true }; superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); superWindow.Activate(); }
         catch (Exception ex) { Settings.Log(ex); ShowNotice(ex.Message); }
     }
     private void HideBubbles()
@@ -734,13 +734,16 @@ public sealed class PetWindow : Window
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
                     if (ticket != null) return Task.CompletedTask;
-                    ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Left = Left - 135, Top = Math.Max(SystemParameters.VirtualScreenTop, Top - 410) };
+                    ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Owner = this, Topmost = true, Left = Left - 135, Top = Math.Max(SystemParameters.VirtualScreenTop, Top - 410) };
                     ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
                     ticket.Submitting += () => ChangeState(PetState.Busy);
                     ticket.SubmissionFailed += () => React(PetState.Error, 4);
                     ticket.TicketCreated += _ => React(PetState.Success, 4);
                     ticket.Closed += (_, _) => { ticket = null; Wake(); if (state == PetState.Busy) ChangeState(PetState.Idle); };
-                    ticket.Show(); break;
+                    ticket.Show();
+                    ticket.Activate();
+                    ticket.Focus();
+                    break;
                 case "open_path":
                     var path = Environment.ExpandEnvironmentVariables(action.Target ?? "");
                     if (!Path.IsPathFullyQualified(path) || (!File.Exists(path) && !Directory.Exists(path)))
@@ -784,7 +787,7 @@ public sealed class PetWindow : Window
             ShowNotice("Сервер недоступен для отправки тревоги.");
             return Task.CompletedTask;
         }
-        var dlg = new EmergencyDialogWindow(hub, settings);
+        var dlg = new EmergencyDialogWindow(hub, settings) { Owner = this, Topmost = true };
         dlg.ShowDialog();
         return Task.CompletedTask;
     }

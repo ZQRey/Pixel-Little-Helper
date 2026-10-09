@@ -68,6 +68,7 @@ internal sealed class MessengerWindow : Window
             CornerRadius = new CornerRadius(16)
         });
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Topmost = false;
         Content = root;
         ApplyTheme();
 

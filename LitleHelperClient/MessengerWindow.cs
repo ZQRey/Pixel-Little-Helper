@@ -1223,9 +1223,9 @@ internal sealed class MessengerWindow : Window
             // Attachments
             foreach (var attachment in message.Attachments ?? [])
             {
-                var file = ModernButton((attachment.IsImage ? "▧ " : "📎 ") + attachment.Label, async (_, _) => await OpenFileAsync(attachment), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
+                var file = ModernButton(attachment.Label, async (_, _) => await OpenFileAsync(attachment), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
                 file.Margin = new Thickness(0, 6, 0, 2);
-                file.ToolTip = attachment.IsImage ? "Просмотр изображения и скачивание" : "Скачать файл";
+                file.ToolTip = attachment.IsImage ? "Просмотр изображения и скачивание" : (attachment.IsTextDocument || attachment.IsPdf ? "Предпросмотр документа и скачивание" : "Скачать файл");
                 panel.Children.Add(file);
             }
 
@@ -1637,6 +1637,100 @@ internal sealed class MessengerWindow : Window
     {
         try
         {
+            if (file.IsPdf)
+            {
+                Directory.CreateDirectory(clipboardDirectory);
+                string pdfPath = Path.Combine(clipboardDirectory, Guid.NewGuid().ToString("N") + "_" + file.Name);
+                await client.DownloadAsync(file, pdfPath);
+                try
+                {
+                    Process.Start(new ProcessStartInfo { FileName = pdfPath, UseShellExecute = true });
+                    return;
+                }
+                catch
+                {
+                    await SaveFileAsync(file);
+                    return;
+                }
+            }
+
+            if (file.IsTextDocument)
+            {
+                Directory.CreateDirectory(clipboardDirectory);
+                string textPath = Path.Combine(clipboardDirectory, Guid.NewGuid().ToString("N") + "_" + file.Name);
+                try
+                {
+                    await client.DownloadAsync(file, textPath);
+                    string content = "";
+                    if (new FileInfo(textPath).Length > 2 * 1024 * 1024)
+                    {
+                        content = "Файл слишком большой для встроенного просмотра (> 2 МБ). Скачайте его для полного чтения.";
+                    }
+                    else
+                    {
+                        content = File.ReadAllText(textPath);
+                    }
+
+                    var panel = new DockPanel { Margin = new Thickness(12) };
+                    var buttonsBar = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
+                    DockPanel.SetDock(buttonsBar, Dock.Bottom);
+
+                    var copyBtn = ModernButton("Копировать текст", (_, _) =>
+                    {
+                        try { Clipboard.SetText(content); MessageBox.Show("Текст скопирован в буфер обмена", "Успешно"); } catch { }
+                    }, margin: new Thickness(0, 0, 8, 0));
+
+                    var openExternalBtn = ModernButton("Открыть в блокноте", (_, _) =>
+                    {
+                        try { Process.Start(new ProcessStartInfo { FileName = textPath, UseShellExecute = true }); } catch { }
+                    }, margin: new Thickness(0, 0, 8, 0));
+
+                    var saveBtn = ModernButton("Сохранить как…", async (_, _) =>
+                    {
+                        try { await SaveFileAsync(file); } catch (Exception ex) { MessageBox.Show(ex.Message, "Сохранение"); }
+                    }, primary: true);
+
+                    buttonsBar.Children.Add(copyBtn);
+                    buttonsBar.Children.Add(openExternalBtn);
+                    buttonsBar.Children.Add(saveBtn);
+                    panel.Children.Add(buttonsBar);
+
+                    var textBox = new TextBox
+                    {
+                        Text = content,
+                        IsReadOnly = true,
+                        FontFamily = new FontFamily("Consolas, Courier New, monospace"),
+                        FontSize = 13,
+                        TextWrapping = TextWrapping.Wrap,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        Background = Brushes.White,
+                        Foreground = ink,
+                        Padding = new Thickness(8),
+                        BorderThickness = new Thickness(1),
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225))
+                    };
+                    panel.Children.Add(textBox);
+
+                    new Window
+                    {
+                        Title = "Просмотр документа · " + file.Name,
+                        Content = panel,
+                        Owner = this,
+                        Width = 850,
+                        Height = 620,
+                        WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                        Background = surface,
+                        Foreground = ink
+                    }.ShowDialog();
+                    return;
+                }
+                finally
+                {
+                    if (File.Exists(textPath)) { try { File.Delete(textPath); } catch { } }
+                }
+            }
+
             if (!file.IsImage) { await SaveFileAsync(file); return; }
             Directory.CreateDirectory(clipboardDirectory);
             string path = Path.Combine(clipboardDirectory, Guid.NewGuid().ToString("N"));

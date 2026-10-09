@@ -21,7 +21,19 @@ public record ChatContact(int Id, string FullName, string Username, bool IsActiv
 public record ChatAttachment(string Id, string Name, long Size)
 {
     public bool IsImage => new[] { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" }.Contains(Path.GetExtension(Name).ToLowerInvariant());
-    public string Label => Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
+    public bool IsTextDocument => new[] { ".txt", ".log", ".json", ".xml", ".csv", ".md", ".cs", ".sql", ".ini", ".cfg", ".yaml", ".yml" }.Contains(Path.GetExtension(Name).ToLowerInvariant());
+    public bool IsPdf => Path.GetExtension(Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+    public string Icon => Path.GetExtension(Name).ToLowerInvariant() switch
+    {
+        ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" => "▧ ",
+        ".pdf" => "📄 ",
+        ".doc" or ".docx" or ".rtf" or ".odt" => "📝 ",
+        ".xls" or ".xlsx" or ".csv" => "📊 ",
+        ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => "📦 ",
+        ".txt" or ".log" or ".json" or ".xml" or ".md" => "📑 ",
+        _ => "📎 "
+    };
+    public string Label => Icon + Name + " · " + (Size >= 1024 * 1024 ? (Size / 1048576d).ToString("0.0") + " МБ" : (Size / 1024d).ToString("0.0") + " КБ");
 }
 public record ChatEntry(long Id, int SenderId, int RecipientId, string Body, string ClientId, DateTime SentAt, DateTime? ReadAt, string? SenderName = null, List<ChatAttachment>? Attachments = null, bool IsUrgent = false, string? BroadcastId = null, DateTime? AcknowledgedAt = null, bool IsSystem = false, string? Command = null);
 internal record ChatMember(int Id, string FullName, string Username, bool IsActive, bool IsOnline = false, DateTime? SuspendedUntil = null, bool Pinned = false, bool Favourite = false, bool Muted = false, bool IsAdmin = false, bool IsOwner = false)

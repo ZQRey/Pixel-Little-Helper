@@ -11,6 +11,7 @@ public static class ChatCommands
             string verb=body[..end].ToLowerInvariant();
             if(verb=="/срочно")urgent=true;
             else if(verb=="/танец")command="dance";
+            else if(verb=="/pet"||verb=="/погладить"||verb=="/питомец")command="pet";
             else throw new ArgumentException("Неизвестная команда. Откройте помощь в настройках мессенджера.");
             body=body[end..].TrimStart();
         }

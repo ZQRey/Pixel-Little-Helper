@@ -269,13 +269,22 @@ try
     Check(facepalmHandled && (PetState)petStateField.GetValue(pet)! == PetState.Facepalm, "single facepalm emoji activates facepalm animation");
     bool mixedHandled = (bool)checkEmojiMethod.Invoke(pet, new object[] { "Привет ❤️" })!;
     Check(!mixedHandled, "mixed text with emoji does not trigger single emoji reaction");
+    pet.ShowFaceMail(3);
+    Check((FaceNoticeStatus)faceStatusField.GetValue(pet)! == FaceNoticeStatus.Mail, "ShowFaceMail sets face status to Mail");
 
     Check(pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "robot receives WPF input after canvas translation");
     typeof(PetWindow).GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
     Check(pet.ActualWidth == 500 && pet.ActualHeight == 400, "expanded menu layout");
-    Check(pet.InputHitTest(new System.Windows.Point(250, 318)) is System.Windows.Controls.Image, "robot input remains correct with menu open");
+    Check(pet.InputHitTest(new System.Windows.Point(250, 200)) is System.Windows.Controls.Image, "robot input remains correct with menu open");
     var menuCanvas = (System.Windows.Controls.Canvas)pet.Content;
+    var menuButtons = menuCanvas.Children.OfType<System.Windows.Controls.Button>().ToList();
+    Check(menuButtons.Count > 0, "radial menu has buttons");
+    var firstBtn = menuButtons[0];
+    double firstBtnCenterX = System.Windows.Controls.Canvas.GetLeft(firstBtn) + firstBtn.Width / 2.0;
+    double firstBtnCenterY = System.Windows.Controls.Canvas.GetTop(firstBtn) + firstBtn.Height / 2.0;
+    Check(firstBtnCenterX < 250, "first radial button starts strictly on the left of robot");
+    Check(Math.Abs(firstBtnCenterY - 200) < 40, "first radial button vertically aligns near robot center");
     foreach (var child in menuCanvas.Children.OfType<System.Windows.UIElement>()) { child.BeginAnimation(System.Windows.UIElement.OpacityProperty, null); child.Opacity = 1; }
     var menuBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(500, 400, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); menuBitmap.Render(menuCanvas);
     var menuPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "menu-preview.png")); Directory.CreateDirectory(Path.GetDirectoryName(menuPreview)!);
@@ -310,6 +319,7 @@ try
     for(int n=0;n<10;n++)Check(pet.ReceiveAnnouncement(new("Очередь "+n,"Администратор",30)).Contains("очередь"),"queued notice "+n);
     bool full=false;try{pet.ReceiveAnnouncement(new("Лишнее","Администратор",30));}catch(InvalidOperationException){full=true;}Check(full,"notice queue bounded to ten pending messages");
     var ticketWindow = new TicketWindow((title, description, branch, room, cancellation) => Task.FromResult(1), cancellation => Task.FromResult(new List<TicketBranch> { new(1, "Поликлиника"), new(2, "Больница") }), new Settings { TicketBranchId = 1, TicketRoom = "12" }, CancellationToken.None);
+    Check(ticketWindow.WindowStartupLocation == System.Windows.WindowStartupLocation.CenterScreen, "ticket window startup location is CenterScreen");
     ticketWindow.Show(); ticketWindow.UpdateLayout(); ticketWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     var ticketPanel = (System.Windows.Controls.StackPanel)((System.Windows.Controls.Border)ticketWindow.Content).Child;
     Check(ticketPanel.Children.OfType<System.Windows.Controls.ComboBox>().Single().SelectedValue is int selectedBranch && selectedBranch == 1, "ticket form restores saved branch after directory load");
@@ -409,6 +419,353 @@ try
     SoundManager.PlayPreview("VoiceAdult", SoundEvent.MessageReceived);
     SoundManager.PlayPreview("VoiceChild", SoundEvent.MessageSent);
     Check(true, "SoundManager plays events safely without exceptions");
+
+    // Dance lead delay verification
+    Check(SoundManager.GetDanceLeadDelayMs("VoiceAdult") == 2200, "VoiceAdult dance lead delay is 2200ms");
+    Check(SoundManager.GetDanceLeadDelayMs("VoiceChild") == 0, "VoiceChild dance lead delay is 0ms");
+    Check(SoundManager.GetDanceLeadDelayMs("Sound") == 0, "Sound dance lead delay is 0ms");
+
+    // Multilingual audio packs verification
+    string[] langs = ["ru", "kk", "en", "zh"];
+    foreach (var lang in langs)
+    {
+        Check(File.Exists(Path.Combine(assetsSoundDir, "VoiceAdult", lang, "send.wav")), $"VoiceAdult/{lang}/send.wav exists");
+        Check(File.Exists(Path.Combine(assetsSoundDir, "VoiceAdult", lang, "dance.wav")), $"VoiceAdult/{lang}/dance.wav exists");
+        Check(File.Exists(Path.Combine(assetsSoundDir, "VoiceChild", lang, "receive_1.wav")), $"VoiceChild/{lang}/receive_1.wav exists");
+        Check(File.Exists(Path.Combine(assetsSoundDir, "VoiceChild", lang, "receive_2.wav")), $"VoiceChild/{lang}/receive_2.wav exists");
+        Check(File.Exists(Path.Combine(assetsSoundDir, "VoiceChild", lang, "urgent.wav")), $"VoiceChild/{lang}/urgent.wav exists");
+    }
+
+    // CompanionStorage tests
+    string testCompanionDb = Path.Combine(temp, "companion_test.dat");
+    CompanionStorage.SetCustomFilePathForTesting(testCompanionDb);
+    CompanionStorage.Clear();
+    Check(!File.Exists(testCompanionDb), "CompanionStorage.Clear removes file");
+    Check(CompanionStorage.Load().Count == 0, "CompanionStorage.Load on empty returns empty list");
+
+    CompanionStorage.Append(new CompanionMessage(DateTime.UtcNow.AddDays(-40), true, "Old message", "Normal"));
+    CompanionStorage.Append(new CompanionMessage(DateTime.UtcNow, true, "Recent message", "Normal"));
+    Check(CompanionStorage.Load().Count == 2, "CompanionStorage loads saved messages");
+    int purged = CompanionStorage.AutoPurge(TimeSpan.FromDays(30));
+    Check(purged == 1 && CompanionStorage.Load().Count == 1, "CompanionStorage.AutoPurge deletes messages older than 30 days");
+    CompanionStorage.Clear();
+    Check(CompanionStorage.Load().Count == 0, "CompanionStorage clear after test leaves 0 messages");
+    CompanionStorage.SetCustomFilePathForTesting(null);
+
+    // CompanionBotEngine age formatting tests
+    var origin = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+    TimeSpan age8Days = TimeSpan.FromDays(8);
+    Check(CompanionBotEngine.FormatAge(age8Days, "ru").Contains("8 дней"), "age formatting in RU for 8 days");
+    Check(CompanionBotEngine.FormatAge(age8Days, "kk").Contains("8 күн"), "age formatting in KK for 8 days");
+    Check(CompanionBotEngine.FormatAge(age8Days, "en").Contains("8 days"), "age formatting in EN for 8 days");
+    Check(CompanionBotEngine.FormatAge(age8Days, "zh").Contains("8天"), "age formatting in ZH for 8 days");
+
+    // CompanionBotEngine insult and cry reaction
+    Loc.Initialize("ru");
+    var insultRes = CompanionBotEngine.GenerateResponse("Ты тупой робот", origin);
+    Check(insultRes.Emotion == CompanionEmotion.Cry, "insult triggers cry emotion");
+    Check(insultRes.Action == CompanionBotAction.CryReaction, "insult sets cry action");
+    Check(insultRes.ReplyText.Contains("Пожалуйста не обижайте меня") && insultRes.ReplyText.Contains("Мне всего"), "insult reply contains hurt phrase and age in RU");
+
+    // CompanionBotEngine forget command
+    var forgetRes = CompanionBotEngine.GenerateResponse("Забудь всё о чём мы говорили");
+    Check(forgetRes.Action == CompanionBotAction.ClearHistory, "forget command sets ClearHistory action");
+    Check(forgetRes.ReplyText.Contains("чистый лист"), "forget reply contains clean slate phrase in RU");
+
+    // CompanionBotEngine empathy categories
+    var sadRes = CompanionBotEngine.GenerateResponse("Мне очень грустно и одиноко");
+    Check(sadRes.Emotion == CompanionEmotion.Sad, "sadness triggers Sad emotion");
+    var tiredRes = CompanionBotEngine.GenerateResponse("Я так сильно устал на работе");
+    Check(tiredRes.Emotion == CompanionEmotion.Think, "fatigue triggers Think emotion");
+    var joyRes = CompanionBotEngine.GenerateResponse("Ура, у меня всё получилось!");
+    Check(joyRes.Emotion == CompanionEmotion.Joy, "joy triggers Joy emotion");
+    var jokeRes = CompanionBotEngine.GenerateResponse("Расскажи шутку или анекдот");
+    Check(jokeRes.Emotion == CompanionEmotion.Laugh, "joke triggers Laugh emotion");
+    var unknownRes = CompanionBotEngine.GenerateResponse("Квантовая хромодинамика в теории струн");
+    Check(unknownRes.ReplyText.Contains("Меня этому не научили"), "unknown query returns fallback phrase");
+
+    // ActionButton translation support
+    var btn = new ActionButton(1, "Поиск", "search", "open_url", "https://google.com", 0, true, "All",
+        new Dictionary<string, string> { ["ru"] = "Поиск", ["kk"] = "Іздеу", ["en"] = "Search", ["zh"] = "搜索" });
+    Check(btn.GetLocalizedTitle("ru") == "Поиск", "button localized title ru");
+    Check(btn.GetLocalizedTitle("kk") == "Іздеу", "button localized title kk");
+    Check(btn.GetLocalizedTitle("en") == "Search", "button localized title en");
+    Check(btn.GetLocalizedTitle("zh") == "搜索", "button localized title zh");
+
+    // Disk space monitor free percent check
+    double? freeSpacePercent = DiskSpaceMonitor.GetFreePercent("C");
+    Check(freeSpacePercent.HasValue && freeSpacePercent.Value > 0 && freeSpacePercent.Value <= 100, "DiskSpaceMonitor reads C: free space percentage");
+
+    // Birthday hat asset verification
+    string hatFile = Path.Combine(AppContext.BaseDirectory, "Assets", "hat_birthday.png");
+    if (!File.Exists(hatFile)) hatFile = Path.Combine(Environment.CurrentDirectory, "LitleHelperClient", "Assets", "hat_birthday.png");
+    Check(File.Exists(hatFile) && new FileInfo(hatFile).Length > 100, "birthday hat asset exists and non-empty");
+
+    // Liquidation Farewell window and SelfDestruct tests
+    Loc.Initialize("ru");
+    Check(Loc.T("FarewellLiquidationNotice").Contains("Мне очень жаль...😭… Папа забирает меня..."), "RU farewell phrase match");
+    Loc.Initialize("kk");
+    Check(Loc.T("FarewellLiquidationNotice").Contains("Өкінішке орай...😭… Әкем мені алып кетіп бара жатыр..."), "KK farewell phrase match");
+    Loc.Initialize("en");
+    Check(Loc.T("FarewellLiquidationNotice").Contains("I'm so sorry...😭… Papa is taking me away..."), "EN farewell phrase match");
+    Loc.Initialize("zh");
+    Check(Loc.T("FarewellLiquidationNotice").Contains("真的很抱歉……😭……爸爸要带我走了……"), "ZH farewell phrase match");
+    Loc.Initialize("ru");
+
+    var farewell = new FarewellLiquidationWindow(durationSeconds: 120, autoSelfDestruct: false);
+    Check(!farewell.CanCloseNow, "farewell window cannot be closed initially");
+    Check(farewell.RemainingSeconds == 120, "farewell window initialized with 120s countdown");
+    bool closingCancelled = false;
+    farewell.Closing += (_, e) => { if (e.Cancel) closingCancelled = true; };
+    farewell.Close();
+    Check(closingCancelled && !farewell.CanCloseNow, "closing attempt cancelled while countdown active");
+
+    string cleanupScript = SelfDestructManager.GenerateCleanupScript(9999, @"C:\App\PixelHelper.exe", @"C:\App\Data");
+    Check(cleanupScript.Contains("9999") && cleanupScript.Contains("taskkill") && cleanupScript.Contains("rmdir"), "cleanup script generated with PID and cleanup commands");
+
+    // Section 22: Password Policy Validator tests
+    Check(!PasswordPolicyValidator.Validate("short").IsValid, "password policy rejects < 8 chars");
+    Check(PasswordPolicyValidator.Validate("short").Message.Contains("8"), "short password mentions 8 chars");
+    Check(!PasswordPolicyValidator.Validate("nouppercase1!").IsValid, "password policy rejects missing uppercase");
+    Check(PasswordPolicyValidator.Validate("nouppercase1!").Message.Contains("заглавные"), "missing uppercase mentions заглавные");
+    Check(!PasswordPolicyValidator.Validate("NOLOWERCASE1!").IsValid, "password policy rejects missing lowercase");
+    Check(PasswordPolicyValidator.Validate("NOLOWERCASE1!").Message.Contains("строчные"), "missing lowercase mentions строчные");
+    Check(!PasswordPolicyValidator.Validate("NoDigitsHere!").IsValid, "password policy rejects missing digit");
+    Check(PasswordPolicyValidator.Validate("NoDigitsHere!").Message.Contains("цифры"), "missing digit mentions цифры");
+    Check(PasswordPolicyValidator.Validate("KzAdmin2026!").IsValid, "password policy accepts valid complex password");
+    Check(PasswordPolicyValidator.Validate("Solnce2026").IsValid, "password policy accepts valid alphanumeric password");
+
+    // Section 22: Mnemonic Password Generator tests
+    string singleGen = MnemonicPasswordGenerator.GenerateOne();
+    Check(!string.IsNullOrWhiteSpace(singleGen) && singleGen.Length >= 8, "Mnemonic generator generates non-empty >= 8 char password");
+    Check(PasswordPolicyValidator.Validate(singleGen).IsValid, "Mnemonic generator produces password satisfying policy");
+    var multipleGen = MnemonicPasswordGenerator.Generate(10);
+    Check(multipleGen.Count == 10 && multipleGen.All(p => PasswordPolicyValidator.Validate(p).IsValid), "All 10 generated mnemonic passwords satisfy policy");
+
+    // Section 22: Companion Bot Password Dialogue flow tests
+    Loc.Initialize("ru");
+    var pwIntentRes = CompanionBotEngine.GenerateResponse("поменяй пароль");
+    Check(pwIntentRes.IsPromptingPassword, "password change intent sets IsPromptingPassword");
+    Check(pwIntentRes.ReplyText.Contains("Требования к паролю"), "password change intent returns prompt text");
+
+    var pwSuggestRes = CompanionBotEngine.GenerateResponse("придумай пароль");
+    Check(!pwSuggestRes.IsPromptingPassword, "general password suggest intent does not lock into AD change");
+    Check(pwSuggestRes.ReplyText.Contains("запоминающ"), "password suggest returns suggestions header");
+    Check(pwSuggestRes.ReplyText.Contains("1. "), "password suggest includes numbered suggestions");
+
+    // User asks for suggestion while in awaiting state
+    var pwAwaitingSuggest = CompanionBotEngine.GenerateResponse("не знаю какой", isAwaitingPassword: true);
+    Check(pwAwaitingSuggest.IsPromptingPassword, "suggest while awaiting keeps IsPromptingPassword");
+    Check(pwAwaitingSuggest.ReplyText.Contains("запоминающиеся"), "suggest while awaiting returns suggestions");
+
+    // User provides invalid candidate while awaiting
+    var pwInvalidCandidate = CompanionBotEngine.GenerateResponse("bad", isAwaitingPassword: true);
+    Check(pwInvalidCandidate.IsPromptingPassword, "invalid candidate keeps IsPromptingPassword");
+    Check(pwInvalidCandidate.Emotion == CompanionEmotion.Sad, "invalid candidate triggers Sad emotion");
+    Check(pwInvalidCandidate.Action == CompanionBotAction.None, "invalid candidate has None action");
+
+    // User provides valid candidate while awaiting
+    var pwValidCandidate = CompanionBotEngine.GenerateResponse("• KzBarys2026!", isAwaitingPassword: true);
+    Check(!pwValidCandidate.IsPromptingPassword, "valid candidate clears IsPromptingPassword");
+    Check(pwValidCandidate.Action == CompanionBotAction.ChangePassword, "valid candidate sets ChangePassword action");
+    Check(pwValidCandidate.TargetPassword == "KzBarys2026!", "valid candidate extracts clean target password without bullet");
+
+    // User cancels while awaiting
+    var pwCancelRes = CompanionBotEngine.GenerateResponse("отмена", isAwaitingPassword: true);
+    Check(!pwCancelRes.IsPromptingPassword, "cancel clears IsPromptingPassword");
+    Check(pwCancelRes.Action == CompanionBotAction.None, "cancel has None action");
+    Check(pwCancelRes.ReplyText.Contains("отменена"), "cancel returns cancel notice");
+
+    // Password localization check
+    Loc.Initialize("kk");
+    var pwKkRes = CompanionBotEngine.GenerateResponse("пароль ауыстыру");
+    Check(pwKkRes.IsPromptingPassword && pwKkRes.ReplyText.Contains("паролін өзгертуге"), "KK password change prompt");
+    Loc.Initialize("en");
+    var pwEnRes = CompanionBotEngine.GenerateResponse("change password");
+    Check(pwEnRes.IsPromptingPassword && pwEnRes.ReplyText.Contains("login password"), "EN password change prompt");
+    Loc.Initialize("zh");
+    var pwZhRes = CompanionBotEngine.GenerateResponse("修改密码");
+    Check(pwZhRes.IsPromptingPassword && pwZhRes.ReplyText.Contains("修改电脑登录密码"), "ZH password change prompt");
+    Loc.Initialize("ru");
+
+    // Section 22: Quiet Code White Guard web service tests
+    string guardFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "guard-white.html");
+    if (!File.Exists(guardFile)) guardFile = Path.Combine(Environment.CurrentDirectory, "LitleHelperServer", "wwwroot", "guard-white.html");
+    Check(File.Exists(guardFile), "guard-white.html exists");
+    string guardHtml = File.ReadAllText(guardFile);
+    Check(guardHtml.Contains("КОД БЕЛЫЙ"), "guard-white.html contains huge CODE WHITE alert text");
+    Check(guardHtml.Contains("000000") && guardHtml.Contains("ffffff"), "guard-white.html starts black and transitions to brilliant white");
+    Check(guardHtml.Contains("/api/guard/white-events"), "guard-white.html listens to isolated SSE events");
+
+    // Section 23: Portal password generation vs AD password change
+    var pwPortalRes = CompanionBotEngine.GenerateResponse("придумай пароль для портала");
+    Check(!pwPortalRes.IsPromptingPassword, "portal password request does not set IsPromptingPassword");
+    Check(pwPortalRes.ReplyText.Contains("портал") || pwPortalRes.ReplyText.Contains("запоминающиеся"), "portal password request returns suggestions");
+    Check(pwPortalRes.Emotion == CompanionEmotion.Joy, "portal password request returns Joy emotion");
+
+    var pwComplexRes = CompanionBotEngine.GenerateResponse("мне нужен сложный пароль");
+    Check(!pwComplexRes.IsPromptingPassword, "complex password request returns general suggestions");
+
+    // Section 23: FeatureForbiddenByParent localization
+    Loc.Initialize("ru");
+    Check(Loc.T("FeatureForbiddenByParent").Contains("Папа не разрешил мне этого делать... 🥺"), "RU forbidden by parent phrase");
+    Loc.Initialize("kk");
+    Check(Loc.T("FeatureForbiddenByParent").Contains("Әкем бұған рұқсат бермеді... 🥺"), "KK forbidden by parent phrase");
+    Loc.Initialize("en");
+    Check(Loc.T("FeatureForbiddenByParent").Contains("Papa didn't allow me to do this... 🥺"), "EN forbidden by parent phrase");
+    Loc.Initialize("zh");
+    Check(Loc.T("FeatureForbiddenByParent").Contains("爸爸不许我这么做…… 🥺"), "ZH forbidden by parent phrase");
+    Loc.Initialize("ru");
+
+    // Section 23: PetWindow forbidden notice
+    pet.ShowForbiddenNotice();
+    Check((PetState)petStateField.GetValue(pet)! == PetState.Sad, "ShowForbiddenNotice sets PetState.Sad");
+
+    // Section 23: Sound profile menu localization and preview
+    Check(Loc.T("TraySoundProfile").Length > 0, "TraySoundProfile localized");
+    Check(Loc.T("SoundProfileDefault").Contains("Обычный"), "SoundProfileDefault localized");
+    Check(Loc.T("SoundProfileVoiceAdult").Contains("робота"), "SoundProfileVoiceAdult localized");
+    Check(Loc.T("SoundProfileVoiceChild").Contains("Детский"), "SoundProfileVoiceChild localized");
+
+    // Section 23: Guard white 10-minute auto reset and app.js link
+    Check(guardHtml.Contains("alertTimer") && guardHtml.Contains("10:00"), "guard-white.html contains 10-minute countdown timer element");
+    Check(guardHtml.Contains("updateTimerDisplay"), "guard-white.html implements countdown update logic");
+
+    string appJsFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "app.js");
+    if (!File.Exists(appJsFile)) appJsFile = Path.Combine(Environment.CurrentDirectory, "LitleHelperServer", "wwwroot", "app.js");
+    Check(File.Exists(appJsFile), "app.js exists");
+    string appJs = File.ReadAllText(appJsFile);
+    Check(appJs.Contains("guard-white.html"), "app.js contains guard-white.html link");
+    Check(appJs.Contains("open-guard-white-btn") && appJs.Contains("copy-guard-white-btn"), "app.js contains open and copy buttons for guard white");
+
+    // Section 25: 180-min inactivity notice localization
+    Loc.Initialize("ru");
+    Check(Loc.T("NoticePapaSaidSmart") == "Папа сказал что я умный😊", "ru NoticePapaSaidSmart exact match");
+    Loc.Initialize("kk");
+    Check(Loc.T("NoticePapaSaidSmart").Contains("Әкем"), "kk NoticePapaSaidSmart localized");
+    Loc.Initialize("en");
+    Check(Loc.T("NoticePapaSaidSmart").Contains("Papa said"), "en NoticePapaSaidSmart localized");
+    Loc.Initialize("zh");
+    Check(Loc.T("NoticePapaSaidSmart").Contains("爸爸"), "zh NoticePapaSaidSmart localized");
+    Loc.Initialize("ru");
+
+    // Section 25: Image viewer detection logic
+    Check(NativeMethods.IsImageViewer("photos", "test.png"), "photos process is image viewer");
+    Check(NativeMethods.IsImageViewer("explorer", "sunset.JPG"), "sunset.JPG title is image viewer");
+    Check(NativeMethods.IsImageViewer("i_view64", "photo.webp"), "irfanview is image viewer");
+    Check(!NativeMethods.IsImageViewer("notepad", "notes.txt"), "notepad is not image viewer");
+    Check(!NativeMethods.IsImageViewer("cmd", "Command Prompt"), "cmd is not image viewer");
+
+    // Section 25: Sprite frames for TurnBack and Shy
+    var testSprites = new Sprites();
+    var frameBack = testSprites.Get(PetState.TurnBack, 0);
+    Check(frameBack != null && frameBack.Width > 0, "TurnBack sprite frame loaded successfully");
+    var frameShy = testSprites.Get(PetState.Shy, 0);
+    Check(frameShy != null && frameShy.Width > 0, "Shy sprite frame loaded successfully");
+    Check(Sprites.FrameCount(PetState.TurnBack) == 2, "TurnBack frame count is 2");
+    Check(Sprites.FrameCount(PetState.Shy) == 2, "Shy frame count is 2");
+
+    // Section 27: PetCat and PetDog sprites
+    var frameCat = testSprites.Get(PetState.PetCat, 0);
+    Check(frameCat != null && frameCat.Width > 0, "PetCat sprite frame loaded successfully");
+    var frameDog = testSprites.Get(PetState.PetDog, 0);
+    Check(frameDog != null && frameDog.Width > 0, "PetDog sprite frame loaded successfully");
+    Check(Sprites.FrameCount(PetState.PetCat) == 2, "PetCat frame count is 2");
+    Check(Sprites.FrameCount(PetState.PetDog) == 2, "PetDog frame count is 2");
+
+    // Section 28: Animation protection
+    pet.React(PetState.Dance, 5);
+    Check(pet.IsAnimationLocked, "Pet animation is locked during temporary animation");
+    typeof(PetWindow).GetMethod("FollowCursor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    var petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! == PetState.Dance, "FollowCursor did not interrupt locked animation");
+
+    // Section 27: Regex stripping of /pet commands
+    string testPetBody1 = System.Text.RegularExpressions.Regex.Replace("/pet Привет", @"^(?:(?:/срочно|/танец|/pet|/погладить|/питомец)(?:\s+|$))+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    Check(testPetBody1 == "Привет", "Regex strips /pet");
+    string testPetBody2 = System.Text.RegularExpressions.Regex.Replace("/погладить /срочно Привет", @"^(?:(?:/срочно|/танец|/pet|/погладить|/питомец)(?:\s+|$))+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    Check(testPetBody2 == "Привет", "Regex strips /погладить /срочно");
+
+    var botPet = CompanionBotEngine.GenerateResponse("/pet");
+    Check(botPet.RobotState is PetState.PetCat or PetState.PetDog, "CompanionBotEngine returns PetCat or PetDog for /pet");
+
+    // 50/50 distribution check
+    int catCount = 0, dogCount = 0;
+    for (int i = 0; i < 100; i++)
+    {
+        var res = CompanionBotEngine.GenerateResponse("/pet");
+        if (res.RobotState == PetState.PetCat) catCount++;
+        else if (res.RobotState == PetState.PetDog) dogCount++;
+    }
+    Check(catCount > 20 && dogCount > 20, "Pet random distribution chooses both cats and dogs");
+
+    // Section 29: Role typing localization
+    Loc.Initialize("ru");
+    Check(Loc.T("TypingPsychologistText") == "Психолог печатает…", "RU TypingPsychologistText");
+    Check(Loc.T("TypingEmployeeText") == "Сотрудник печатает…", "RU TypingEmployeeText");
+    Check(Loc.T("NoticePetCat") == "Робот гладит котика 🐱", "RU NoticePetCat");
+    Check(Loc.T("NoticePetDog") == "Робот гладит собачку 🐶", "RU NoticePetDog");
+
+    Loc.Initialize("kk");
+    Check(Loc.T("TypingPsychologistText") == "Психолог жазып жатыр…", "KK TypingPsychologistText");
+    Check(Loc.T("TypingEmployeeText") == "Қызметкер жазып жатыр…", "KK TypingEmployeeText");
+    Loc.Initialize("en");
+    Check(Loc.T("TypingPsychologistText") == "Psychologist is typing…", "EN TypingPsychologistText");
+    Check(Loc.T("TypingEmployeeText") == "Employee is typing…", "EN TypingEmployeeText");
+    Loc.Initialize("zh");
+    Check(Loc.T("TypingPsychologistText") == "心理咨询师正在输入…", "ZH TypingPsychologistText");
+    Check(Loc.T("TypingEmployeeText") == "员工正在输入…", "ZH TypingEmployeeText");
+    Loc.Initialize("ru");
+
+    // Section 30: Interruptible idle animations vs strictly protected intentional animations
+    pet.React(PetState.Yawn, 5);
+    Check(pet.IsInterruptibleIdleAnimation && !pet.IsAnimationLocked, "Yawn is interruptible idle animation");
+    pet.Wake();
+    petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! is PetState.Wake or PetState.Idle, "Wake interrupts Yawn animation");
+
+    pet.React(PetState.Workout, 5);
+    Check(pet.IsInterruptibleIdleAnimation && !pet.IsAnimationLocked, "Workout is interruptible idle animation");
+    pet.Wake();
+    petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! is PetState.Wake or PetState.Idle, "Wake interrupts Workout animation");
+
+    pet.React(PetState.Flower, 5);
+    Check(pet.IsInterruptibleIdleAnimation && !pet.IsAnimationLocked, "Flower is interruptible idle animation");
+    pet.Wake();
+    petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! is PetState.Wake or PetState.Idle, "Wake interrupts Flower animation");
+
+    // Strictly protected animations must not be interrupted
+    PetState[] protectedStates = [PetState.Dance, PetState.PetCat, PetState.PetDog, PetState.TurnBack, PetState.Shy, PetState.Celebrate, PetState.Offended, PetState.Twirl, PetState.Cry];
+    foreach (var ps in protectedStates)
+    {
+        pet.React(ps, 5);
+        Check(!pet.IsInterruptibleIdleAnimation && pet.IsAnimationLocked, $"{ps} is strictly locked and not interruptible");
+        pet.Wake();
+        petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+        Check((PetState)petStateProp! == ps, $"Wake does not interrupt locked {ps} animation");
+    }
+
+    // Section 31: Assistant screen position remains fixed beside taskbar when opening menu
+    typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    pet.UpdateLayout();
+    double initialTaskbarAnchor = System.Windows.SystemParameters.WorkArea.Bottom - 96;
+    pet.Top = initialTaskbarAnchor;
+    pet.Left = 300;
+    pet.UpdateLayout();
+    double anchorScreenY = pet.Top;
+    double anchorScreenX = pet.Left;
+    typeof(PetWindow).GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    pet.UpdateLayout();
+    var robotImg = ((System.Windows.Controls.Canvas)pet.Content).Children.OfType<System.Windows.Controls.Image>().First();
+    double actualRobotScreenY = pet.Top + System.Windows.Controls.Canvas.GetTop(robotImg);
+    double actualRobotScreenX = pet.Left + System.Windows.Controls.Canvas.GetLeft(robotImg);
+    Check(Math.Abs(actualRobotScreenY - anchorScreenY) < 1, "Assistant vertical screen position unchanged when opening menu near taskbar");
+    Check(Math.Abs(actualRobotScreenX - anchorScreenX) < 1, "Assistant horizontal screen position unchanged when opening menu");
+    typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    pet.UpdateLayout();
+    Check(Math.Abs(pet.Top - anchorScreenY) < 1, "Assistant restored to exact taskbar anchor after closing menu");
 
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });

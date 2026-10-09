@@ -1,7 +1,35 @@
 namespace PixelHelper;
 
 public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "");
-public sealed record ActionButton(int Id, string Title, string IconName, string ActionType, string Payload, int OrderIndex, bool IsActive, string TargetGroup);
+public sealed record ActionButton(
+    int Id,
+    string Title,
+    string IconName,
+    string ActionType,
+    string Payload,
+    int OrderIndex,
+    bool IsActive = true,
+    string TargetGroup = "All",
+    Dictionary<string, string>? TitleTranslations = null,
+    Dictionary<string, string>? DescriptionTranslations = null,
+    string Description = "")
+{
+    public string GetLocalizedTitle(string? langCode = null)
+    {
+        string lang = langCode ?? Loc.Code ?? "ru";
+        if (TitleTranslations != null && TitleTranslations.TryGetValue(lang, out var t) && !string.IsNullOrWhiteSpace(t))
+            return t;
+        return Title;
+    }
+
+    public string GetLocalizedDescription(string? langCode = null)
+    {
+        string lang = langCode ?? Loc.Code ?? "ru";
+        if (DescriptionTranslations != null && DescriptionTranslations.TryGetValue(lang, out var d) && !string.IsNullOrWhiteSpace(d))
+            return d;
+        return Description;
+    }
+}
 public sealed record CommandEnvelope(string TaskId, string Type, string Payload);
 public sealed record MemorySlot(ulong CapacityBytes, string Manufacturer, uint SpeedMHz, string Slot);
 public sealed record LogicalDisk(string Name, ulong TotalBytes, ulong FreeBytes, string FileSystem);

@@ -56,37 +56,69 @@ internal static class SoundManager
         return soundBaseDir = direct;
     }
 
+    public static int GetDanceLeadDelayMs(string? profile) =>
+        NormalizeProfile(profile) == "VoiceAdult" ? 2200 : 0;
+
+    private static readonly Random rng = new();
+
     private static SoundPlayer? GetPlayer(string profile, SoundEvent ev)
     {
         string normProfile = NormalizeProfile(profile);
-        string eventFile = GetEventFileName(ev);
-        string key = normProfile + "/" + eventFile;
+        string lang = Loc.Code ?? "ru";
 
-        lock (sync)
+        List<string> candidateFiles = new();
+        if (normProfile == "VoiceChild" && ev == SoundEvent.MessageReceived)
         {
-            if (players.TryGetValue(key, out var cached))
-                return cached;
-
-            string baseDir = GetSoundBaseDir();
-            string path = Path.Combine(baseDir, normProfile, eventFile);
-            if (!File.Exists(path))
+            if (rng.Next(2) == 0)
             {
-                // Fallback to "Sound" profile if voice file missing
-                path = Path.Combine(baseDir, "Sound", eventFile);
+                candidateFiles.Add("receive_1.wav");
+                candidateFiles.Add("receive_2.wav");
             }
-
-            if (File.Exists(path))
+            else
             {
-                try
+                candidateFiles.Add("receive_2.wav");
+                candidateFiles.Add("receive_1.wav");
+            }
+            candidateFiles.Add("receive.wav");
+        }
+        else
+        {
+            candidateFiles.Add(GetEventFileName(ev));
+        }
+
+        string baseDir = GetSoundBaseDir();
+
+        foreach (var file in candidateFiles)
+        {
+            string[] searchPaths =
+            [
+                Path.Combine(baseDir, normProfile, lang, file),
+                Path.Combine(baseDir, normProfile, "ru", file),
+                Path.Combine(baseDir, normProfile, file),
+                Path.Combine(baseDir, "Sound", GetEventFileName(ev))
+            ];
+
+            foreach (var path in searchPaths)
+            {
+                if (File.Exists(path))
                 {
-                    var player = new SoundPlayer(path);
-                    player.Load();
-                    players[key] = player;
-                    return player;
-                }
-                catch (Exception ex)
-                {
-                    Settings.Log(ex);
+                    lock (sync)
+                    {
+                        if (players.TryGetValue(path, out var cached))
+                            return cached;
+
+                        try
+                        {
+                            var player = new SoundPlayer(path);
+                            player.Load();
+                            players[path] = player;
+                            return player;
+                        }
+                        catch (Exception ex)
+                        {
+                            Settings.Log(ex);
+                        }
+                    }
                 }
             }
         }

@@ -13,6 +13,8 @@ public sealed class EmergencyAlertWindow : Window
 {
     private readonly EmergencyAlertNotice notice;
     private readonly Action<bool>? onResponse;
+    private readonly bool isTest;
+    private readonly Action? onCancel;
     private readonly Sprites sprites = new();
     private readonly Image robotImage = new();
     private readonly DispatcherTimer timer = new();
@@ -22,11 +24,21 @@ public sealed class EmergencyAlertWindow : Window
     private TextBlock? timerBlock;
     private PetState petState = PetState.Notice;
 
-    public EmergencyAlertWindow(EmergencyAlertNotice notice, Action<bool>? onResponse = null)
+    public EmergencyAlertWindow(EmergencyAlertNotice notice, Action<bool>? onResponse = null, bool isTest = false, Action? onCancel = null)
     {
         this.notice = notice;
         this.onResponse = onResponse;
-        remainingSeconds = Math.Clamp(notice.DurationSeconds > 0 ? notice.DurationSeconds : 300, 60, 600);
+        this.isTest = isTest;
+        this.onCancel = onCancel;
+
+        if (notice.Code.Equals("CODE_PINK", StringComparison.OrdinalIgnoreCase))
+        {
+            remainingSeconds = isTest ? Math.Min(60, notice.DurationSeconds > 0 ? notice.DurationSeconds : 60) : Math.Max(1200, notice.DurationSeconds);
+        }
+        else
+        {
+            remainingSeconds = isTest ? Math.Min(60, notice.DurationSeconds > 0 ? notice.DurationSeconds : 45) : Math.Clamp(notice.DurationSeconds > 0 ? notice.DurationSeconds : 300, 60, 600);
+        }
 
         WindowStyle = WindowStyle.None;
         WindowState = WindowState.Maximized;
@@ -68,6 +80,65 @@ public sealed class EmergencyAlertWindow : Window
         };
     }
 
+    private static string[] GetActionAlgorithm(string code) => code.ToUpperInvariant() switch
+    {
+        "CODE_RED" => new[]
+        {
+            "1. Немедленно сообщить в пожарную охрану (101 / 112) и на пост охраны.",
+            "2. Задействовать ближайший ручной пожарный извещатель.",
+            "3. Отключить вентиляцию и электроприборы, плотно закрыть окна и двери.",
+            "4. Организовать эвакуацию по эвакуационным выходам (лифтами пользоваться запрещено!)."
+        },
+        "CODE_BLACK" => new[]
+        {
+            "1. Немедленно оповестить службу безопасности и полицию (102 / 112).",
+            "2. Категорически запрещено прикасаться, открывать или перемещать подозрительный предмет.",
+            "3. Зафиксировать точное время и место обнаружения предмета.",
+            "4. Обеспечить оцепление зоны и организованную эвакуацию без паники."
+        },
+        "CODE_ORANGE" => new[]
+        {
+            "1. Немедленно изолировать очаг разлива / утечки опасных веществ.",
+            "2. Надеть средства индивидуальной защиты (респираторы, перчатки).",
+            "3. Оповестить инженерную службу учреждения и МЧС (112).",
+            "4. Эвакуировать людей перпендикулярно направлению распространения паров."
+        },
+        "CODE_YELLOW" => new[]
+        {
+            "1. Перевести персонал и дежурные службы в режим повышенной готовности.",
+            "2. Проверить работоспособность резервных источников питания и связи.",
+            "3. Подготовить медицинские комплекты и документацию к возможной транспортировке.",
+            "4. Следовать указаниям оперативного штаба ГО и ЧС учреждения."
+        },
+        "CODE_BLUE" => new[]
+        {
+            "1. Немедленно вызвать дежурную реанимационную бригаду к месту происшествия.",
+            "2. Начать сердечно-лёгочную реанимацию (непрямой массаж сердца, 30:2).",
+            "3. Обеспечить свободный доступ к пациенту и доставить дефибриллятор (АНД).",
+            "4. Подготовить венозный доступ и кислородную поддержку."
+        },
+        "CODE_WHITE" => new[]
+        {
+            "1. Активировать тревожную кнопку вызова группы быстрого реагирования (Охрана).",
+            "2. Не вступать в открытое противостояние, сохранять безопасную дистанцию.",
+            "3. Оградить пациентов и посетителей от зоны агрессивных действий.",
+            "4. Зафиксировать приметы нарушителя и направление его перемещения."
+        },
+        "CODE_PINK" => new[]
+        {
+            "1. Немедленно заблокировать все выходы, лестничные клетки и лифты здания.",
+            "2. Организовать тотальный досмотр выходящих лиц с детьми, сумками и колясками.",
+            "3. Оповестить охрану и полицию (102), передать ориентировку и приметы ребёнка.",
+            "4. Провести оперативный осмотр всех палат, кабинетов, туалетов и служебных помещений."
+        },
+        _ => new[]
+        {
+            "1. Оповестить дежурного администратора и службу безопасности.",
+            "2. Следовать внутреннему регламенту действий учреждения при ЧС.",
+            "3. Обеспечить безопасность персонала и пациентов."
+        }
+    };
+
     private void BuildUi()
     {
         var themeColor = GetThemeColor();
@@ -87,8 +158,8 @@ public sealed class EmergencyAlertWindow : Window
 
         var centerCard = new Border
         {
-            Width = 780,
-            MaxWidth = 900,
+            Width = 840,
+            MaxWidth = 960,
             Background = new SolidColorBrush(Color.FromRgb(15, 23, 42)), // Slate 900
             BorderBrush = new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)),
             BorderThickness = new Thickness(3),
@@ -119,11 +190,34 @@ public sealed class EmergencyAlertWindow : Window
 
         var cardStack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
 
-        // 1. Robot Character (Large & Animated)
-        robotImage.Width = 144;
-        robotImage.Height = 144;
+        // Test Mode Banner if applicable
+        if (isTest)
+        {
+            var testBadge = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(220, 234, 88, 12)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(240, 251, 146, 60)),
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(16, 6, 16, 6),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 14)
+            };
+            testBadge.Child = new TextBlock
+            {
+                Text = "🧪 ТЕСТОВЫЙ РЕЖИМ (ПРОВЕРКА ТОЛЬКО НА ЭТОМ ПК)",
+                FontSize = 14,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.White
+            };
+            cardStack.Children.Add(testBadge);
+        }
+
+        // 1. Robot Character (Large & Animated holding tablet)
+        robotImage.Width = 168;
+        robotImage.Height = 168;
         robotImage.HorizontalAlignment = HorizontalAlignment.Center;
-        robotImage.Margin = new Thickness(0, 0, 0, 12);
+        robotImage.Margin = new Thickness(0, 0, 0, 10);
         RenderOptions.SetBitmapScalingMode(robotImage, BitmapScalingMode.NearestNeighbor);
         UpdateRobotFrame();
         cardStack.Children.Add(robotImage);
@@ -143,9 +237,9 @@ public sealed class EmergencyAlertWindow : Window
 
         var badge = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+            Background = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
             CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(16, 6, 16, 6),
+            Padding = new Thickness(18, 6, 18, 6),
             HorizontalAlignment = HorizontalAlignment.Center,
             Margin = new Thickness(0, 0, 0, 12)
         };
@@ -168,7 +262,7 @@ public sealed class EmergencyAlertWindow : Window
             Foreground = Brushes.White,
             TextWrapping = TextWrapping.Wrap,
             TextAlignment = TextAlignment.Center,
-            Margin = new Thickness(0, 0, 0, 16)
+            Margin = new Thickness(0, 0, 0, 14)
         };
         cardStack.Children.Add(messageBlock);
 
@@ -183,7 +277,7 @@ public sealed class EmergencyAlertWindow : Window
                 CornerRadius = new CornerRadius(10),
                 Padding = new Thickness(14, 8, 14, 8),
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 14)
+                Margin = new Thickness(0, 0, 0, 12)
             };
             cabinetBorder.Child = new TextBlock
             {
@@ -205,7 +299,7 @@ public sealed class EmergencyAlertWindow : Window
                 Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 16)
+                Margin = new Thickness(0, 0, 0, 14)
             };
             cardStack.Children.Add(notesBlock);
         }
@@ -218,7 +312,41 @@ public sealed class EmergencyAlertWindow : Window
             if (photoCard != null) cardStack.Children.Add(photoCard);
         }
 
-        // 7. Interactive Response Buttons (For CODE_BLUE / CODE_WHITE / Specialist Call)
+        // 7. Step-by-Step Action Algorithm (Held in tablet)
+        var algorithmBorder = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(160, 15, 23, 42)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(100, 255, 255, 255)),
+            BorderThickness = new Thickness(1.5),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(16, 12, 16, 12),
+            Margin = new Thickness(0, 2, 0, 14),
+            MaxWidth = 780
+        };
+        var algStack = new StackPanel();
+        algStack.Children.Add(new TextBlock
+        {
+            Text = "📋 АЛГОРИТМ ДЕЙСТВИЙ ПРИ ЧС:",
+            FontSize = 14,
+            FontWeight = FontWeights.Bold,
+            Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)), // Amber 400
+            Margin = new Thickness(0, 0, 0, 8)
+        });
+        foreach (var step in GetActionAlgorithm(notice.Code))
+        {
+            algStack.Children.Add(new TextBlock
+            {
+                Text = step,
+                FontSize = 13.5,
+                Foreground = Brushes.White,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 2, 0, 3)
+            });
+        }
+        algorithmBorder.Child = algStack;
+        cardStack.Children.Add(algorithmBorder);
+
+        // 8. Interactive Response Buttons (For CODE_BLUE / CODE_WHITE / Specialist Call)
         bool isSpecialistCall = notice.Code.Equals("CODE_BLUE", StringComparison.OrdinalIgnoreCase) ||
                                notice.Code.Equals("CODE_WHITE", StringComparison.OrdinalIgnoreCase) ||
                                notice.CallId.HasValue;
@@ -229,7 +357,7 @@ public sealed class EmergencyAlertWindow : Window
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 10, 0, 10)
+                Margin = new Thickness(0, 6, 0, 10)
             };
 
             var acceptBtn = new Button
@@ -274,16 +402,68 @@ public sealed class EmergencyAlertWindow : Window
             cardStack.Children.Add(buttonsRow);
         }
 
-        // 8. Countdown Timer & Status
+        // 9. Countdown Timer & Status
         timerBlock = new TextBlock
         {
             Text = FormatTimer(),
             FontSize = 14,
             Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 12, 0, 0)
+            Margin = new Thickness(0, 8, 0, 0)
         };
         cardStack.Children.Add(timerBlock);
+
+        // 10. Admin / Test Management Buttons
+        var manageRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        if (isTest)
+        {
+            var endTestBtn = new Button
+            {
+                Content = "✕ Завершить тестирование",
+                Padding = new Thickness(18, 8, 18, 8),
+                Background = new SolidColorBrush(Color.FromRgb(220, 38, 38)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(6, 0, 6, 0)
+            };
+            endTestBtn.Click += (_, _) =>
+            {
+                onCancel?.Invoke();
+                Close();
+            };
+            manageRow.Children.Add(endTestBtn);
+        }
+        else if (onCancel != null)
+        {
+            var cancelBtn = new Button
+            {
+                Content = "🛑 Сбросить / Отбой тревоги",
+                Padding = new Thickness(18, 8, 18, 8),
+                Background = new SolidColorBrush(Color.FromRgb(225, 29, 72)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.Bold,
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(6, 0, 6, 0)
+            };
+            cancelBtn.Click += (_, _) =>
+            {
+                onCancel.Invoke();
+                Close();
+            };
+            manageRow.Children.Add(cancelBtn);
+        }
+        if (manageRow.Children.Count > 0)
+        {
+            cardStack.Children.Add(manageRow);
+        }
 
         centerCard.Child = cardStack;
         rootGrid.Children.Add(centerCard);

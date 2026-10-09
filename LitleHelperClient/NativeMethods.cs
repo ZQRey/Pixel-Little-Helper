@@ -39,10 +39,106 @@ internal static class NativeMethods
     [DllImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DeleteObject(nint obj);
     [DllImport("user32.dll", SetLastError = true)] private static extern int SetWindowRgn(nint hwnd, nint region, bool redraw);
     [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    [DllImport("user32.dll")] internal static extern nint GetForegroundWindow();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int GetWindowText(nint hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetWindowPlacement(nint hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WINDOWPLACEMENT
+    {
+        public int length;
+        public int flags;
+        public int showCmd;
+        public POINT ptMinPosition;
+        public POINT ptMaxPosition;
+        public RECT rcNormalPosition;
+    }
+
     [StructLayout(LayoutKind.Sequential)] internal struct POINT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] internal struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] internal struct WINDOWPOS { public nint Hwnd, HwndInsertAfter; public int X, Y, Cx, Cy; public uint Flags; }
     [StructLayout(LayoutKind.Sequential)] private struct LASTINPUTINFO { public uint Size, Time; }
+
+    internal static string GetWindowTitle(nint hwnd)
+    {
+        var sb = new System.Text.StringBuilder(512);
+        return GetWindowText(hwnd, sb, sb.Capacity) > 0 ? sb.ToString() : string.Empty;
+    }
+
+    internal static string GetProcessName(nint hwnd)
+    {
+        try
+        {
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0) return string.Empty;
+            using var proc = System.Diagnostics.Process.GetProcessById((int)pid);
+            return proc.ProcessName;
+        }
+        catch { return string.Empty; }
+    }
+
+    internal static readonly HashSet<string> KnownImageViewerProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "photos", "microsoft.photos", "photoviewer", "fsviewer", "i_view32", "i_view64",
+        "imageglass", "honeyview", "xnview", "xnviewmp", "mspaint", "snippingtool", "screenclippinghost",
+        "qview", "nomacs", "irfanview", "picasa3", "viewer"
+    };
+
+    internal static readonly string[] ImageExtensions =
+    {
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tiff", ".tif", ".ico", ".svg", ".heic", ".avif"
+    };
+
+    internal static readonly string[] ImageViewerTitleKeywords =
+    {
+        "фотографии", "просмотр фотографий", "image viewer", "photo viewer", "средство просмотра фотографий"
+    };
+
+    internal static bool IsImageViewer(string processName, string windowTitle)
+    {
+        if (!string.IsNullOrWhiteSpace(processName) && KnownImageViewerProcesses.Contains(processName)) return true;
+        if (!string.IsNullOrWhiteSpace(windowTitle))
+        {
+            foreach (var kw in ImageViewerTitleKeywords)
+            {
+                if (windowTitle.Contains(kw, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            foreach (var ext in ImageExtensions)
+            {
+                if (windowTitle.Contains(ext, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+
+    internal static bool IsImageViewerWindow(nint hwnd, double robotCenterX, out bool isFullscreen, out bool onLeft)
+    {
+        isFullscreen = false;
+        onLeft = false;
+        if (hwnd == 0 || !IsWindow(hwnd)) return false;
+        if (!GetWindowRect(hwnd, out var rect)) return false;
+        int width = rect.Right - rect.Left;
+        int height = rect.Bottom - rect.Top;
+        if (width <= 50 || height <= 50) return false;
+
+        string title = GetWindowTitle(hwnd);
+        string procName = GetProcessName(hwnd);
+        if (!IsImageViewer(procName, title)) return false;
+
+        var placement = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
+        GetWindowPlacement(hwnd, ref placement);
+        bool maximized = placement.showCmd == 3; // SW_SHOWMAXIMIZED
+        var work = DesktopBounds();
+        bool fillsScreen = width >= work.Width - 10 && height >= work.Height - 10;
+        isFullscreen = maximized || fillsScreen;
+
+        double viewerCenterX = (rect.Left + rect.Right) / 2.0;
+        onLeft = viewerCenterX < robotCenterX;
+        return true;
+    }
     internal static TimeSpan IdleTime()
     {
         var info = new LASTINPUTINFO { Size = (uint)Marshal.SizeOf<LASTINPUTINFO>() };

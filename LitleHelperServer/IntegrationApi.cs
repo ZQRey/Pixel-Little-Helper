@@ -67,19 +67,31 @@ public static class IntegrationApi
             var actor = await handler.ActorAsync(request.TelegramId, token);
             return Results.Ok(new { success = true, message = "AD, права панели и GLPI проверены: " + actor.User.Username, actor.GlpiUserId });
         }).RequireAuthorization("settings.manage");
-        app.MapGet("/api/settings/ad", (IntegrationSettings settings) => Results.Ok(settings.Ad())).RequireAuthorization("settings.manage");
-        app.MapPut("/api/settings/ad", async (AdOptions update, IntegrationSettings settings, HelperDb db, PanelSessions sessions) =>
+        app.MapGet("/api/settings/ad", (IntegrationSettings settings) => Results.Ok(settings.AdView())).RequireAuthorization("settings.manage");
+        app.MapPut("/api/settings/ad", async (AdUpdate update, IntegrationSettings settings, HelperDb db, PanelSessions sessions) =>
         {
             settings.SaveAd(update);
             var users = await db.Users.Where(x => x.PasswordHash == "!AD").ToListAsync();
             foreach (var user in users) { user.SecurityVersion++; sessions.Revoke(user.Id); }
-            await db.SaveChangesAsync(); return Results.Ok(settings.Ad());
+            await db.SaveChangesAsync(); return Results.Ok(settings.AdView());
         }).RequireAuthorization("settings.manage");
         app.MapPost("/api/settings/ad/test", async (IAdAuthentication ad, CancellationToken token) =>
         {
             try { await ad.TestConnectionAsync(token); return Results.Ok(new { success = true, message = "LDAPS и сертификат проверены. Вход пользователя проверяется на странице авторизации." }); }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException) { return Results.Ok(new { success = false, message = ex.Message }); }
         }).RequireAuthorization("settings.manage");
+        app.MapPost("/api/ad/change-password", async (ChangeAdPasswordRequest request, AdPasswordService adPasswordService) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.NewPassword))
+                return Results.BadRequest(new { success = false, message = "Не указан логин или пароль." });
+
+            var result = await adPasswordService.ChangePasswordAsync(request.Username, request.NewPassword);
+            if (!result.Success)
+            {
+                return Results.BadRequest(new { success = false, message = result.Message });
+            }
+            return Results.Ok(new { success = true, message = result.Message });
+        }).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { AuthenticationSchemes = "Bearer,Agent" });
 
         app.MapGet("/api/settings/cartridge", (IntegrationSettings settings) => Results.Ok(settings.Cartridge())).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/cartridge", (CartridgeOptions update, IntegrationSettings settings) =>
@@ -285,6 +297,16 @@ public static class IntegrationApi
                     await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
                 }
             }
+            else if (upperCode == "CODE_WHITE")
+            {
+                GuardWhiteService.TriggerAlert(req.Cabinet ?? "Не указан", "Главный корпус", DateTime.Now.ToString("HH:mm:ss"));
+                await hub.Clients.Group("GuardWhite").SendAsync("CodeWhiteAlert", new
+                {
+                    cabinet = req.Cabinet ?? "Не указан",
+                    branchName = "Главный корпус",
+                    time = DateTime.Now.ToString("HH:mm:ss")
+                });
+            }
             else
             {
                 await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
@@ -314,8 +336,71 @@ public static class IntegrationApi
 
             return Results.Ok(new { success = true });
         }).RequireAuthorization("commands.execute");
+
+        app.MapGet("/api/guard/white-state", () => Results.Ok(GuardWhiteService.GetState()));
+
+        app.MapPost("/api/guard/white-reset", async (Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        {
+            GuardWhiteService.ResetAlert();
+            await hub.Clients.Group("GuardWhite").SendAsync("CodeWhiteReset");
+            return Results.Ok(new { success = true });
+        });
+
+        app.MapGet("/api/guard/white-events", async (HttpContext ctx, CancellationToken token) =>
+        {
+            ctx.Response.Headers.ContentType = "text/event-stream";
+            ctx.Response.Headers.CacheControl = "no-cache";
+            ctx.Response.Headers["X-Accel-Buffering"] = "no";
+
+            var initial = GuardWhiteService.GetState();
+            await ctx.Response.WriteAsync($"event: state\ndata: {System.Text.Json.JsonSerializer.Serialize(initial)}\n\n", token);
+            await ctx.Response.Body.FlushAsync(token);
+
+            var tcs = new TaskCompletionSource();
+            using var reg = token.Register(() => tcs.TrySetResult());
+
+            Action<CodeWhiteAlertData> onAlert = async data =>
+            {
+                try
+                {
+                    await ctx.Response.WriteAsync($"event: alert\ndata: {System.Text.Json.JsonSerializer.Serialize(data)}\n\n", CancellationToken.None);
+                    await ctx.Response.Body.FlushAsync(CancellationToken.None);
+                }
+                catch { }
+            };
+
+            Action onReset = async () =>
+            {
+                try
+                {
+                    await ctx.Response.WriteAsync("event: reset\ndata: {}\n\n", CancellationToken.None);
+                    await ctx.Response.Body.FlushAsync(CancellationToken.None);
+                }
+                catch { }
+            };
+
+            GuardWhiteService.OnAlert += onAlert;
+            GuardWhiteService.OnReset += onReset;
+
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(15000, token);
+                    await ctx.Response.WriteAsync(": keepalive\n\n", token);
+                    await ctx.Response.Body.FlushAsync(token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                GuardWhiteService.OnAlert -= onAlert;
+                GuardWhiteService.OnReset -= onReset;
+            }
+        });
     }
     public record UpdateSwitch(bool Enabled);
     public record TelegramDirectoryProbe(long TelegramId);
+    public record ChangeAdPasswordRequest(string Username, string NewPassword);
 }
 

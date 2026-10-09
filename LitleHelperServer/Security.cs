@@ -12,7 +12,8 @@ namespace LitleHelperServer;
 
 public static class Security
 {
-    public static string TicketUser(string value) => value.Trim().Split('\\').Last().Split('@')[0].ToLowerInvariant();
+    public static string NormalizeAccount(string? value) => string.IsNullOrWhiteSpace(value) ? "" : value.Trim().Split('\\').Last().Split('@')[0].ToLowerInvariant();
+    public static string TicketUser(string value) => NormalizeAccount(value);
     public static string TicketOwner(ClaimsPrincipal user) => user.FindFirst("ticket_owner")?.Value ?? user.Identity!.Name!;
     public static string KeyHash(string key) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
     public static string Canonical(string value) => value.Trim().ToUpperInvariant();

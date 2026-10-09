@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Пост охраны — Белый код</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            transition: background-color 0.4s ease, color 0.4s ease;
+        }
+
+        /* Default Standby Mode: Pitch Black */
+        body.standby {
+            background-color: #000000;
+            color: #222222;
+        }
+
+        /* Active Alert Mode: Brilliant Pure White */
+        body.alert {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            width: 100%;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .standby-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+        .status-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background-color: #15803d;
+            box-shadow: 0 0 10px rgba(21, 128, 61, 0.4);
+            animation: pulse 2.5s infinite;
+        }
+        .status-text {
+            font-size: 14px;
+            font-weight: 500;
+            color: #334155;
+            letter-spacing: 0.5px;
+        }
+
+        /* Alert Display */
+        .alert-content {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        body.alert .standby-content {
+            display: none;
+        }
+        body.alert .alert-content {
+            display: flex;
+        }
+
+        .alert-title {
+            font-size: clamp(3.5rem, 9vw, 8rem);
+            font-weight: 900;
+            letter-spacing: 4px;
+            color: #000000;
+            text-transform: uppercase;
+            line-height: 1.1;
+            animation: flashText 1s infinite alternate;
+        }
+
+        .alert-cabinet {
+            font-size: clamp(2.5rem, 6.5vw, 6rem);
+            font-weight: 800;
+            color: #000000;
+            background: #f1f5f9;
+            padding: 12px 36px;
+            border-radius: 20px;
+            border: 4px solid #000000;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+        }
+
+        .alert-meta {
+            font-size: clamp(1.2rem, 3vw, 2.5rem);
+            font-weight: 700;
+            color: #1e293b;
+            margin-top: 10px;
+        }
+
+        .alert-timer {
+            font-size: clamp(1rem, 2vw, 1.6rem);
+            font-weight: 700;
+            color: #dc2626;
+            background: #fee2e2;
+            padding: 6px 18px;
+            border-radius: 12px;
+            border: 2px solid #ef4444;
+            margin-top: 6px;
+        }
+
+        .btn-acknowledge {
+            margin-top: 30px;
+            padding: 18px 48px;
+            font-size: clamp(1.2rem, 2.5vw, 2rem);
+            font-weight: 800;
+            text-transform: uppercase;
+            background-color: #000000;
+            color: #ffffff;
+            border: 3px solid #000000;
+            border-radius: 16px;
+            cursor: pointer;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+        .btn-acknowledge:hover {
+            transform: scale(1.05);
+            background-color: #1e293b;
+        }
+        .btn-acknowledge:active {
+            transform: scale(0.98);
+        }
+
+        /* Top Bar Controls */
+        .top-controls {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            display: flex;
+            gap: 10px;
+        }
+        .ctrl-btn {
+            background: transparent;
+            border: 1px solid #334155;
+            color: #64748b;
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        body.alert .ctrl-btn {
+            border-color: #cbd5e1;
+            color: #64748b;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+        @keyframes popIn {
+            0% { transform: scale(0.9); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes flashText {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.02); }
+        }
+    </style>
+</head>
+<body class="standby">
+    <div class="top-controls">
+        <button class="ctrl-btn" id="btnFullscreen" onclick="toggleFullscreen()">⛶ Полный экран</button>
+    </div>
+
+    <div class="container">
+        <!-- Standby View -->
+        <div class="standby-content" id="standbyView">
+            <div class="status-dot"></div>
+            <div class="status-text">Пост охраны · Дежурный режим активен</div>
+        </div>
+
+        <!-- Alert View -->
+        <div class="alert-content" id="alertView">
+            <div class="alert-title">КОД БЕЛЫЙ!!!</div>
+            <div class="alert-cabinet" id="roomNumber">КАБИНЕТ № --</div>
+            <div class="alert-meta" id="alertMeta">Филиал: -- · Время: --:--</div>
+            <div class="alert-timer" id="alertTimer">Автосброс через: 10:00</div>
+            <button class="btn-acknowledge" id="btnAck" onclick="acknowledgeAlert()">✓ Принято / Сброс тревоги</button>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let isAlertActive = false;
+        let countdownTimer = null;
+        let remainingSeconds = 600;
+
+        function updateTimerDisplay() {
+            const m = Math.floor(Math.max(0, remainingSeconds) / 60);
+            const s = Math.max(0, remainingSeconds) % 60;
+            const timerEl = document.getElementById('alertTimer');
+            if (timerEl) {
+                timerEl.innerText = 'Автосброс тревоги через: ' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+            }
+        }
+
+        function setAlert(active, cabinet, branch, time, secondsLeft = 600) {
+            isAlertActive = active;
+            clearInterval(countdownTimer);
+            if (active) {
+                document.body.classList.remove('standby');
+                document.body.classList.add('alert');
+                document.getElementById('roomNumber').innerText = 'КАБИНЕТ № ' + (cabinet || 'Не указан');
+                document.getElementById('alertMeta').innerText = 'Филиал: ' + (branch || 'Главный') + ' · Время: ' + (time || '');
+
+                remainingSeconds = (secondsLeft && secondsLeft > 0) ? secondsLeft : 600;
+                updateTimerDisplay();
+
+                countdownTimer = setInterval(() => {
+                    remainingSeconds--;
+                    updateTimerDisplay();
+                    if (remainingSeconds <= 0) {
+                        clearInterval(countdownTimer);
+                        acknowledgeAlert();
+                    }
+                }, 1000);
+            } else {
+                document.body.classList.remove('alert');
+                document.body.classList.add('standby');
+            }
+        }
+
+        async function acknowledgeAlert() {
+            clearInterval(countdownTimer);
+            try {
+                await fetch('/api/guard/white-reset', { method: 'POST' });
+            } catch (e) {
+                console.error(e);
+            }
+            setAlert(false);
+        }
+
+        function connectSSE() {
+            if (eventSource) eventSource.close();
+            eventSource = new EventSource('/api/guard/white-events');
+
+            eventSource.addEventListener('state', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data && data.Active) {
+                        setAlert(true, data.Cabinet, data.BranchName, data.Time, data.RemainingSeconds);
+                    } else {
+                        setAlert(false);
+                    }
+                } catch (err) { console.error(err); }
+            });
+
+            eventSource.addEventListener('alert', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data) setAlert(true, data.Cabinet, data.BranchName, data.Time, data.RemainingSeconds || 600);
+                } catch (err) { console.error(err); }
+            });
+
+            eventSource.addEventListener('reset', () => {
+                setAlert(false);
+            });
+
+            eventSource.onerror = () => {
+                console.warn('SSE connection lost, reconnecting in 3s...');
+                eventSource.close();
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        // Initial check and start
+        connectSSE();
+
+        // Polling fallback every 5 seconds just in case
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/guard/white-state');
+                if (res.ok) {
+                    const st = await res.json();
+                    if (st.Active && !isAlertActive) {
+                        setAlert(true, st.Cabinet, st.BranchName, st.Time, st.RemainingSeconds);
+                    } else if (!st.Active && isAlertActive) {
+                        setAlert(false);
+                    }
+                }
+            } catch (e) {}
+        }, 5000);
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+        }
+    </script>
+</body>
+</html>

@@ -7,7 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace PixelHelper;
-public sealed record ClientNotice(string Text, string Sender = "", int DurationSeconds = 30, int? ChatPeerId = null) { [System.Text.Json.Serialization.JsonIgnore] internal PetState? LocalAnimation { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal string? UrgentKey { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal long? UrgentMessageId { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal DateTime? ExpiresAt { get; init; } }
+public sealed record ClientNotice(string Text, string Sender = "", int DurationSeconds = 30, int? ChatPeerId = null) { [System.Text.Json.Serialization.JsonIgnore] internal PetState? LocalAnimation { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal string? UrgentKey { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal long? UrgentMessageId { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal DateTime? ExpiresAt { get; init; } [System.Text.Json.Serialization.JsonIgnore] internal bool IsDiskAlert { get; init; } }
 public sealed record SuperAdminButton(int Id, string Title, string Message, string Target, int DurationSeconds, int OrderIndex, bool IsActive);
 public sealed record NoticeComputer(string MachineName, bool IsOnline);
 public sealed class SuperAdminWindow : Window
@@ -17,8 +17,10 @@ public sealed class SuperAdminWindow : Window
     private readonly StackPanel panel = new() { Margin = new Thickness(16) };
     private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 8) };
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    public SuperAdminWindow(Settings settings)
+    private readonly PetWindow? petWindow;
+    public SuperAdminWindow(Settings settings, PetWindow? petWindow = null)
     {
+        this.petWindow = petWindow;
         Title = "Кнопки супер админа"; Width = 560; Height = 660; MinWidth = 440; MinHeight = 540;
         WindowStartupLocation = WindowStartupLocation.CenterScreen; ShowInTaskbar = false; Topmost = true;
         Background = (Brush)new BrushConverter().ConvertFromString("#F8FAFC")!; FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"); Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -76,7 +78,59 @@ public sealed class SuperAdminWindow : Window
         void Apply(SuperAdminButton b) { text.Text = b.Message; all.IsChecked = b.Target == "all"; duration.Text = b.DurationSeconds.ToString(); }
         foreach (var b in buttons) { var button = PetWindow.MakeButton(b.Title); button.Width = 230; button.Height = 44; button.Margin = new Thickness(0, 0, 6, 6); button.Click += (_, _) => Apply(b); templates.Children.Add(button); }
         Apply(buttons[0]);
-        var send = PetWindow.MakeButton("Отправить сообщение"); send.Margin = new Thickness(0, 10, 0, 0); panel.Children.Add(send); panel.Children.Add(status);
+        var send = PetWindow.MakeButton("Отправить сообщение"); send.Margin = new Thickness(0, 10, 0, 0); panel.Children.Add(send);
+
+        // Emergency Codes Testing and Reset
+        panel.Children.Add(new Separator { Margin = new Thickness(0, 18, 0, 14) });
+        panel.Children.Add(new TextBlock { Text = "🧪 Тестирование экстренных кодов", FontSize = 18, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+        panel.Children.Add(new TextBlock { Text = "Безопасная проверка: тревога, масштабирование робота и блокировка экрана отрабатывают только на этом ПК.", Foreground = (Brush)new BrushConverter().ConvertFromString("#64748B")!, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
+
+        var testWrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var testList = new (string Title, string Code)[]
+        {
+            ("🔴 Тест «Код красный»", "CODE_RED"),
+            ("⚫ Тест «Код чёрный»", "CODE_BLACK"),
+            ("🟠 Тест «Код оранжевый»", "CODE_ORANGE"),
+            ("🟡 Тест «Код жёлтый»", "CODE_YELLOW"),
+            ("🔵 Тест «Код синий»", "CODE_BLUE"),
+            ("🌸 Тест «Код розовый»", "CODE_PINK")
+        };
+        foreach (var item in testList)
+        {
+            var btn = PetWindow.MakeButton(item.Title);
+            btn.Width = 240;
+            btn.Height = 40;
+            btn.Margin = new Thickness(0, 0, 8, 8);
+            btn.Click += (_, _) =>
+            {
+                petWindow?.RunEmergencyTest(item.Code);
+                status.Text = $"Запущена локальная проверка {item.Title}.";
+            };
+            testWrap.Children.Add(btn);
+        }
+        panel.Children.Add(testWrap);
+
+        var cancelAlert = PetWindow.MakeButton("🛑 Сбросить / Отбой тревоги");
+        cancelAlert.Background = (Brush)new BrushConverter().ConvertFromString("#BE123C")!;
+        cancelAlert.Foreground = Brushes.White;
+        cancelAlert.Height = 44;
+        cancelAlert.Margin = new Thickness(0, 4, 0, 8);
+        cancelAlert.Click += async (_, _) =>
+        {
+            petWindow?.CancelActiveEmergency(isTest: false);
+            try
+            {
+                await CallAsync<JsonElement>("settings/emergency/cancel", HttpMethod.Post);
+                status.Text = "Сигнал отбоя тревоги передан на сервер. Оповещения сняты на всех ПК.";
+            }
+            catch (Exception ex)
+            {
+                status.Text = "Локально тревога сброшена. " + ex.Message;
+            }
+        };
+        panel.Children.Add(cancelAlert);
+        panel.Children.Add(status);
+
         send.Click += async (_, _) =>
         {
             send.IsEnabled = false;

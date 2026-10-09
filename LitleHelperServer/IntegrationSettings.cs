@@ -9,7 +9,8 @@ public record TelegramOptions(bool Enabled = false, string BotToken = "", string
     bool ManagementEnabled = false, string DirectoryLogin = "", string DirectoryPassword = "", string IdAttribute = "physicalDeliveryOfficeName");
 public record TelegramUpdate(bool Enabled, string? BotToken, string ChatId, int ThreadId = 0, bool ClearBotToken = false,
     bool ManagementEnabled = false, string DirectoryLogin = "", string? DirectoryPassword = null, string IdAttribute = "physicalDeliveryOfficeName", bool ClearDirectoryPassword = false);
-public record AdOptions(bool Enabled = false, string Host = "", int Port = 636, string Domain = "", string NetbiosDomain = "", string BaseDn = "", string CaCertificate = "");
+public record AdOptions(bool Enabled = false, string Host = "", int Port = 636, string Domain = "", string NetbiosDomain = "", string BaseDn = "", string CaCertificate = "", string AdminUser = "", string AdminPassword = "");
+public record AdUpdate(bool Enabled, string Host, int Port, string Domain, string NetbiosDomain, string BaseDn, string CaCertificate = "", string AdminUser = "", string? AdminPassword = null, bool ClearAdminPassword = false);
 public record GlpiImportOptions(bool Enabled = false, Dictionary<int,int>? LocationBranches = null);
 public record CartridgeOptions(bool Enabled = true, string ApiKey = "");
 public class SpecialistDepartmentConfig
@@ -53,7 +54,19 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
     private Stored ReadStored() => File.Exists(PathName) ? JsonSerializer.Deserialize<Stored>(File.ReadAllText(PathName))! : new(new(), new());
     public TelegramOptions Telegram() { lock (gate) { var value = ReadStored().Telegram; return value with { BotToken = value.BotToken.Length == 0 ? "" : protector.Unprotect(value.BotToken), DirectoryPassword = value.DirectoryPassword.Length == 0 ? "" : protector.Unprotect(value.DirectoryPassword) }; } }
     public object TelegramView() { var v = Telegram(); return new { v.Enabled, v.ChatId, v.ThreadId, v.ManagementEnabled, v.DirectoryLogin, v.IdAttribute, hasBotToken = v.BotToken.Length > 0, hasDirectoryPassword = v.DirectoryPassword.Length > 0 }; }
-    public AdOptions Ad() { lock (gate) return ReadStored().Ad; }
+    public AdOptions Ad()
+    {
+        lock (gate)
+        {
+            var value = ReadStored().Ad;
+            return value with { AdminPassword = value.AdminPassword.Length == 0 ? "" : protector.Unprotect(value.AdminPassword) };
+        }
+    }
+    public object AdView()
+    {
+        var v = Ad();
+        return new { v.Enabled, v.Host, v.Port, v.Domain, v.NetbiosDomain, v.BaseDn, v.CaCertificate, v.AdminUser, hasAdminPassword = v.AdminPassword.Length > 0 };
+    }
     private void Write(Stored value)
     {
         string path = Path.GetFullPath(PathName); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -76,9 +89,10 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
             Write(old with { Telegram = new(update.Enabled, token, update.ChatId, update.ThreadId, update.ManagementEnabled, update.DirectoryLogin.Trim(), password, update.IdAttribute) });
         }
     }
-    public void SaveAd(AdOptions update)
+    public void SaveAd(AdUpdate update)
     {
         if (update.Port is < 1 or > 65535 || update.Host.Length > 253 || update.Domain.Length > 150 || update.NetbiosDomain.Length > 30 || update.BaseDn.Length > 1000 || update.CaCertificate.Length > 30000 ||
+            update.AdminUser.Length > 256 || update.AdminPassword?.Length > 256 ||
             (update.Host.Length > 0 && Uri.CheckHostName(update.Host) == UriHostNameType.Unknown) ||
             (update.Domain.Length > 0 && !Regex.IsMatch(update.Domain, @"^[a-zA-Z0-9.-]+$")) ||
             (update.NetbiosDomain.Length > 0 && !Regex.IsMatch(update.NetbiosDomain, @"^[a-zA-Z0-9_-]+$")) || update.BaseDn.Contains('\0'))
@@ -89,6 +103,13 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
             try { var roots = new X509Certificate2Collection(); roots.ImportFromPem(update.CaCertificate); if (roots.Count == 0) throw new ArgumentException(); }
             catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or ArgumentException) { throw new ArgumentException("Укажите сертификат центра сертификации в PEM-формате."); }
         }
-        lock (gate) Write(ReadStored() with { Ad = update with { Host = update.Host.Trim(), Domain = update.Domain.Trim().ToLowerInvariant(), NetbiosDomain = update.NetbiosDomain.Trim() } });
+        lock (gate)
+        {
+            var old = ReadStored();
+            string pwd = update.ClearAdminPassword ? "" : string.IsNullOrEmpty(update.AdminPassword) ? old.Ad.AdminPassword : protector.Protect(update.AdminPassword);
+            var updated = new AdOptions(update.Enabled, update.Host.Trim(), update.Port, update.Domain.Trim().ToLowerInvariant(), update.NetbiosDomain.Trim(), update.BaseDn, update.CaCertificate, update.AdminUser.Trim(), pwd);
+            Write(old with { Ad = updated });
+        }
     }
+    public void SaveAd(AdOptions update) => SaveAd(new AdUpdate(update.Enabled, update.Host, update.Port, update.Domain, update.NetbiosDomain, update.BaseDn, update.CaCertificate, update.AdminUser, update.AdminPassword));
 }

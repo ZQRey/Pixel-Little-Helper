@@ -7,13 +7,24 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace PixelHelper;
 
 public sealed class PetWindow : Window
 {
-    private const double SpriteLeft = 202, SpriteTop = 286, Scale = 2;
+    private const double SpriteLeft = 202, SpriteTopNormal = 286, SpriteTopMenu = 152, Scale = 2;
+    private double currentSpriteTop = SpriteTopNormal;
+    private double SpriteTop => currentSpriteTop;
+
+    private void SetSpriteTop(double top)
+    {
+        if (Math.Abs(currentSpriteTop - top) < 0.001) return;
+        currentSpriteTop = top;
+        Canvas.SetTop(robot, top);
+        ClearRegions();
+    }
     private readonly Canvas canvas = new();
     private readonly Image robot = new() { Width = 96, Height = 96, Cursor = Cursors.Hand };
     private readonly List<FrameworkElement> bubbles = [];
@@ -24,6 +35,12 @@ public sealed class PetWindow : Window
     private readonly Sprites sprites = new();
     private readonly FaceBadges faceBadges = new();
     private readonly Image faceOverlay = new() { Width = 30, Height = 22, IsHitTestVisible = false };
+    private readonly Image hatOverlay = new() { Width = 32, Height = 32, IsHitTestVisible = false };
+    private BitmapSource? birthdayHatSource;
+    private readonly List<DateTime> rapidClicks = new();
+    private DateTime lastSixtyMinReaction = DateTime.MinValue;
+    private CompanionChatWindow? companionWindow;
+    private DiskSpaceMonitor? diskMonitor;
     private FaceNoticeStatus faceStatus = FaceNoticeStatus.None;
     private DateTime faceStatusUntil;
     private int faceHeartFrame;
@@ -68,14 +85,21 @@ public sealed class PetWindow : Window
     private bool dizzyDrag;
     private readonly Queue<ClientNotice> announcements = new();
     private readonly Queue<(string Key, DateTime Expires)> dances = new();
+    private readonly Queue<(string Key, DateTime Expires)> pets = new();
     private bool urgentVisible;
     private readonly HashSet<string> urgentShown = new();
     private DateTime announcementUntil;
+    private DateTime lastOneEightyMinNotice;
+    private nint lastViewerHwnd;
+    private DateTime imageReactionPhase1Until;
+    private DateTime imageReactionPhase2Until;
+    private bool imageReactionActive;
     private readonly bool diagnostics;
+    private bool isOneEightyMinNoticeActive;
     private bool expanded = true;
     internal int AnimatedFrames { get; private set; }
-    private double RobotX => expanded ? SpriteLeft : 0;
-    private double RobotY => expanded ? SpriteTop : 0;
+    private double RobotX => expanded ? Canvas.GetLeft(robot) : 0;
+    private double RobotY => expanded ? Canvas.GetTop(robot) : 0;
 
     public PetWindow(bool diagnostics = false)
     {
@@ -111,9 +135,25 @@ public sealed class PetWindow : Window
         }
         RenderOptions.SetBitmapScalingMode(robot, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetBitmapScalingMode(faceOverlay, BitmapScalingMode.NearestNeighbor);
+        RenderOptions.SetBitmapScalingMode(hatOverlay, BitmapScalingMode.NearestNeighbor);
         Canvas.SetLeft(robot, SpriteLeft); Canvas.SetTop(robot, SpriteTop);
         canvas.Children.Add(robot);
         canvas.Children.Add(faceOverlay);
+        canvas.Children.Add(hatOverlay);
+        LoadBirthdayHat();
+        if (!diagnostics)
+        {
+            diskMonitor = new DiskSpaceMonitor(freePercent =>
+            {
+                Dispatcher.InvokeAsync(() =>
+                {
+                    React(PetState.Notice, 5);
+                    ReceiveAnnouncement(new ClientNotice(Loc.T("DiskSpaceLowWarning"), "PixelHelper", 30) { IsDiskAlert = true });
+                });
+            });
+            diskMonitor.Start();
+            Task.Run(() => CompanionStorage.AutoPurge());
+        }
         robot.MouseEnter += (_, _) => Wake();
         robot.MouseLeftButtonDown += MouseDownRobot;
         robot.MouseMove += MouseMoveRobot;
@@ -133,6 +173,7 @@ public sealed class PetWindow : Window
             var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
             quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
             menu.Items.Add(quiet);
+            AddSoundProfileMenu(menu);
             var exit = new MenuItem { Header = "Выход" };
             exit.Click += (_, _) => Close();
             menu.Items.Add(exit);
@@ -172,22 +213,48 @@ public sealed class PetWindow : Window
         inactivity.Tick += (_, _) =>
         {
             AdvanceAnnouncements();
-            if (!menuOpen && !mouseDown && !IsTemporary(state) && dances.Count > 0 && ChatDesktop.Unlocked()) { var dance = dances.Dequeue(); if (dance.Expires > DateTime.UtcNow) { settings.ChatCommandsShown.Add(dance.Key); settings.ChatCommandsShown = settings.ChatCommandsShown.TakeLast(1000).ToList(); if (!diagnostics) settings.Save(); React(PetState.Dance, 6); } }
+            if (!menuOpen && !mouseDown && !IsAnimationLocked && dances.Count > 0 && ChatDesktop.Unlocked()) { var dance = dances.Dequeue(); if (dance.Expires > DateTime.UtcNow) { settings.ChatCommandsShown.Add(dance.Key); settings.ChatCommandsShown = settings.ChatCommandsShown.TakeLast(1000).ToList(); if (!diagnostics) settings.Save(); TriggerDance(6); } }
+            if (!menuOpen && !mouseDown && !IsAnimationLocked && pets.Count > 0 && ChatDesktop.Unlocked()) { var pet = pets.Dequeue(); if (pet.Expires > DateTime.UtcNow) { settings.ChatCommandsShown.Add(pet.Key); settings.ChatCommandsShown = settings.ChatCommandsShown.TakeLast(1000).ToList(); if (!diagnostics) settings.Save(); TriggerPet(6); } }
             AdvanceEmoji();
             ApplyDisplayMode();
             bool exposed = IsExposed();
             if (exposed && !animation.IsEnabled) animation.Start();
             else if (!exposed && animation.IsEnabled) animation.Stop();
-            if (!emojiAnimating && !menuOpen && !mouseDown && ticket == null && state != PetState.Charging &&
+            if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state != PetState.Charging &&
+                (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(180) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(180)) &&
+                DateTime.UtcNow - lastOneEightyMinNotice >= TimeSpan.FromMinutes(30))
+            {
+                lastOneEightyMinNotice = DateTime.UtcNow;
+                isOneEightyMinNoticeActive = true;
+                React(PetState.Joy, 5);
+                ShowNotice(Loc.T("NoticePapaSaidSmart"));
+            }
+            else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state != PetState.Charging &&
+                (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(60) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(60)) &&
+                DateTime.UtcNow - lastSixtyMinReaction >= TimeSpan.FromMinutes(15))
+            {
+                lastSixtyMinReaction = DateTime.UtcNow;
+                if (string.Equals(settings.LicenseStatus, "Suspended", StringComparison.OrdinalIgnoreCase))
+                {
+                    React(PetState.Notice, 5);
+                    ShowNotice(Loc.T("NoticeTemporaryHelper"));
+                }
+                else
+                {
+                    React(PetState.Flower, 5);
+                }
+            }
+            else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state != PetState.Charging &&
                 (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(30) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(30)))
             {
                 if (state != PetState.Workout) ChangeState(PetState.Workout);
             }
-            else if (!emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn or PetState.Workout or PetState.Charging) &&
+            else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn or PetState.Workout or PetState.Charging) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
             {
                 React(PetState.Yawn, 2);
             }
+            CheckImageViewer();
         };
         refresh.Tick += async (_, _) => await RefreshActions();
         outsideClick.Tick += (_, _) =>
@@ -250,6 +317,12 @@ public sealed class PetWindow : Window
         }
         return 0;
     }
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        try { source?.RemoveHook(Hook); } catch { }
+        ClearRegions();
+    }
     private void ApplyDisplayMode()
     {
         if (handle == 0) return;
@@ -299,6 +372,19 @@ public sealed class PetWindow : Window
             ReceiveAnnouncement(new ClientNotice($"Кабинет обновлен: {trimmed}", "PixelHelper", 8) { LocalAnimation = PetState.Joy });
         }
     }
+    private void HandleLiquidationProtocol()
+    {
+        try
+        {
+            ChangeState(PetState.Cry);
+            var farewell = new FarewellLiquidationWindow();
+            farewell.Show();
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }
     private void AddDisplayMenu(ContextMenu menu)
     {
         var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
@@ -317,6 +403,7 @@ public sealed class PetWindow : Window
                 hub.EmergencyAlertReceived += notice => Dispatcher.InvokeAsync(() => HandleEmergencyAlert(notice));
                 hub.EmergencyAlertCanceled += () => Dispatcher.InvokeAsync(HandleEmergencyAlertCanceled);
                 hub.RoomUpdated += room => Dispatcher.InvokeAsync(() => HandleRoomUpdated(room));
+                hub.LiquidationReceived += () => Dispatcher.InvokeAsync(HandleLiquidationProtocol);
                 hub.Connecting += () => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (!mouseDown && !menuOpen && !IsTemporary(state) && state != PetState.Drag) ChangeState(PetState.Charging);
@@ -331,7 +418,7 @@ public sealed class PetWindow : Window
                     if (hub.IsOnline)
                     {
                         actions = buttons.Where(b => b.IsActive).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
-                            .Select(b => new AssistantAction(b.Id.ToString(), b.Title, b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
+                            .Select(b => new AssistantAction(b.Id.ToString(), b.GetLocalizedTitle(Loc.Code), b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
                         if (menuOpen && !announcementVisible) ShowMenu();
                     }
                 }));
@@ -362,6 +449,7 @@ public sealed class PetWindow : Window
         if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
         var reconnect = new MenuItem { Header = "Повторить подключение", IsEnabled = !reconnecting }; reconnect.Click += async (_, _) => await ReconnectAsync(); menu.Items.Add(reconnect);
         AddDisplayMenu(menu);
+        AddSoundProfileMenu(menu);
         var langMenu = new MenuItem { Header = Loc.T("TrayLanguage") };
         foreach (var lang in Enum.GetValues<AppLanguage>())
         {
@@ -371,6 +459,35 @@ public sealed class PetWindow : Window
         }
         menu.Items.Add(langMenu);
         menu.Items.Add(new Separator()); var exit = new MenuItem { Header = Loc.T("TrayExit") }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
+    }
+    private void AddSoundProfileMenu(ContextMenu menu)
+    {
+        var soundMenu = new MenuItem { Header = Loc.T("TraySoundProfile") };
+        string[] profiles = ["Sound", "VoiceAdult", "VoiceChild"];
+        foreach (var prof in profiles)
+        {
+            string labelKey = prof switch
+            {
+                "VoiceAdult" => "SoundProfileVoiceAdult",
+                "VoiceChild" => "SoundProfileVoiceChild",
+                _ => "SoundProfileDefault"
+            };
+            var item = new MenuItem
+            {
+                Header = Loc.T(labelKey),
+                IsCheckable = true,
+                IsChecked = string.Equals(settings.SoundProfile, prof, StringComparison.OrdinalIgnoreCase)
+            };
+            item.Click += (_, _) =>
+            {
+                settings.SoundProfile = prof;
+                settings.Save();
+                SoundManager.PlayPreview(prof, SoundEvent.MessageReceived);
+                React(PetState.Twirl, 1.5);
+            };
+            soundMenu.Items.Add(item);
+        }
+        menu.Items.Add(soundMenu);
     }
     private static int GetHeadBob(PetState s, int f) => s switch
     {
@@ -397,8 +514,8 @@ public sealed class PetWindow : Window
         if (badge != null)
         {
             int bob = GetHeadBob(state, frame);
-            Canvas.SetLeft(faceOverlay, SpriteLeft + 16 * Scale);
-            Canvas.SetTop(faceOverlay, SpriteTop + (12 + bob) * Scale);
+            Canvas.SetLeft(faceOverlay, RobotX + 16 * Scale);
+            Canvas.SetTop(faceOverlay, RobotY + (12 + bob) * Scale);
             faceOverlay.Source = badge;
             faceOverlay.Visibility = Visibility.Visible;
         }
@@ -414,6 +531,13 @@ public sealed class PetWindow : Window
         faceHeartFrame = 0;
         Wake();
         SoundManager.Play(SoundEvent.MessageReceived, settings);
+        Draw();
+    }
+    internal void ShowFaceMail(double seconds = 4)
+    {
+        faceStatus = FaceNoticeStatus.Mail;
+        faceStatusUntil = DateTime.UtcNow.AddSeconds(seconds);
+        Wake();
         Draw();
     }
     internal void ShowConnectionResult(bool connected)
@@ -432,6 +556,7 @@ public sealed class PetWindow : Window
         current = sprites.Get(state, frame);
         robot.Source = current.Image;
         UpdateFaceOverlay();
+        UpdateBirthdayHat();
         UpdateRegion();
     }
     private void UpdateRegion()
@@ -452,6 +577,8 @@ public sealed class PetWindow : Window
         foreach (var region in regionCache.Values) NativeMethods.FreeRegion(region);
         regionCache.Clear();
     }
+    public bool IsInterruptibleIdleAnimation => state is PetState.Yawn or PetState.Workout or PetState.Flower || (isOneEightyMinNoticeActive && state == PetState.Joy);
+    public bool IsAnimationLocked => IsTemporary(state) && !IsInterruptibleIdleAnimation && DateTime.UtcNow < actionUntil;
     private void ChangeState(PetState value)
     {
         if (state == value) return;
@@ -459,7 +586,7 @@ public sealed class PetWindow : Window
         animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Twirl ? 150 : value == PetState.Offended ? 450 : value == PetState.Sleep ? 250 : 100);
         Draw();
     }
-    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance or PetState.Facepalm;
+    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance or PetState.Facepalm or PetState.Flower or PetState.Cry or PetState.TurnBack or PetState.Shy or PetState.PetCat or PetState.PetDog;
     internal void React(PetState value, double seconds)
     { emojiAnimating = false; actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
     private bool EmojiAllowed => settings.EmojiReactions && !settings.ChatDoNotDisturb && !settings.AssistantHidden && IsVisible && (diagnostics || ChatDesktop.Unlocked());
@@ -513,16 +640,39 @@ public sealed class PetWindow : Window
         if (!EmojiAllowed) { emojiReactions.Clear(); if (emojiAnimating) { emojiAnimating = false; ChangeState(emojiRestore); } return; }
         if (mouseDown || state == PetState.Busy || state == PetState.Drag) { emojiAnimating = false; return; }
         if (emojiAnimating) { if (now < emojiUntil) return; emojiAnimating = false; ChangeState(emojiRestore); }
-        if (IsTemporary(state) && now < actionUntil) return;
+        if (IsAnimationLocked) return;
         var emoji = emojiReactions.Take(now); if (emoji == null) return;
         emojiRestore = state == PetState.Sleep ? PetState.Sleep : PetState.Idle;
         emojiAnimating = true; emojiUntil = now.AddSeconds(emoji.Seconds); ChangeState(emoji.State);
         if (!animation.IsEnabled && IsExposed()) animation.Start();
     }
-    private void Wake() { lastInteraction = DateTime.UtcNow; if (state is PetState.Sleep or PetState.Yawn or PetState.Workout) React(PetState.Wake, 2); }
+    internal void Wake()
+    {
+        lastInteraction = DateTime.UtcNow;
+        if (state is PetState.Sleep or PetState.Yawn or PetState.Workout or PetState.Flower || (isOneEightyMinNoticeActive && state == PetState.Joy))
+        {
+            if (isOneEightyMinNoticeActive) { isOneEightyMinNoticeActive = false; HideBubbles(); }
+            actionUntil = DateTime.MinValue;
+            React(PetState.Wake, 2);
+        }
+    }
     private void FollowCursor()
     {
-        if (state is not (PetState.Idle or PetState.LookLeft or PetState.LookRight or PetState.LookUp or PetState.LookDown) || mouseDown || !IsVisible || !NativeMethods.GetCursorPos(out var cursor)) return;
+        if (IsInterruptibleIdleAnimation && !mouseDown && IsVisible)
+        {
+            if (NativeMethods.GetCursorPos(out var curPos))
+            {
+                var pt = PointFromScreen(new Point(curPos.X, curPos.Y));
+                double distance = Math.Abs(pt.X - RobotX - 48) + Math.Abs(pt.Y - RobotY - 40);
+                if (distance < 280)
+                {
+                    actionUntil = DateTime.MinValue;
+                    if (isOneEightyMinNoticeActive) { isOneEightyMinNoticeActive = false; HideBubbles(); }
+                    Wake();
+                }
+            }
+        }
+        if (IsAnimationLocked || state is not (PetState.Idle or PetState.LookLeft or PetState.LookRight or PetState.LookUp or PetState.LookDown) || mouseDown || !IsVisible || !NativeMethods.GetCursorPos(out var cursor)) return;
         var point = PointFromScreen(new Point(cursor.X, cursor.Y));
         double dx = point.X - RobotX - 48, dy = point.Y - RobotY - 40;
         ChangeState(Math.Abs(dx) + Math.Abs(dy) > 250 || Math.Abs(dx) + Math.Abs(dy) < 20 ? PetState.Idle : Math.Abs(dx) > Math.Abs(dy) ? (dx < 0 ? PetState.LookLeft : PetState.LookRight) : (dy < 0 ? PetState.LookUp : PetState.LookDown));
@@ -541,20 +691,27 @@ public sealed class PetWindow : Window
     internal Point DiagnosticPoint(double x, double y) => PointToScreen(new Point(x - (expanded ? 0 : SpriteLeft), y - (expanded ? 0 : SpriteTop)));
     private void Expand()
     {
+        SetSpriteTop(SpriteTopNormal);
         if (expanded) return;
         double anchorX = Left, anchorY = Top;
         expanded = true;
         canvas.RenderTransform = Transform.Identity;
-        Left = anchorX - SpriteLeft; Top = anchorY - SpriteTop;
+        Canvas.SetLeft(robot, SpriteLeft);
+        Canvas.SetTop(robot, SpriteTopNormal);
+        Left = anchorX - SpriteLeft; Top = anchorY - SpriteTopNormal;
         Width = 500; Height = 400;
         ClearRegions(); UpdateRegion();
     }
     private void Collapse()
     {
         if (!expanded || bubbles.Count > 0) return;
-        double anchorX = Left + SpriteLeft, anchorY = Top + SpriteTop;
+        double anchorX = Left + Canvas.GetLeft(robot);
+        double anchorY = Top + Canvas.GetTop(robot);
         expanded = false;
+        SetSpriteTop(SpriteTopNormal);
         canvas.RenderTransform = new TranslateTransform(-SpriteLeft, -SpriteTop);
+        Canvas.SetLeft(robot, SpriteLeft);
+        Canvas.SetTop(robot, SpriteTopNormal);
         Width = 96; Height = 96;
         Left = anchorX; Top = anchorY;
         ClearRegions(); UpdateRegion();
@@ -562,6 +719,8 @@ public sealed class PetWindow : Window
     private void MouseDownRobot(object sender, MouseButtonEventArgs e)
     {
         wokeOnDown = state == PetState.Sleep;
+        if (isOneEightyMinNoticeActive) { isOneEightyMinNoticeActive = false; HideBubbles(); }
+        if (IsInterruptibleIdleAnimation) actionUntil = DateTime.MinValue;
         Wake(); mouseDown = true; dragging = false;
         dizzyDrag = false; rapidDistance = 0; motionStarted = DateTime.UtcNow;
         NativeMethods.GetCursorPos(out dragStart);
@@ -591,6 +750,23 @@ public sealed class PetWindow : Window
         if (!mouseDown) return;
         bool wasDragged = dragging;
         EndDrag();
+        if (!wasDragged)
+        {
+            rapidClicks.Add(DateTime.UtcNow);
+            rapidClicks.RemoveAll(t => DateTime.UtcNow - t > TimeSpan.FromSeconds(3.5));
+            if (rapidClicks.Count == 3) React(PetState.Surprise, 1);
+            else if (rapidClicks.Count == 6) React(PetState.Laugh, 1);
+            else if (rapidClicks.Count == 9) React(PetState.Think, 1);
+            else if (rapidClicks.Count >= 10)
+            {
+                rapidClicks.Clear();
+                React(PetState.Joy, 3);
+                ShowFaceHeart(3);
+                OpenCompanionChat();
+                e.Handled = true;
+                return;
+            }
+        }
         var clickReaction=robotClicks.Register(DateTime.UtcNow,wasDragged);
         if (clickReaction!=RobotClickReaction.None)
         {
@@ -698,32 +874,214 @@ public sealed class PetWindow : Window
     }
     private void ShowMenu()
     {
-        HideBubbles(); Expand(); menuOpen = true; Wake();
+        HideBubbles();
+        double anchorX = expanded ? Left + Canvas.GetLeft(robot) : Left;
+        double anchorY = expanded ? Top + Canvas.GetTop(robot) : Top;
+        menuOpen = true;
+        Wake();
+
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
         if (!diagnostics) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
         if (!diagnostics && hub?.IsOnline == true) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
-        int rows = (visibleActions.Count + 1) / 2;
-        for (int i = 0; i < visibleActions.Count; i++)
+        int count = visibleActions.Count;
+
+        const double winW = 500;
+        const double winH = 400;
+        const double btnWidth = 142;
+        const double btnHeight = 42;
+        var bounds = NativeMethods.DesktopBounds();
+
+        double spaceTop = anchorY - bounds.Top;
+        double spaceBottom = bounds.Bottom - (anchorY + 96);
+        double spaceLeft = anchorX - bounds.Left;
+        double spaceRight = bounds.Right - (anchorX + 96);
+
+        bool nearBottom = !diagnostics && spaceBottom < 170;
+        bool nearTop = !diagnostics && spaceTop < 170;
+        bool nearRight = !diagnostics && spaceRight < 180;
+        bool nearLeft = !diagnostics && spaceLeft < 180;
+
+        double robotCanvasX = SpriteLeft;
+        double robotCanvasY = SpriteTopMenu;
+
+        if (nearRight)
         {
-            var action = visibleActions[i]; var button = MakeButton(action.Title);
+            robotCanvasX = Math.Clamp(winW - 96 - Math.Max(0, spaceRight), SpriteLeft, winW - 96 - 8);
+        }
+        else if (nearLeft)
+        {
+            robotCanvasX = Math.Clamp(Math.Max(0, spaceLeft), 8, SpriteLeft);
+        }
+
+        if (nearBottom)
+        {
+            robotCanvasY = Math.Clamp(winH - 96 - Math.Max(0, spaceBottom), SpriteTopMenu, winH - 96 - 8);
+        }
+        else if (nearTop)
+        {
+            robotCanvasY = Math.Clamp(Math.Max(0, spaceTop), 8, SpriteTopMenu);
+        }
+
+        expanded = true;
+        canvas.RenderTransform = Transform.Identity;
+        Canvas.SetLeft(robot, robotCanvasX);
+        Canvas.SetTop(robot, robotCanvasY);
+        Left = anchorX - robotCanvasX;
+        Top = anchorY - robotCanvasY;
+        Width = winW;
+        Height = winH;
+
+        double rcX = robotCanvasX + 48;
+        double rcY = robotCanvasY + 48;
+
+        List<Point> buttonPositions = new();
+
+        if (count > 0)
+        {
+            if (nearBottom && nearRight)
+            {
+                // Bottom-right corner (near tray/taskbar): upper-left quadrant arc
+                double startAngle = 105.0 * Math.PI / 180.0;
+                double endAngle = 180.0 * Math.PI / 180.0;
+                for (int i = 0; i < count; i++)
+                {
+                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
+                    double angle = startAngle + t * (endAngle - startAngle);
+                    double rx = count > 4 && (i % 2 == 1) ? 200 : 160;
+                    double ry = count > 4 && (i % 2 == 1) ? 175 : 135;
+                    double targetX = rcX - rx * Math.Abs(Math.Cos(angle));
+                    double targetY = rcY - ry * Math.Sin(angle);
+                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+            else if (nearBottom && nearLeft)
+            {
+                // Bottom-left corner: upper-right quadrant arc
+                double startAngle = 0.0 * Math.PI / 180.0;
+                double endAngle = 75.0 * Math.PI / 180.0;
+                for (int i = 0; i < count; i++)
+                {
+                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
+                    double angle = startAngle + t * (endAngle - startAngle);
+                    double rx = count > 4 && (i % 2 == 1) ? 200 : 160;
+                    double ry = count > 4 && (i % 2 == 1) ? 175 : 135;
+                    double targetX = rcX + rx * Math.Cos(angle);
+                    double targetY = rcY - ry * Math.Sin(angle);
+                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+            else if (nearBottom)
+            {
+                // Along taskbar at bottom: upper semicircle arc above the robot (angles PI down to 0)
+                for (int i = 0; i < count; i++)
+                {
+                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
+                    double angle = Math.PI * (1.0 - t);
+                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
+                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
+                    double targetX = rcX - rx * Math.Cos(angle);
+                    double targetY = rcY - ry * Math.Sin(angle);
+                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+            else if (nearTop)
+            {
+                // Along top screen edge: lower semicircle arc below the robot
+                for (int i = 0; i < count; i++)
+                {
+                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
+                    double angle = Math.PI * (1.0 + t);
+                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
+                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
+                    double targetX = rcX - rx * Math.Cos(angle);
+                    double targetY = rcY - ry * Math.Sin(angle);
+                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+            else if (nearRight)
+            {
+                // Near right screen edge: left semicircle arc
+                for (int i = 0; i < count; i++)
+                {
+                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
+                    double angle = Math.PI * 0.5 + t * Math.PI;
+                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
+                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
+                    double targetX = rcX - rx * Math.Sin(angle);
+                    double targetY = rcY + ry * Math.Cos(angle);
+                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+            else if (nearLeft)
+            {
+                // Near left screen edge: right semicircle arc
+                for (int i = 0; i < count; i++)
+                {
+                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
+                    double angle = -Math.PI * 0.5 + t * Math.PI;
+                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
+                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
+                    double targetX = rcX + rx * Math.Cos(angle);
+                    double targetY = rcY + ry * Math.Sin(angle);
+                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+            else
+            {
+                // Center: full ellipse around the robot starting from left
+                const double radiusX = 175;
+                const double radiusY = 135;
+                for (int i = 0; i < count; i++)
+                {
+                    double angle = 2.0 * Math.PI * i / count;
+                    double deltaX = -radiusX * Math.Cos(angle);
+                    double deltaY = -radiusY * Math.Sin(angle);
+                    double posX = Math.Clamp(rcX + deltaX - btnWidth / 2.0, 8, winW - btnWidth - 8);
+                    double posY = Math.Clamp(rcY + deltaY - btnHeight / 2.0, 8, winH - btnHeight - 8);
+                    buttonPositions.Add(new Point(posX, posY));
+                }
+            }
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            var pos = buttonPositions[i];
+            var action = visibleActions[i];
+            var button = MakeButton(action.Title);
             button.ToolTip = action.Title;
             button.Click += async (_, _) => await ExecuteAction(action);
-            AddBubble(button, 54 + (i % 2) * 202, 278 - rows * 44 + (i / 2) * 44, 190, 40);
+            AddBubble(button, pos.X, pos.Y, btnWidth, btnHeight);
         }
-        KeepMenuVisible(); UpdateRegion();
-        previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();
+
+        ClearRegions();
+        UpdateRegion();
+        previousLeft = NativeMethods.GetAsyncKeyState(1) < 0;
+        outsideClick.Start();
     }
     private void OpenSuperAdminWindow()
     {
         if (hub?.IsOnline != true || !superAvailable) return;
         if (superWindow != null) { superWindow.Activate(); return; }
-        try { superWindow = new SuperAdminWindow(settings) { Owner = this, Topmost = true }; superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); superWindow.Activate(); }
+        try { superWindow = new SuperAdminWindow(settings, this) { Owner = this, Topmost = true }; superWindow.Closed += (_, _) => superWindow = null; superWindow.Show(); superWindow.Activate(); }
         catch (Exception ex) { Settings.Log(ex); ShowNotice(ex.Message); }
     }
     private void HideBubbles()
     {
         if (urgentVisible) { urgentVisible = false; Topmost = settings.DisplayMode == "Topmost"; NativeMethods.SetWindowPos(handle, Topmost ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE); ApplyDisplayMode(); if (settings.AssistantHidden) { Hide(); animation.Stop(); } }
-        localNoticeAnimation=null;
+        localNoticeAnimation = null;
+        isOneEightyMinNoticeActive = false;
         announcementVisible = false;
         outsideClick.Stop();
         foreach (var bubble in bubbles) canvas.Children.Remove(bubble);
@@ -767,13 +1125,25 @@ public sealed class PetWindow : Window
         panel.Children.Add(new TextBlock { Text = notice.Sender, FontWeight = FontWeights.Bold, Foreground = (Brush)new BrushConverter().ConvertFromString("#4F46E5")!, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 6) });
         var scroll = new ScrollViewer { Content = new TextBlock { Text = notice.Text, TextWrapping = TextWrapping.Wrap, Foreground = (Brush)new BrushConverter().ConvertFromString("#1E293B")!, FontSize = 14 }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Grid.SetRow(scroll, 1); panel.Children.Add(scroll);
-        var close = MakeButton("Закрыть"); close.Margin = new Thickness(0, 8, 0, 0); close.Click += (_, _) => { HideBubbles(); ShowNextAnnouncement(); }; Grid.SetRow(close, 2); panel.Children.Add(close);
-        if (notice.ChatPeerId is int peer)
+        var close = MakeButton(Loc.T("Close")); close.Margin = new Thickness(0, 8, 0, 0); close.Click += (_, _) => { HideBubbles(); ShowNextAnnouncement(); }; Grid.SetRow(close, 2); panel.Children.Add(close);
+        if (notice.IsDiskAlert)
+        {
+            var diskTicket = MakeButton(Loc.T("DiskSpaceLowTicketTitle"));
+            diskTicket.Margin = new Thickness(0, 8, 8, 0);
+            diskTicket.Click += (_, _) => { HideBubbles(); OpenLowDiskTicket(); };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+            panel.Children.Remove(close);
+            buttons.Children.Add(diskTicket);
+            buttons.Children.Add(close);
+            Grid.SetRow(buttons, 2);
+            panel.Children.Add(buttons);
+        }
+        else if (notice.ChatPeerId is int peer)
         {
             close.Content = "Открыть переписку";
             close.Click += async (_, _) => await OpenMessengerAsync(peer);
         }
-        if (notice.UrgentMessageId is long messageId)
+        else if (notice.UrgentMessageId is long messageId)
         {
             close.Content = "Открыть чат";
             var acknowledge = MakeButton("Прочитано"); acknowledge.Margin = new Thickness(0,8,0,0);
@@ -809,7 +1179,8 @@ public sealed class PetWindow : Window
         {
             ReceiveAnnouncement(new ClientNotice($"У вас есть непрочитанные сообщения ({unreadChatsCount}) ✉️ Нажмите, чтобы открыть", "Мессенджер", 15) { ChatPeerId = 0 });
         }
-        React(PetState.Dance, 5);
+        React(PetState.Celebrate, 5);
+        ShowFaceMail(5);
         if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
         {
             SoundManager.Play(SoundEvent.MessageReceived, settings);
@@ -822,7 +1193,7 @@ public sealed class PetWindow : Window
         refreshingChat = true;
         try
         {
-            if (chatUserId != messenger.UserId) { chatUserId = messenger.UserId; chatUnread.Clear(); urgentShown.Clear(); dances.Clear(); }
+            if (chatUserId != messenger.UserId) { chatUserId = messenger.UserId; chatUnread.Clear(); urgentShown.Clear(); dances.Clear(); pets.Clear(); }
             await Task.Delay(1500, lifetime.Token); // Coalesce a burst of messages and read receipts.
             var users = await messenger.UsersAsync();
             if (ChatDesktop.Unlocked()) foreach (var urgent in await messenger.UrgentAsync())
@@ -831,15 +1202,20 @@ public sealed class PetWindow : Window
                 if (urgent.Command == "dance" && !settings.ChatCommandsShown.Contains(key) && !dances.Any(d => d.Key == key) && dances.Count < 50)
                 {
                     dances.Enqueue((key, urgent.SentAt.ToUniversalTime().AddHours(1)));
-                    React(PetState.Dance, 5);
-                    SoundManager.Play(SoundEvent.Dance, settings);
+                    TriggerDance(5);
+                }
+                if (urgent.Command == "pet" && !settings.ChatCommandsShown.Contains(key) && !pets.Any(d => d.Key == key) && pets.Count < 50)
+                {
+                    pets.Enqueue((key, urgent.SentAt.ToUniversalTime().AddHours(1)));
+                    TriggerPet(6);
                 }
                 if (!urgent.IsUrgent || string.IsNullOrWhiteSpace(urgent.Body)) continue;
                 if (urgentShown.Contains(key) || settings.UrgentNotificationsShown.Contains(key) || announcements.Count >= 10) continue;
                 var sender = users.FirstOrDefault(u => u.Id == urgent.SenderId);
                 ReceiveAnnouncement(new ClientNotice("СРОЧНО · " + HelperEmojis.PlainText(urgent.Body[..Math.Min(970,urgent.Body.Length)]), sender?.FullName ?? "Сотрудник", 60, urgent.RecipientId < 0 ? urgent.RecipientId : urgent.SenderId) { UrgentMessageId = urgent.Id, UrgentKey = key, ExpiresAt = urgent.SentAt.ToUniversalTime().AddHours(1) });
                 urgentShown.Add(key);
-                React(PetState.Dance, 5);
+                React(PetState.Celebrate, 5);
+                ShowFaceMail(5);
                 if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { SoundManager.Play(SoundEvent.Urgent, settings); lastChatSound = DateTime.UtcNow; }
             }
             int prevUnread = unreadChatsCount;
@@ -874,7 +1250,8 @@ public sealed class PetWindow : Window
             }
             if (notifications.Count > 0)
             {
-                React(PetState.Dance, 5);
+                React(PetState.Joy, 4);
+                ShowFaceMail(4);
                 bool play = settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
                 if (settings.ChatWindowsNotifications && tray != null)
                 {
@@ -902,6 +1279,16 @@ public sealed class PetWindow : Window
         catch (Exception ex) { Settings.Log(ex); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
         finally { refreshing = false; }
     }
+    internal void ShowForbiddenNotice()
+    {
+        Wake();
+        HideBubbles();
+        string msg = Loc.T("FeatureForbiddenByParent");
+        ShowNotice(msg);
+        React(PetState.Sad, 4);
+        SoundManager.Play(SoundEvent.MessageReceived, settings);
+    }
+
     private Task ExecuteAction(AssistantAction action)
     {
         HideBubbles(); Wake(); actionUntil = DateTime.UtcNow.AddSeconds(2); ChangeState(PetState.Action);
@@ -909,13 +1296,18 @@ public sealed class PetWindow : Window
         {
             switch (action.Type)
             {
+                case "companion":
+                    if (!settings.AllowCompanionChat) { ShowForbiddenNotice(); return Task.CompletedTask; }
+                    OpenCompanionChat(); break;
+                case "forbidden" or "disabled":
+                    ShowForbiddenNotice(); return Task.CompletedTask;
                 case "messenger": return OpenMessengerAsync();
                 case "emergency": return OpenEmergencyDialogAsync();
                 case "exit": Application.Current.Shutdown(); break;
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
                     if (ticket != null) return Task.CompletedTask;
-                    ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Owner = this, Topmost = true, Left = Left - 135, Top = Math.Max(SystemParameters.VirtualScreenTop, Top - 410) };
+                    ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Owner = this, Topmost = true };
                     ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
                     ticket.Submitting += () => ChangeState(PetState.Busy);
                     ticket.SubmissionFailed += () => React(PetState.Error, 4);
@@ -940,7 +1332,11 @@ public sealed class PetWindow : Window
                     }
                     else Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); break;
                 case "run_command":
-                    if (!settings.AllowRemoteCommands) throw new InvalidOperationException("Команды сервера отключены. Администратор может включить allowRemoteCommands в config.json.");
+                    if (!settings.AllowRemoteCommands)
+                    {
+                        ShowForbiddenNotice();
+                        return Task.CompletedTask;
+                    }
                     string executable = action.Target ?? "";
                     string[] arguments = action.Arguments ?? [];
                     if (executable.TrimStart().StartsWith('{'))
@@ -995,20 +1391,105 @@ public sealed class PetWindow : Window
 
     private void HandleEmergencyAlert(EmergencyAlertNotice notice)
     {
+        StartEmergencySequence(notice, isTest: false);
+    }
+
+    internal void StartEmergencySequence(EmergencyAlertNotice notice, bool isTest = false)
+    {
         Wake();
         try { activeAlertWindow?.Close(); } catch { }
         SoundManager.Play(SoundEvent.Urgent, settings);
+
+        string code = notice.Code.ToUpperInvariant();
+        bool isHighAlert = code is "CODE_RED" or "CODE_BLACK" or "CODE_ORANGE";
+        bool isPinkAlert = code is "CODE_PINK";
+
+        if (isHighAlert || isPinkAlert)
+        {
+            if (isPinkAlert)
+            {
+                // Panic animation: rounded eyes, panic notice
+                React(PetState.Surprise, 3.5);
+                ShowNotice(isTest
+                    ? "🌸 ТЕСТ: КОД РОЗОВЫЙ (ПАНИКА / ПОИСК РЕБЁНКА)!"
+                    : "🌸 ТРЕВОГА! КОД РОЗОВЫЙ! ПОИСК И СПАСЕНИЕ РЕБЁНКА!");
+            }
+            else
+            {
+                // Alarm animation: alarm state, siren, urgency notice
+                React(PetState.Surprise, 3.5);
+                ShowNotice(isTest
+                    ? $"🚨 ТЕСТОВАЯ ТРЕВОГА! АКТИВАЦИЯ: {notice.Title}"
+                    : $"🚨 ВНИМАНИЕ! ТРЕВОГА! {notice.Title}");
+            }
+
+            var preTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3.5) };
+            preTimer.Tick += (_, _) =>
+            {
+                preTimer.Stop();
+                ShowEmergencyAlertWindow(notice, isTest);
+            };
+            preTimer.Start();
+        }
+        else
+        {
+            ShowEmergencyAlertWindow(notice, isTest);
+        }
+    }
+
+    private void ShowEmergencyAlertWindow(EmergencyAlertNotice notice, bool isTest)
+    {
+        Wake();
+        try { activeAlertWindow?.Close(); } catch { }
         var window = new EmergencyAlertWindow(notice, accepted =>
         {
-            if (notice.CallId.HasValue && hub != null)
+            if (notice.CallId.HasValue && hub != null && !isTest)
             {
                 _ = hub.AcknowledgeSpecialistCallAsync(notice.CallId.Value, accepted);
             }
-        });
+        }, isTest, onCancel: () => CancelActiveEmergency(isTest));
+
         activeAlertWindow = window;
         window.Closed += (_, _) => { if (ReferenceEquals(activeAlertWindow, window)) activeAlertWindow = null; };
         window.Show();
         window.Activate();
+    }
+
+    internal void RunEmergencyTest(string code)
+    {
+        string upper = code.Trim().ToUpperInvariant();
+        string title = upper switch
+        {
+            "CODE_RED" => "ТЕСТ: КОД КРАСНЫЙ (Пожар / Задымление)",
+            "CODE_BLACK" => "ТЕСТ: КОД ЧЁРНЫЙ (Теракт / Угроза взрыва)",
+            "CODE_ORANGE" => "ТЕСТ: КОД ОРАНЖЕВЫЙ (Опасные вещества / Авария)",
+            "CODE_YELLOW" => "ТЕСТ: КОД ЖЁЛТЫЙ (Чрезвычайная ситуация)",
+            "CODE_BLUE" => "ТЕСТ: КОД СИНИЙ (Остановка сердца / СЛР)",
+            "CODE_WHITE" => "ТЕСТ: КОД БЕЛЫЙ (Агрессия / Нападение)",
+            "CODE_PINK" => "ТЕСТ: КОД РОЗОВЫЙ (Потеря / Похищение ребёнка)",
+            _ => $"ТЕСТ: {upper}"
+        };
+        string notes = "Проверка алгоритма действий и блокировки экрана на ПК администратора. Реальная рассылка по сети и в Telegram отключена.";
+        var testNotice = new EmergencyAlertNotice(upper, title, settings.TicketRoom ?? "Кабинет IT", notes, null, null, null, upper == "CODE_PINK" ? 60 : 45, null, null);
+        StartEmergencySequence(testNotice, isTest: true);
+    }
+
+    internal void CancelActiveEmergency(bool isTest = false)
+    {
+        Wake();
+        if (activeAlertWindow != null)
+        {
+            try { activeAlertWindow.Close(); } catch { }
+            activeAlertWindow = null;
+        }
+        if (!isTest && hub?.IsOnline == true)
+        {
+            _ = hub.CancelEmergencyAlertAsync();
+        }
+        ShowNotice(isTest
+            ? "🟢 Тестирование завершено: оповещение сброшено"
+            : "🟢 Отбой тревоги: оповещение сброшено");
+        React(PetState.Joy, 3);
     }
 
     private void HandleEmergencyAlertCanceled()
@@ -1022,6 +1503,180 @@ public sealed class PetWindow : Window
             React(PetState.Joy, 3);
         }
     }
+
+    private async void TriggerDance(int durationSec = 5)
+    {
+        SoundManager.Play(SoundEvent.Dance, settings);
+        int delay = SoundManager.GetDanceLeadDelayMs(settings.SoundProfile);
+        if (delay > 0)
+        {
+            await Task.Delay(delay);
+        }
+        React(PetState.Dance, durationSec);
+    }
+
+    private static readonly Random petRandom = new();
+    internal void TriggerPet(int durationSec = 6)
+    {
+        bool isCat = petRandom.Next(2) == 0;
+        PetState selected = isCat ? PetState.PetCat : PetState.PetDog;
+        React(selected, durationSec);
+        ShowNotice(Loc.T(isCat ? "NoticePetCat" : "NoticePetDog"));
+        SoundManager.Play(SoundEvent.MessageReceived, settings);
+    }
+
+    private void LoadBirthdayHat()
+    {
+        try
+        {
+            string baseDir = AppContext.BaseDirectory;
+            string hatPath = Path.Combine(baseDir, "Assets", "hat_birthday.png");
+            if (!File.Exists(hatPath))
+            {
+                string? cur = baseDir;
+                while (cur != null)
+                {
+                    string candidate = Path.Combine(cur, "Assets", "hat_birthday.png");
+                    if (File.Exists(candidate)) { hatPath = candidate; break; }
+                    string candidate2 = Path.Combine(cur, "LitleHelperClient", "Assets", "hat_birthday.png");
+                    if (File.Exists(candidate2)) { hatPath = candidate2; break; }
+                    cur = Path.GetDirectoryName(cur);
+                }
+            }
+            if (File.Exists(hatPath))
+            {
+                var uri = new Uri(hatPath, UriKind.Absolute);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = uri;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                birthdayHatSource = bmp;
+            }
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }
+
+    private void UpdateBirthdayHat()
+    {
+        DateTime now = DateTime.Now;
+        bool isBirthday = (now.Month == 10 && now.Day == 1) ||
+                          (now.Month == settings.FirstStartupDate.Month && now.Day == settings.FirstStartupDate.Day);
+        if (isBirthday && birthdayHatSource != null)
+        {
+            int bob = GetHeadBob(state, frame);
+            Canvas.SetLeft(hatOverlay, SpriteLeft + 8 * Scale);
+            Canvas.SetTop(hatOverlay, SpriteTop + (bob - 4) * Scale);
+            hatOverlay.Source = birthdayHatSource;
+            hatOverlay.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            hatOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    internal void OpenCompanionChat()
+    {
+        if (!settings.AllowCompanionChat)
+        {
+            ShowForbiddenNotice();
+            return;
+        }
+        if (companionWindow != null && companionWindow.IsVisible)
+        {
+            companionWindow.Activate();
+            companionWindow.Focus();
+            return;
+        }
+        companionWindow = new CompanionChatWindow(settings, sprites, (reactState, sec) =>
+        {
+            React(reactState, sec);
+        });
+        companionWindow.Closed += (_, _) => { companionWindow = null; };
+        companionWindow.Show();
+        companionWindow.Activate();
+    }
+
+    private void OpenLowDiskTicket()
+    {
+        if (hub?.IsOnline != true)
+        {
+            ShowNotice(Loc.T("DiskSpaceLowWarning"));
+            return;
+        }
+        if (ticket != null) return;
+        ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token, Loc.T("DiskSpaceLowTicketTitle"))
+        {
+            Owner = this,
+            Topmost = true
+        };
+        ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
+        ticket.Submitting += () => ChangeState(PetState.Busy);
+        ticket.SubmissionFailed += () => React(PetState.Error, 4);
+        ticket.TicketCreated += _ => React(PetState.Success, 4);
+        ticket.Closed += (_, _) => { ticket = null; Wake(); if (state == PetState.Busy) ChangeState(PetState.Idle); };
+        ticket.Show();
+        ticket.Activate();
+        ticket.Focus();
+    }
+
+    private void CheckImageViewer()
+    {
+        if (diagnostics || mouseDown || menuOpen || ticket != null || state == PetState.Charging || (IsAnimationLocked && !imageReactionActive)) return;
+
+        if (imageReactionActive)
+        {
+            if (DateTime.UtcNow < imageReactionPhase1Until)
+            {
+                return;
+            }
+            if (DateTime.UtcNow < imageReactionPhase2Until)
+            {
+                if (state != PetState.Shy)
+                {
+                    ChangeState(PetState.Shy);
+                    actionUntil = imageReactionPhase2Until;
+                }
+                return;
+            }
+
+            imageReactionActive = false;
+            if (state == PetState.Shy)
+            {
+                ChangeState(PetState.Idle);
+            }
+            return;
+        }
+
+        var fg = NativeMethods.GetForegroundWindow();
+        if (fg == 0 || fg == handle) return;
+
+        if (fg != lastViewerHwnd)
+        {
+            double robotCenterX = Left + RobotX + 48;
+            if (NativeMethods.IsImageViewerWindow(fg, robotCenterX, out bool isFullscreen, out bool onLeft))
+            {
+                lastViewerHwnd = fg;
+                imageReactionActive = true;
+                imageReactionPhase1Until = DateTime.UtcNow.AddSeconds(5);
+                imageReactionPhase2Until = DateTime.UtcNow.AddSeconds(10);
+                actionUntil = imageReactionPhase2Until;
+
+                PetState turnState = isFullscreen ? PetState.TurnBack : (onLeft ? PetState.LookLeft : PetState.LookRight);
+                ChangeState(turnState);
+            }
+            else
+            {
+                lastViewerHwnd = 0;
+            }
+        }
+    }
 }
+
 
 

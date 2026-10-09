@@ -13,6 +13,7 @@ public sealed class Settings
     public string ClientToken { get; set; } = "";
     public bool EnableAdministrativeCommands { get; set; } = true;
     public bool AllowRemoteCommands { get; set; }
+    public bool AllowCompanionChat { get; set; } = true;
     public int? TicketBranchId { get; set; }
     public string TicketRoom { get; set; } = "";
     public bool ChatSound { get; set; } = true;
@@ -26,6 +27,8 @@ public sealed class Settings
     public bool ChatComicNotifications { get; set; } = true;
     public string DisplayMode { get; set; } = "Background";
     public string Language { get; set; } = "ru";
+    public string LicenseStatus { get; set; } = "Licensed";
+    public DateTime FirstStartupDate { get; set; } = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
     public bool AssistantHidden { get; set; }
     public bool EmojiReactions { get; set; } = true;
     public bool IncomingEmojiReactions { get; set; } = true;

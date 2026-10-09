@@ -84,7 +84,8 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
         if(Context.Items.TryGetValue("typing",out var last)&&last is DateTime date&&DateTime.UtcNow-date<TimeSpan.FromSeconds(2))return;
         Context.Items["typing"]=DateTime.UtcNow;var me=await Messenger.UserAsync(db,Context.User!);await ChatExtras.ValidatePeer(db,me.Id,peer);
         var users=peer<0?await db.ChatGroupMembers.Where(m=>m.GroupId==-peer&&m.UserId!=me.Id&&!db.ChatGroupRestrictions.Any(r=>r.GroupId==m.GroupId&&r.UserId==m.UserId&&r.EndsAt>DateTime.UtcNow)).Select(m=>m.UserId).ToListAsync():new List<int>{peer};
-        await Clients.Groups(users.Select(u=>"Chat:"+u)).SendAsync("Typing",new {peer=peer<0?peer:me.Id,userId=me.Id,me.FullName,until=DateTime.UtcNow.AddSeconds(5)});
+        bool isPsychologist = string.Equals(me.Role, Roles.Psychologist, StringComparison.OrdinalIgnoreCase) || me.FullName.Contains("психолог", StringComparison.OrdinalIgnoreCase) || me.Username.Contains("psychologist", StringComparison.OrdinalIgnoreCase) || me.Username.Contains("psiholog", StringComparison.OrdinalIgnoreCase);
+        await Clients.Groups(users.Select(u=>"Chat:"+u)).SendAsync("Typing",new {peer=peer<0?peer:me.Id,userId=me.Id,me.FullName,isPsychologist,until=DateTime.UtcNow.AddSeconds(5)});
     }
     public override async Task OnConnectedAsync()
     {
@@ -158,6 +159,20 @@ public static class Messenger
         }
         if (user.Username != identity.Username && await db.Users.AnyAsync(u => u.Id != user.Id && u.Username == identity.Username, cancellation)) throw new UnauthorizedAccessException("Новое имя AD занято другой учётной записью в панели.");
         user.Username = identity.Username; user.FullName = identity.FullName; user.AdObjectId = identity.ObjectId;
+
+        if (user.BranchId == null && user.Role != Roles.SuperAdmin && user.Role != Roles.Admin)
+        {
+            string norm = Security.NormalizeAccount(user.Username);
+            var comps = await db.Computers.Where(c => c.BranchId != null && c.CurrentUser != null).ToListAsync(cancellation);
+            var comp = comps.FirstOrDefault(c => Security.NormalizeAccount(c.CurrentUser) == norm);
+            if (comp?.BranchId != null)
+            {
+                user.BranchId = comp.BranchId;
+                if (string.IsNullOrWhiteSpace(user.Room) && !string.IsNullOrWhiteSpace(comp.Room))
+                    user.Room = comp.Room;
+            }
+        }
+
         await db.SaveChangesAsync(cancellation); return user;
     }
     public static void MapMessenger(this WebApplication app)

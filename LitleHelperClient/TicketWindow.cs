@@ -16,7 +16,7 @@ internal sealed class TicketWindow : Window
     internal event Action? SubmissionFailed;
     private static Brush Brush(string hex) => (Brush)new BrushConverter().ConvertFromString(hex)!;
 
-    internal TicketWindow(Func<string, string, int?, string, CancellationToken, Task<int>> createTicket, Func<CancellationToken, Task<List<TicketBranch>>> getBranches, Settings settings, CancellationToken token)
+    internal TicketWindow(Func<string, string, int?, string, CancellationToken, Task<int>> createTicket, Func<CancellationToken, Task<List<TicketBranch>>> getBranches, Settings settings, CancellationToken token, string initialDescription = "")
     {
         lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         Title = "Обращение в ИТ";
@@ -24,6 +24,14 @@ internal sealed class TicketWindow : Window
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = true; Background = Brushes.Transparent; ShowInTaskbar = false;
         Topmost = true;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        SourceInitialized += (_, _) =>
+        {
+            var work = SystemParameters.WorkArea;
+            Left = work.Left + (work.Width - Width) / 2;
+            Top = work.Top + (work.Height - Height) / 2;
+        };
+        PreviewKeyDown += (_, e) => { if (e.Key == System.Windows.Input.Key.Escape) Close(); };
 
         var card = new Border
         {
@@ -145,6 +153,7 @@ internal sealed class TicketWindow : Window
             Margin = new Thickness(0, 0, 0, 6)
         };
         panel.Children.Add(input);
+        if (!string.IsNullOrWhiteSpace(initialDescription)) input.Text = initialDescription;
 
         // Status text
         var status = new TextBlock

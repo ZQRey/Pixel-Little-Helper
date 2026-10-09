@@ -109,7 +109,7 @@ public static class TelegramManagementTests
             Check(settings.Telegram().DirectoryPassword == "AD-test-password", "blank directory password preserves stored credential");
             await using (var ldap = new MockAd())
             {
-                settings.SaveAd(new(true, "localhost", ldap.Port, "ad.test", "AD", "DC=ad,DC=test", ldap.Pem));
+                settings.SaveAd(new LitleHelperServer.AdUpdate(true, "localhost", ldap.Port, "ad.test", "AD", "DC=ad,DC=test", ldap.Pem));
                 var identity = await new TelegramDirectory(settings).FindAsync(123, CancellationToken.None);
                 Check(identity.Username == "alice@ad.test", "LDAPS directory mapping handles subordinate referrals");
             }

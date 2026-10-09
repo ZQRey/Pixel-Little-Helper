@@ -71,5 +71,29 @@ public sealed class ApiClient : IDisposable
         }, token);
         response.EnsureSuccessStatusCode();
     }
+    public async Task<(bool Success, string Message)> ChangeAdPasswordAsync(string username, string newPassword, CancellationToken token = default)
+    {
+        try
+        {
+            var uri = Endpoint("api/ad/change-password");
+            using var req = new HttpRequestMessage(HttpMethod.Post, uri);
+            if (!string.IsNullOrWhiteSpace(settings.ClientToken))
+            {
+                req.Headers.Add("X-Client-Key", settings.ClientToken);
+            }
+            req.Content = JsonContent.Create(new { username, newPassword });
+            using var resp = await client.SendAsync(req, token);
+            var content = await resp.Content.ReadAsStringAsync(token);
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(content) ? "{}" : content);
+            bool success = doc.RootElement.TryGetProperty("success", out var sProp) && sProp.GetBoolean();
+            string msg = doc.RootElement.TryGetProperty("message", out var mProp) ? mProp.GetString() ?? "" : "";
+            return (success, msg);
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+            return (false, "Не удалось связаться с сервером: " + ex.Message);
+        }
+    }
     public void Dispose() => client.Dispose();
 }

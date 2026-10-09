@@ -72,7 +72,7 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal string SignInStatus { get; private set; } = "Подключение под текущей учётной записью Windows…";
     internal event Action<ChatEntry>? MessageReceived;
     internal event Action? Changed;
-    internal event Action<int,string>? TypingReceived;
+    internal event Action<int,string,bool>? TypingReceived;
     internal async Task TypingAsync(int peer)
     {try{if(connection?.State==HubConnectionState.Connected)await connection.InvokeAsync("Typing",peer,lifetime.Token);}catch(Exception ex){Settings.Log(ex);}}
     internal async Task SetWindowOpenAsync(bool isOpen)
@@ -162,7 +162,7 @@ internal sealed class MessengerClient : IAsyncDisposable
                 connection.ServerTimeout=TimeSpan.FromSeconds(25); connection.HandshakeTimeout=TimeSpan.FromSeconds(10); connection.KeepAliveInterval=TimeSpan.FromSeconds(10);
                 connection.On<ChatEntry>("ChatMessage", message => MessageReceived?.Invoke(message));
                 connection.On("ChatChanged", () => Changed?.Invoke());
-                connection.On<JsonElement>("Typing",m=>TypingReceived?.Invoke(m.GetProperty("peer").GetInt32(),m.GetProperty("fullName").GetString()??""));
+                connection.On<JsonElement>("Typing",m=>TypingReceived?.Invoke(m.GetProperty("peer").GetInt32(),m.GetProperty("fullName").GetString()??"",m.TryGetProperty("isPsychologist",out var prop)&&prop.GetBoolean()));
                 connection.On<int>("MessengerSettingsUpdated", minutes =>
                 {
                     if (minutes >= 1 && minutes <= 1440)

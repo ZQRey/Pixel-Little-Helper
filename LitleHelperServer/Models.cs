@@ -5,8 +5,8 @@ namespace LitleHelperServer;
 
 public static class Roles
 {
-    public const string SuperAdmin = "SuperAdmin", Admin = "Admin", Operator = "Operator", User = "User";
-    public static readonly string[] All = [SuperAdmin, Admin, Operator, User];
+    public const string SuperAdmin = "SuperAdmin", Admin = "Admin", Operator = "Operator", Psychologist = "Psychologist", User = "User";
+    public static readonly string[] All = [SuperAdmin, Admin, Operator, Psychologist, User];
 }
 public class Computer
 {
@@ -37,6 +37,40 @@ public class ActionButton
     public int OrderIndex { get; set; }
     public bool IsActive { get; set; } = true;
     public string TargetGroup { get; set; } = "All";
+    public string Description { get; set; } = "";
+
+    [JsonIgnore]
+    public string TitleTranslationsJson { get; set; } = "{}";
+    [JsonIgnore]
+    public string DescriptionTranslationsJson { get; set; } = "{}";
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public Dictionary<string, string> TitleTranslations
+    {
+        get
+        {
+            try { return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(TitleTranslationsJson) ?? new(StringComparer.OrdinalIgnoreCase); }
+            catch { return new(StringComparer.OrdinalIgnoreCase); }
+        }
+        set
+        {
+            TitleTranslationsJson = System.Text.Json.JsonSerializer.Serialize(value ?? new Dictionary<string, string>());
+        }
+    }
+
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public Dictionary<string, string> DescriptionTranslations
+    {
+        get
+        {
+            try { return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(DescriptionTranslationsJson) ?? new(StringComparer.OrdinalIgnoreCase); }
+            catch { return new(StringComparer.OrdinalIgnoreCase); }
+        }
+        set
+        {
+            DescriptionTranslationsJson = System.Text.Json.JsonSerializer.Serialize(value ?? new Dictionary<string, string>());
+        }
+    }
 }
 public class PanelUser
 {

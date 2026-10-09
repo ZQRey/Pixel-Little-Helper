@@ -25,6 +25,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action<EmergencyAlertNotice>? EmergencyAlertReceived;
     public event Action? EmergencyAlertCanceled;
     public event Action<string>? RoomUpdated;
+    public event Action? LiquidationReceived;
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
@@ -62,6 +63,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On<EmergencyAlertNotice>("EmergencyAlertNotice", notice => EmergencyAlertReceived?.Invoke(notice));
         created.On("EmergencyAlertCanceled", () => EmergencyAlertCanceled?.Invoke());
         created.On<string>("ClientRoomUpdated", room => RoomUpdated?.Invoke(room));
+        created.On("OnLiquidationProtocol", () => LiquidationReceived?.Invoke());
         created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
         created.Closed += _ => { if (ReferenceEquals(connection,created)) Offline(); return Task.CompletedTask; };
 
@@ -194,6 +196,16 @@ public sealed class HubConnectionService : IAsyncDisposable
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
         await connection.InvokeAsync("TriggerEmergencyAlert", code, cabinet, notes, imageBase64, department, token);
+    }
+
+    public async Task CancelEmergencyAlertAsync(CancellationToken token = default)
+    {
+        if (!IsOnline) return;
+        try
+        {
+            await connection.InvokeAsync("CancelEmergencyAlert", token);
+        }
+        catch { }
     }
 
     public async Task<List<string>> GetSpecialistDepartmentsAsync(CancellationToken token = default)

@@ -137,17 +137,33 @@ public static class PanelApi
         app.MapGet("/api/buttons", async (HelperDb db) => Results.Ok(await db.Buttons.AsNoTracking().OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).ToListAsync())).RequireAuthorization("buttons.manage");
         app.MapPost("/api/buttons", async (ActionButton button, ClaimsPrincipal p, HelperDb db) =>
         {
-            ValidateButton(button, p); button.Id = 0; db.Buttons.Add(button); await db.SaveChangesAsync(); return Results.Ok(button);
+            ValidateButton(button, p);
+            var (tTrans, dTrans) = ButtonTranslationService.Translate(button.Title, button.Description, button.TitleTranslations, button.DescriptionTranslations);
+            button.TitleTranslations = tTrans;
+            button.DescriptionTranslations = dTrans;
+            button.Id = 0; db.Buttons.Add(button); await db.SaveChangesAsync(); return Results.Ok(button);
         }).RequireAuthorization("buttons.manage");
         app.MapPut("/api/buttons/{id:int}", async (int id, ActionButton button, ClaimsPrincipal p, HelperDb db) =>
         {
             ValidateButton(button, p); var old = await db.Buttons.FindAsync(id); if (old == null) return Results.NotFound();
+            var (tTrans, dTrans) = ButtonTranslationService.Translate(button.Title, button.Description, button.TitleTranslations, button.DescriptionTranslations);
             old.Title = button.Title; old.ActionType = button.ActionType; old.Payload = button.Payload; old.OrderIndex = button.OrderIndex;
             old.IsActive = button.IsActive; old.IconName = button.IconName; old.TargetGroup = button.TargetGroup;
+            old.Description = button.Description; old.TitleTranslations = tTrans; old.DescriptionTranslations = dTrans;
             await db.SaveChangesAsync(); return Results.Ok(old);
         }).RequireAuthorization("buttons.manage");
         app.MapDelete("/api/buttons/{id:int}", async (int id, HelperDb db) =>
         { var b = await db.Buttons.FindAsync(id); if (b == null) return Results.NotFound(); db.Remove(b); await db.SaveChangesAsync(); return Results.NoContent(); }).RequireAuthorization("buttons.manage");
+        app.MapPost("/api/buttons/{id:int}/toggle", async (int id, HelperDb db, IHubContext<HelperHub> hub) =>
+        {
+            var b = await db.Buttons.FindAsync(id);
+            if (b == null) return Results.NotFound();
+            b.IsActive = !b.IsActive;
+            await db.SaveChangesAsync();
+            var computers = await db.Computers.AsNoTracking().Where(c => c.IsOnline && c.ConnectionId != null).ToListAsync();
+            foreach (var c in computers) await hub.Clients.Client(c.ConnectionId!).SendAsync("OnButtonsUpdated", await HelperHub.Buttons(db, c));
+            return Results.Ok(new { id = b.Id, isActive = b.IsActive, notified = computers.Count });
+        }).RequireAuthorization("buttons.manage");
         app.MapPost("/api/buttons/apply", async (HelperDb db, IHubContext<HelperHub> hub) =>
         {
             var computers = await db.Computers.AsNoTracking().Where(c => c.IsOnline && c.ConnectionId != null).ToListAsync();
@@ -263,6 +279,13 @@ public static class PanelApi
             Branches.Require(await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name), ticket);
             await management.SetStatusAsync(ticket, request.Status, token); return Results.Ok(ticket);
         }).RequireAuthorization("tickets.manage");
+
+        app.MapPost("/api/license/liquidate", async (LiquidationRequest request, IHubContext<HelperHub> hubContext) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Code)) return Results.BadRequest(new { error = "Код ликвидации не указан" });
+            await hubContext.Clients.Group("AllAgents").SendAsync("OnLiquidationProtocol");
+            return Results.Ok(new { liquidated = true });
+        }).RequireAuthorization("Panel");
     }
     private static async Task ProtectLastSuper(HelperDb db, PanelUser user)
     {
@@ -281,7 +304,7 @@ public static class PanelApi
     private static void ValidateButton(ActionButton b, ClaimsPrincipal p)
     {
         if (string.IsNullOrWhiteSpace(b.Title) || b.Title.Length > 100 || b.Payload.Length > 8000 || b.IconName.Length > 50 || b.TargetGroup.Length > 120 || b.OrderIndex is < 0 or > 10000 ||
-            b.ActionType is not ("open_folder" or "open_url" or "run_command" or "ticket")) throw new ArgumentException("Неверные поля кнопки");
+            b.ActionType is not ("open_folder" or "open_url" or "run_command" or "ticket" or "companion")) throw new ArgumentException("Неверные поля кнопки");
         if (b.TargetGroup != "All" && !b.TargetGroup.StartsWith("domain:", StringComparison.OrdinalIgnoreCase) && !b.TargetGroup.StartsWith("pc:", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Группа: All, domain:DOMAIN или pc:PCNAME");
         if (b.ActionType == "run_command" && !Access.Can(p, "terminal.execute")) throw new UnauthorizedAccessException("Не выдано право настройки командных кнопок");
@@ -290,4 +313,5 @@ public static class PanelApi
     }
     public record TicketStatus(int Status);
     public record UpdateComputerLocationRequest(string? Room, int? BranchId);
+    public record LiquidationRequest(string Code);
 }

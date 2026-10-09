@@ -101,12 +101,15 @@ public static class Branches
 
         foreach (var u in users)
         {
-            if (u.Role is Roles.SuperAdmin or Roles.Admin && u.BranchId == null) continue;
-            string uname = u.Username.ToLowerInvariant();
+            // SuperAdmins and Admins have their branch configured strictly manually
+            if (u.Role is Roles.SuperAdmin or Roles.Admin) continue;
+
+            string uNorm = Security.NormalizeAccount(u.Username);
             var matchedPc = computers.FirstOrDefault(c =>
                 !string.IsNullOrWhiteSpace(c.CurrentUser) &&
-                (c.CurrentUser.Equals(uname, StringComparison.OrdinalIgnoreCase) ||
-                 Security.TicketUser(c.CurrentUser).Equals(uname, StringComparison.OrdinalIgnoreCase)));
+                (Security.NormalizeAccount(c.CurrentUser) == uNorm ||
+                 (!string.IsNullOrWhiteSpace(u.FullName) && !string.IsNullOrWhiteSpace(c.CurrentUserFullName) &&
+                  string.Equals(u.FullName.Trim(), c.CurrentUserFullName.Trim(), StringComparison.OrdinalIgnoreCase))));
 
             if (matchedPc != null)
             {
@@ -123,6 +126,35 @@ public static class Branches
                 {
                     matchedPc.Room = u.Room;
                 }
+            }
+        }
+
+        // Auto-create/import missing AD users from active computers that have a branch assigned
+        foreach (var c in computers)
+        {
+            if (string.IsNullOrWhiteSpace(c.CurrentUser) || c.BranchId == null) continue;
+            string cNorm = Security.NormalizeAccount(c.CurrentUser);
+            if (string.IsNullOrWhiteSpace(cNorm)) continue;
+
+            bool exists = users.Any(u => Security.NormalizeAccount(u.Username) == cNorm ||
+                (!string.IsNullOrWhiteSpace(u.FullName) && !string.IsNullOrWhiteSpace(c.CurrentUserFullName) &&
+                 string.Equals(u.FullName.Trim(), c.CurrentUserFullName.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+            if (!exists)
+            {
+                var newUser = new PanelUser
+                {
+                    Username = c.CurrentUser,
+                    FullName = !string.IsNullOrWhiteSpace(c.CurrentUserFullName) ? c.CurrentUserFullName.Trim() : c.CurrentUser,
+                    Role = Roles.User,
+                    BranchId = c.BranchId,
+                    Room = c.Room,
+                    IsActive = true,
+                    PasswordHash = "!AD"
+                };
+                db.Users.Add(newUser);
+                users.Add(newUser);
+                updatedUsers++;
             }
         }
 

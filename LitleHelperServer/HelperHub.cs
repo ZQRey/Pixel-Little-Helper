@@ -89,8 +89,12 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             c.BranchId = matchedBranch.Id;
             if (!string.IsNullOrWhiteSpace(c.CurrentUser))
             {
-                string ticketUser = Security.TicketUser(c.CurrentUser).ToLowerInvariant();
-                var user = await db.Users.FirstOrDefaultAsync(u => u.Username.ToLower() == ticketUser || u.Username.ToLower() == c.CurrentUser.ToLower());
+                string normUser = Security.NormalizeAccount(c.CurrentUser);
+                var allUsers = await db.Users.ToListAsync();
+                var user = allUsers.FirstOrDefault(u => Security.NormalizeAccount(u.Username) == normUser ||
+                    (!string.IsNullOrWhiteSpace(u.FullName) && !string.IsNullOrWhiteSpace(c.CurrentUserFullName) &&
+                     string.Equals(u.FullName.Trim(), c.CurrentUserFullName.Trim(), StringComparison.OrdinalIgnoreCase)));
+
                 if (user != null && user.Role != Roles.SuperAdmin && user.Role != Roles.Admin)
                 {
                     user.BranchId = matchedBranch.Id;
@@ -98,6 +102,20 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
                         c.Room = user.Room;
                     else if (!string.IsNullOrWhiteSpace(c.Room) && string.IsNullOrWhiteSpace(user.Room))
                         user.Room = c.Room;
+                }
+                else if (user == null && !string.IsNullOrWhiteSpace(normUser))
+                {
+                    user = new PanelUser
+                    {
+                        Username = c.CurrentUser,
+                        FullName = !string.IsNullOrWhiteSpace(c.CurrentUserFullName) ? c.CurrentUserFullName.Trim() : c.CurrentUser,
+                        Role = Roles.User,
+                        BranchId = matchedBranch.Id,
+                        Room = c.Room,
+                        IsActive = true,
+                        PasswordHash = "!AD"
+                    };
+                    db.Users.Add(user);
                 }
             }
         }
@@ -297,6 +315,18 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
                     await Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
             }
         }
+        else if (upperCode == "CODE_WHITE")
+        {
+            // CODE_WHITE is a quiet alarm for security guards only.
+            // Do NOT broadcast loud sirens/popups to regular staff desktops across the branch.
+            GuardWhiteService.TriggerAlert(activeCabinet, branch?.Name ?? "Главный корпус", DateTime.Now.ToString("HH:mm:ss"));
+            await Clients.Group("GuardWhite").SendAsync("CodeWhiteAlert", new
+            {
+                cabinet = activeCabinet,
+                branchName = branch?.Name ?? "Главный корпус",
+                time = DateTime.Now.ToString("HH:mm:ss")
+            });
+        }
         else
         {
             if (branch != null)
@@ -365,6 +395,12 @@ public class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, P
             }
             catch { }
         }
+    }
+
+    public async Task CancelEmergencyAlert()
+    {
+        await Clients.Group("AllAgents").SendAsync("EmergencyAlertCanceled");
+        await Clients.Group("PanelStaff").SendAsync("EmergencyAlertCanceled");
     }
 }
 

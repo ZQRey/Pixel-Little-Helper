@@ -28,7 +28,7 @@ if (args.FirstOrDefault() == "--ad-referrals")
     var settings = new LitleHelperServer.IntegrationSettings(configuration, new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider());
     try
     {
-        settings.SaveAd(new(true, "localhost", ldap.Port, "ad.test", "AD", "DC=ad,DC=test", ldap.Pem));
+        settings.SaveAd(new LitleHelperServer.AdUpdate(true, "localhost", ldap.Port, "ad.test", "AD", "DC=ad,DC=test", ldap.Pem));
         var auth = new LitleHelperServer.AdAuthentication(settings, Microsoft.Extensions.Logging.Abstractions.NullLogger<LitleHelperServer.AdAuthentication>.Instance);
         var identity = await auth.AuthenticateAsync(new("AD\\alice", "AD-test-password"), CancellationToken.None);
         Check(identity.Username == "alice@ad.test", "AD user with subordinate LDAP referral can sign in");
@@ -59,6 +59,7 @@ if (args.FirstOrDefault() == "--glpi-import") { await GlpiImportTests.RunAsync()
 if (args.FirstOrDefault() == "--messenger") { await MessengerTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--emergency") { await EmergencyTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--machine-enrollment") { await MachineEnrollmentTests.RunAsync(); return; }
+if (args.FirstOrDefault() == "--branches") { await LitleHelperServer.Tests.BranchSyncTests.RunAsync(); return; }
 string url = args.FirstOrDefault() ?? "http://127.0.0.1:21500";
 string mockUrl = args.Skip(1).FirstOrDefault() ?? "http://127.0.0.1:21501";
 var mockBuilder = WebApplication.CreateBuilder();

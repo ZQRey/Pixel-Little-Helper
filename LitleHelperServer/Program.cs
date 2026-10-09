@@ -106,6 +106,7 @@ builder.Services.AddSingleton<IntegrationSettings>();
 builder.Services.AddSingleton<ClientReleases>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = PixelHelper.Updates.ClientUpdateManifest.MaximumSize + 65536);
 builder.Services.AddScoped<IAdAuthentication, AdAuthentication>();
+builder.Services.AddScoped<AdPasswordService>();
 builder.Services.AddScoped<ITelegramDirectory, TelegramDirectory>();
 builder.Services.AddSingleton<TicketManagementGate>();
 builder.Services.AddSingleton<TelegramBotHealth>();

@@ -266,6 +266,7 @@ public static class EmergencyTests
                 null!,
                 settings,
                 ticketGate,
+                null,
                 httpFactory
             );
 

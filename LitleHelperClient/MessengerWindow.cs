@@ -166,10 +166,18 @@ internal sealed class MessengerWindow : Window
         OnChanged();
     }
 
-    private void OnTyping(int id, string name) => Dispatcher.BeginInvoke(new Action(async () =>
+    private void OnTyping(int id, string name, bool isPsychologist) => Dispatcher.BeginInvoke(new Action(async () =>
     {
         if (id != peer || chatStatus == null) return;
-        chatStatus.Text = name + " печатает…";
+        var myContact = contacts.FirstOrDefault(c => c.Id == client.UserId);
+        bool amIPsychologist = myContact?.FullName?.Contains("психолог", StringComparison.OrdinalIgnoreCase) == true;
+        var peerContact = contacts.FirstOrDefault(c => c.Id == peer);
+        bool isPeerPsychologist = isPsychologist || peerContact?.FullName?.Contains("психолог", StringComparison.OrdinalIgnoreCase) == true;
+
+        string typingLabel = isPeerPsychologist
+            ? Loc.T("TypingPsychologistText")
+            : (amIPsychologist ? Loc.T("TypingEmployeeText") : name + " " + Loc.T("TypingSuffix"));
+        chatStatus.Text = typingLabel;
         chatStatus.Foreground = accent;
         await Task.Delay(5000);
         if (!closing && id == peer && chatStatus != null)
@@ -1154,7 +1162,7 @@ internal sealed class MessengerWindow : Window
             : [];
 
         foreach (var message in messages.Concat(systemEntries).Concat(pendingMessage != null && pendingMessage.RecipientId == peer ? new[] { pendingMessage } : Array.Empty<ChatEntry>())
-            .Select(m => m with { Body = System.Text.RegularExpressions.Regex.Replace(m.Body, @"^(?:(?:/срочно|/танец)(?:\s+|$))+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase) })
+            .Select(m => m with { Body = System.Text.RegularExpressions.Regex.Replace(m.Body, @"^(?:(?:/срочно|/танец|/pet|/погладить|/питомец)(?:\s+|$))+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase) })
             .OrderBy(m => m.SentAt))
         {
             if (string.IsNullOrWhiteSpace(message.Body) && message.Attachments?.Count is not > 0) continue;

@@ -205,7 +205,19 @@ internal sealed class MessengerClient : IAsyncDisposable
     internal async Task DownloadAsync(ChatAttachment file, string destination)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token); cancellation.CancelAfter(TimeSpan.FromMinutes(5));
-        using var response = await filesHttp.GetAsync("api/messenger/files/" + Uri.EscapeDataString(file.Id), HttpCompletionOption.ResponseHeadersRead, cancellation.Token); response.EnsureSuccessStatusCode();
+        SetToken();
+        using var response = await filesHttp.GetAsync("api/messenger/files/" + Uri.EscapeDataString(file.Id), HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
+        if (!response.IsSuccessStatusCode)
+        {
+            string err = response.StatusCode switch
+            {
+                HttpStatusCode.NotFound => "Файл не найден на сервере или срок его хранения истёк.",
+                HttpStatusCode.Unauthorized => "Сеанс истёк. Выполняется повторный вход…",
+                HttpStatusCode.Forbidden => "У вас нет доступа к этому файлу.",
+                _ => $"Ошибка загрузки файла ({response.StatusCode})."
+            };
+            throw new InvalidOperationException(err);
+        }
         string temp = destination + "." + Guid.NewGuid().ToString("N") + ".part";
         try
         {

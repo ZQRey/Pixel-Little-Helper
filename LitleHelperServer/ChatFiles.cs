@@ -54,9 +54,9 @@ public static class ChatFiles
                 allowed = await db.ChatGroups.AnyAsync(g => g.Id == -file.PeerId && !g.IsDeleted) && await db.ChatGroupMembers.AnyAsync(m => m.GroupId == -file.PeerId && m.UserId == me.Id && m.JoinedAfterId < file.MessageId) && await db.ChatGroupMessages.AnyAsync(m => m.Id == file.MessageId && m.GroupId == -file.PeerId && m.SenderId == file.SenderId && !db.ChatGroupRestrictions.Any(r => r.GroupId == m.GroupId && r.UserId == me.Id && (r.EndsAt > DateTime.UtcNow || m.SentAt >= r.StartedAt && m.SentAt < r.EndsAt)));
             else allowed = (me.Id == file.SenderId || me.Id == file.PeerId) && await db.ChatMessages.AnyAsync(m => m.Id == file.MessageId && m.SenderId == file.SenderId && m.RecipientId == file.PeerId);
             if (!allowed) return Results.NotFound();
-            string path = Path.Combine(Folder(config), file.PathKey); if (!File.Exists(path)) return Results.NotFound();
+            string fullPath = Path.GetFullPath(Path.Combine(Folder(config), file.PathKey)); if (!File.Exists(fullPath)) return Results.NotFound();
             response.Headers.CacheControl = "no-store"; response.Headers["X-Content-Type-Options"] = "nosniff";
-            return Results.File(path, "application/octet-stream", file.Name, enableRangeProcessing: true);
+            return Results.File(fullPath, "application/octet-stream", file.Name, enableRangeProcessing: true);
         });
         api.MapPost("/files/send", async (HttpRequest request, HelperDb db, ClaimsPrincipal principal, IConfiguration config, IHubContext<MessengerHub> hub, ChatGroupGate gate, CancellationToken cancellation) =>
         {

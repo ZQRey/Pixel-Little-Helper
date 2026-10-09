@@ -1224,10 +1224,15 @@ internal sealed class MessengerWindow : Window
             // Attachments
             foreach (var attachment in message.Attachments ?? [])
             {
+                var fileRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 2) };
                 var file = ModernButton(attachment.Label, async (_, _) => await OpenFileAsync(attachment), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
-                file.Margin = new Thickness(0, 6, 0, 2);
-                file.ToolTip = attachment.IsImage ? "Просмотр изображения и скачивание" : (attachment.IsTextDocument || attachment.IsPdf ? "Предпросмотр документа и скачивание" : "Скачать файл");
-                panel.Children.Add(file);
+                file.ToolTip = attachment.IsImage ? "Просмотр изображения" : (attachment.IsTextDocument || attachment.IsPdf ? "Предпросмотр документа" : "Скачать/открыть файл");
+                var saveBtn = ModernButton("💾", async (_, _) => { try { await SaveFileAsync(attachment); } catch (Exception ex) { if (error != null) error.Text = ex.Message; } }, cornerRadius: 8, padding: new Thickness(8, 6, 8, 6));
+                saveBtn.Margin = new Thickness(4, 0, 0, 0);
+                saveBtn.ToolTip = "Сохранить файл на диск";
+                fileRow.Children.Add(file);
+                fileRow.Children.Add(saveBtn);
+                panel.Children.Add(fileRow);
             }
 
             if (message.IsUrgent && message.RecipientId == client.UserId && message.AcknowledgedAt == null)
@@ -1627,10 +1632,11 @@ internal sealed class MessengerWindow : Window
         catch (Exception ex) { details.Children.Add(new TextBlock { Text = ex.Message, TextWrapping = TextWrapping.Wrap, Foreground = muted }); }
     }
 
-    private async Task SaveFileAsync(ChatAttachment file)
+    private async Task SaveFileAsync(ChatAttachment file, Window? owner = null)
     {
         var dialog = new Microsoft.Win32.SaveFileDialog { FileName = file.Name, Filter = "Все файлы|*.*" };
-        if (dialog.ShowDialog(this) != true) return;
+        var parent = owner ?? (this.IsVisible && this.IsEnabled ? this : null);
+        if (parent != null ? dialog.ShowDialog(parent) != true : dialog.ShowDialog() != true) return;
         await client.DownloadAsync(file, dialog.FileName);
     }
 
@@ -1688,9 +1694,10 @@ internal sealed class MessengerWindow : Window
                     });
                     openExternalBtn.Margin = new Thickness(0, 0, 8, 0);
 
+                    Window? textViewer = null;
                     var saveBtn = ModernButton("Сохранить как…", async (_, _) =>
                     {
-                        try { await SaveFileAsync(file); } catch (Exception ex) { MessageBox.Show(ex.Message, "Сохранение"); }
+                        try { await SaveFileAsync(file, textViewer); } catch (Exception ex) { MessageBox.Show(ex.Message, "Сохранение"); }
                     }, primary: true);
 
                     buttonsBar.Children.Add(copyBtn);
@@ -1715,7 +1722,7 @@ internal sealed class MessengerWindow : Window
                     };
                     panel.Children.Add(textBox);
 
-                    new Window
+                    textViewer = new Window
                     {
                         Title = "Просмотр документа · " + file.Name,
                         Content = panel,
@@ -1725,7 +1732,8 @@ internal sealed class MessengerWindow : Window
                         WindowStartupLocation = WindowStartupLocation.CenterOwner,
                         Background = surface,
                         Foreground = ink
-                    }.ShowDialog();
+                    };
+                    textViewer.ShowDialog();
                     return;
                 }
                 finally
@@ -1736,12 +1744,14 @@ internal sealed class MessengerWindow : Window
 
             if (!file.IsImage) { await SaveFileAsync(file); return; }
             Directory.CreateDirectory(clipboardDirectory);
-            string path = Path.Combine(clipboardDirectory, Guid.NewGuid().ToString("N"));
+            string ext = Path.GetExtension(file.Name);
+            string path = Path.Combine(clipboardDirectory, Guid.NewGuid().ToString("N") + (string.IsNullOrEmpty(ext) ? ".png" : ext));
             try
             {
                 await client.DownloadAsync(file, path);
                 var panel = new DockPanel { Margin = new Thickness(12) };
-                var download = ModernButton("Скачать изображение", async (_, _) => { try { await SaveFileAsync(file); } catch (Exception ex) { MessageBox.Show(ex.Message, "Скачивание"); } }, primary: true);
+                Window? imageViewer = null;
+                var download = ModernButton("Скачать изображение", async (_, _) => { try { await SaveFileAsync(file, imageViewer); } catch (Exception ex) { MessageBox.Show(ex.Message, "Скачивание"); } }, primary: true);
                 DockPanel.SetDock(download, Dock.Bottom);
                 panel.Children.Add(download);
                 try
@@ -1769,9 +1779,10 @@ internal sealed class MessengerWindow : Window
                 {
                     panel.Children.Add(new TextBlock { Text = "Предпросмотр этого изображения недоступен. Вы можете скачать оригинал.", TextWrapping = TextWrapping.Wrap, Foreground = ink });
                 }
-                new Window { Title = file.Name, Content = panel, Owner = this, Width = 800, Height = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = surface, Foreground = ink }.ShowDialog();
+                imageViewer = new Window { Title = file.Name, Content = panel, Owner = this, Width = 800, Height = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = surface, Foreground = ink };
+                imageViewer.ShowDialog();
             }
-            finally { if (File.Exists(path)) File.Delete(path); }
+            finally { if (File.Exists(path)) { try { File.Delete(path); } catch { } } }
         }
         catch (Exception ex) { if (error != null) error.Text = "Не удалось открыть вложение: " + ex.Message; }
     }

@@ -827,7 +827,46 @@ try
         }
     }
     typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
-    pet.UpdateLayout();
+    // Section 34: Strict bilateral symmetry and horizontal level pairs for nearBottom and nearTop
+    var tieredScenarios = new (string name, double rx, double ry, bool nearB, bool nearT)[]
+    {
+        ("Bottom Edge (Taskbar)", 202, 296, true, false),
+        ("Top Edge", 202, 8, false, true)
+    };
+
+    foreach (var sc in tieredScenarios)
+    {
+        double centerX = sc.rx + 48.0;
+        foreach (int n in countsToTest)
+        {
+            var (boxes, w, h) = ButtonLayoutEngine.CalculateLayout(
+                n, sc.rx, sc.ry, 500, 400, sc.nearB, sc.nearT, false, false);
+
+            if (n % 2 == 1)
+            {
+                // Odd count: exactly one crown button centered at centerX
+                var crowns = boxes.Where(b => Math.Abs((b.X + w / 2.0) - centerX) < 1.0).ToList();
+                Check(crowns.Count == 1, $"{sc.name} N={n} has exactly 1 centered crown button");
+            }
+
+            // Group non-crown buttons by Y level into horizontal pairs
+            var nonCrowns = boxes.Where(b => Math.Abs((b.X + w / 2.0) - centerX) >= 1.0).ToList();
+            Check(nonCrowns.Count % 2 == 0, $"{sc.name} N={n} non-crown buttons form pairs");
+
+            var yGroups = nonCrowns.GroupBy(b => Math.Round(b.Y, 1)).ToList();
+            foreach (var g in yGroups)
+            {
+                var pair = g.ToList();
+                Check(pair.Count == 2, $"{sc.name} N={n} tier at Y={g.Key} has exactly 2 buttons");
+                var leftBtn = pair.MinBy(b => b.X);
+                var rightBtn = pair.MaxBy(b => b.X);
+                Check(Math.Abs(leftBtn.Y - rightBtn.Y) < 1.0, $"{sc.name} N={n} pair buttons at Y={g.Key} have identical heights");
+                double distLeft = centerX - (leftBtn.X + w / 2.0);
+                double distRight = (rightBtn.X + w / 2.0) - centerX;
+                Check(Math.Abs(distLeft - distRight) < 2.0, $"{sc.name} N={n} pair buttons at Y={g.Key} are strictly mirror-symmetric (dl={distLeft:F1}, dr={distRight:F1})");
+            }
+        }
+    }
 
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });

@@ -84,14 +84,13 @@ public static class ButtonLayoutEngine
         }
         else if (nearBottom)
         {
-            // Along taskbar at bottom: semicircle arc above the robot.
-            // When count > 5, split into staggered double arc (inner / outer tiers).
-            rawBoxes = LayoutBottomEdgeArc(count, rcX, rcY, winW, winH, btnWidth, btnHeight);
+            // Along taskbar at bottom: symmetric tiered arch above the robot.
+            rawBoxes = LayoutBottomEdgeTiered(count, rcX, robotCanvasY, winW, winH, btnWidth, btnHeight);
         }
         else if (nearTop)
         {
-            // Along top edge: semicircle arc below the robot.
-            rawBoxes = LayoutTopEdgeArc(count, rcX, rcY, winW, winH, btnWidth, btnHeight);
+            // Along top edge: symmetric tiered arch below the robot.
+            rawBoxes = LayoutTopEdgeTiered(count, rcX, robotCanvasY, winW, winH, btnWidth, btnHeight);
         }
         else if (nearRight)
         {
@@ -275,53 +274,129 @@ public static class ButtonLayoutEngine
         return result;
     }
 
-    private static List<Rect> LayoutBottomEdgeArc(
-        int count, double rcX, double rcY, double winW, double winH, double btnW, double btnH)
+    private static List<Rect> LayoutBottomEdgeTiered(
+        int count, double rcX, double ry, double winW, double winH, double btnW, double btnH)
     {
         var result = new List<Rect>(count);
-        double startAngle = 168.0 * Math.PI / 180.0;
-        double endAngle = 12.0 * Math.PI / 180.0;
+        const double gapY = 8.0;
+        double yStep = btnH + gapY;
 
-        for (int i = 0; i < count; i++)
+        // Base Y for the lowest tier flanking the robot
+        double baseY = Math.Min(winH - btnH - Margin, ry - 20.0);
+
+        if (count == 1)
         {
-            double t = count == 1 ? 0.5 : (double)i / (count - 1);
-            double angle = startAngle + t * (endAngle - startAngle);
+            double x = rcX - btnW / 2.0;
+            double y = baseY - yStep;
+            result.Add(new Rect(x, y, btnW, btnH));
+            return result;
+        }
 
-            double rx = count > 5 ? (i % 2 == 1 ? 175.0 : 130.0) : 165.0;
-            double ry = count > 5 ? (i % 2 == 1 ? 150.0 : 105.0) : 130.0;
+        bool hasCrown = (count % 2 == 1);
+        int pairCount = count / 2;
+        int totalTiers = pairCount + (hasCrown ? 1 : 0);
 
-            double targetX = rcX - rx * Math.Cos(angle);
-            double targetY = rcY - ry * Math.Sin(angle);
+        double[] tierDx = new double[pairCount];
+        for (int p = 0; p < pairCount; p++)
+        {
+            if (pairCount == 1)
+            {
+                tierDx[0] = 130.0;
+            }
+            else
+            {
+                double t = (double)p / (pairCount - 1);
+                double maxDx = 132.0;
+                double minDx = count >= 8 ? 74.0 : 76.0;
+                tierDx[p] = maxDx - t * (maxDx - minDx);
+            }
+        }
 
-            double posX = Math.Clamp(targetX - btnW / 2.0, Margin, winW - btnW - Margin);
-            double posY = Math.Clamp(targetY - btnH / 2.0, Margin, winH - btnH - Margin);
-            result.Add(new Rect(posX, posY, btnW, btnH));
+        // Top-to-bottom, left-to-right order:
+        // If hasCrown, Crown is at the very top (tier totalTiers - 1)
+        if (hasCrown)
+        {
+            double crownY = baseY - (totalTiers - 1) * yStep;
+            double crownX = Math.Clamp(rcX - btnW / 2.0, Margin, winW - btnW - Margin);
+            result.Add(new Rect(crownX, crownY, btnW, btnH));
+        }
+
+        for (int p = pairCount - 1; p >= 0; p--)
+        {
+            double y = baseY - p * yStep;
+            double dx = tierDx[p];
+
+            double leftCenter = rcX - dx;
+            double rightCenter = rcX + dx;
+
+            double leftX = Math.Clamp(leftCenter - btnW / 2.0, Margin, winW - btnW - Margin);
+            double rightX = Math.Clamp(rightCenter - btnW / 2.0, Margin, winW - btnW - Margin);
+
+            result.Add(new Rect(leftX, y, btnW, btnH));
+            result.Add(new Rect(rightX, y, btnW, btnH));
         }
 
         return result;
     }
 
-    private static List<Rect> LayoutTopEdgeArc(
-        int count, double rcX, double rcY, double winW, double winH, double btnW, double btnH)
+    private static List<Rect> LayoutTopEdgeTiered(
+        int count, double rcX, double ry, double winW, double winH, double btnW, double btnH)
     {
         var result = new List<Rect>(count);
-        double startAngle = 192.0 * Math.PI / 180.0;
-        double endAngle = 348.0 * Math.PI / 180.0;
+        const double gapY = 8.0;
+        double yStep = btnH + gapY;
 
-        for (int i = 0; i < count; i++)
+        // Base Y: Tier 0 button bottom aligns with the robot bottom (ry + RobotSize)
+        double baseY = Math.Max(Margin, ry + RobotSize - btnH);
+
+        if (count == 1)
         {
-            double t = count == 1 ? 0.5 : (double)i / (count - 1);
-            double angle = startAngle + t * (endAngle - startAngle);
+            double x = rcX - btnW / 2.0;
+            double y = ry + RobotSize + 12.0;
+            result.Add(new Rect(x, y, btnW, btnH));
+            return result;
+        }
 
-            double rx = count > 5 ? (i % 2 == 1 ? 175.0 : 130.0) : 165.0;
-            double ry = count > 5 ? (i % 2 == 1 ? 150.0 : 105.0) : 130.0;
+        bool hasCrown = (count % 2 == 1);
+        int pairCount = count / 2;
+        int totalTiers = pairCount + (hasCrown ? 1 : 0);
 
-            double targetX = rcX - rx * Math.Cos(angle);
-            double targetY = rcY - ry * Math.Sin(angle);
+        double[] tierDx = new double[pairCount];
+        for (int p = 0; p < pairCount; p++)
+        {
+            if (pairCount == 1)
+            {
+                tierDx[0] = 130.0;
+            }
+            else
+            {
+                double t = (double)p / (pairCount - 1);
+                double maxDx = 132.0;
+                double minDx = count >= 8 ? 74.0 : 76.0;
+                tierDx[p] = maxDx - t * (maxDx - minDx);
+            }
+        }
 
-            double posX = Math.Clamp(targetX - btnW / 2.0, Margin, winW - btnW - Margin);
-            double posY = Math.Clamp(targetY - btnH / 2.0, Margin, winH - btnH - Margin);
-            result.Add(new Rect(posX, posY, btnW, btnH));
+        for (int p = 0; p < pairCount; p++)
+        {
+            double y = baseY + p * yStep;
+            double dx = tierDx[p];
+
+            double leftCenter = rcX - dx;
+            double rightCenter = rcX + dx;
+
+            double leftX = Math.Clamp(leftCenter - btnW / 2.0, Margin, winW - btnW - Margin);
+            double rightX = Math.Clamp(rightCenter - btnW / 2.0, Margin, winW - btnW - Margin);
+
+            result.Add(new Rect(leftX, y, btnW, btnH));
+            result.Add(new Rect(rightX, y, btnW, btnH));
+        }
+
+        if (hasCrown)
+        {
+            double crownY = baseY + pairCount * yStep;
+            double crownX = Math.Clamp(rcX - btnW / 2.0, Margin, winW - btnW - Margin);
+            result.Add(new Rect(crownX, crownY, btnW, btnH));
         }
 
         return result;

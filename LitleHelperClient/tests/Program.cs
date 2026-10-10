@@ -868,6 +868,48 @@ try
         }
     }
 
+    // Section 35: Workout 10s duration, TurnBack for any image viewer, priority message animation interrupt
+    pet.React(PetState.Workout, 10);
+    var isTempMethod = typeof(PetWindow).GetMethod("IsTemporary", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+    Check((bool)isTempMethod.Invoke(null, [PetState.Workout])!, "Workout is registered as temporary animation");
+    petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! == PetState.Workout, "Workout state set");
+
+    // Test TurnBack & Shy viewer flow
+    var imgActiveField = typeof(PetWindow).GetField("imageReactionActive", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+    var imgP1Field = typeof(PetWindow).GetField("imageReactionPhase1Until", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+    var imgP2Field = typeof(PetWindow).GetField("imageReactionPhase2Until", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+    imgActiveField.SetValue(pet, true);
+    imgP1Field.SetValue(pet, DateTime.UtcNow.AddSeconds(5));
+    imgP2Field.SetValue(pet, DateTime.UtcNow.AddSeconds(10));
+    pet.React(PetState.TurnBack, 10);
+    Check((bool)imgActiveField.GetValue(pet)!, "Image reaction active set");
+    petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! == PetState.TurnBack, "TurnBack active during image viewing phase 1");
+
+    // Test priority message interruption
+    pet.InterruptCurrentAnimationForMessage(PetState.Joy, 4);
+    Check(!(bool)imgActiveField.GetValue(pet)!, "InterruptCurrentAnimationForMessage resets imageReactionActive");
+    petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+    Check((PetState)petStateProp! == PetState.Joy, "InterruptCurrentAnimationForMessage plays Joy message reaction");
+
+    // Test priority message interruption during strictly locked animations (Dance, Offended, etc.)
+    foreach (var ps in protectedStates)
+    {
+        pet.React(ps, 5);
+        Check(pet.IsAnimationLocked, $"{ps} is locked");
+        pet.InterruptCurrentAnimationForMessage(PetState.Celebrate, 5, isUrgent: true);
+        petStateProp = typeof(PetWindow).GetField("state", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet);
+        Check((PetState)petStateProp! == PetState.Celebrate, $"InterruptCurrentAnimationForMessage overrides locked {ps} with Celebrate");
+    }
+
+    // Test ShowFaceHeart also interrupts locked animation
+    pet.React(PetState.Dance, 5);
+    pet.ShowFaceHeart(4);
+    faceStatusField = typeof(PetWindow).GetField("faceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+    Check((FaceNoticeStatus)faceStatusField.GetValue(pet)! == FaceNoticeStatus.Heart, "ShowFaceHeart sets Heart overlay");
+
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

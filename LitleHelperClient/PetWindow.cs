@@ -39,6 +39,7 @@ public sealed class PetWindow : Window
     private BitmapSource? birthdayHatSource;
     private readonly List<DateTime> rapidClicks = new();
     private DateTime lastSixtyMinReaction = DateTime.MinValue;
+    private DateTime lastWorkoutReaction = DateTime.MinValue;
     private CompanionChatWindow? companionWindow;
     private DiskSpaceMonitor? diskMonitor;
     private FaceNoticeStatus faceStatus = FaceNoticeStatus.None;
@@ -245,9 +246,11 @@ public sealed class PetWindow : Window
                 }
             }
             else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state != PetState.Charging &&
-                (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(30) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(30)))
+                (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(30) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(30)) &&
+                DateTime.UtcNow - lastWorkoutReaction >= TimeSpan.FromMinutes(10))
             {
-                if (state != PetState.Workout) ChangeState(PetState.Workout);
+                lastWorkoutReaction = DateTime.UtcNow;
+                React(PetState.Workout, 10);
             }
             else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn or PetState.Workout or PetState.Charging) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
@@ -526,6 +529,12 @@ public sealed class PetWindow : Window
     }
     internal void ShowFaceHeart(double seconds = 4)
     {
+        imageReactionActive = false;
+        imageReactionPhase1Until = DateTime.MinValue;
+        imageReactionPhase2Until = DateTime.MinValue;
+        emojiAnimating = false;
+        dizzyDrag = false;
+        actionUntil = DateTime.MinValue;
         faceStatus = FaceNoticeStatus.Heart;
         faceStatusUntil = DateTime.UtcNow.AddSeconds(seconds);
         faceHeartFrame = 0;
@@ -539,6 +548,18 @@ public sealed class PetWindow : Window
         faceStatusUntil = DateTime.UtcNow.AddSeconds(seconds);
         Wake();
         Draw();
+    }
+    internal void InterruptCurrentAnimationForMessage(PetState reaction, double seconds, bool isUrgent = false)
+    {
+        imageReactionActive = false;
+        imageReactionPhase1Until = DateTime.MinValue;
+        imageReactionPhase2Until = DateTime.MinValue;
+        emojiAnimating = false;
+        dizzyDrag = false;
+        actionUntil = DateTime.MinValue;
+        Wake();
+        React(reaction, seconds);
+        ShowFaceMail(isUrgent ? 5 : seconds);
     }
     internal void ShowConnectionResult(bool connected)
     {
@@ -586,7 +607,7 @@ public sealed class PetWindow : Window
         animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Twirl ? 150 : value == PetState.Offended ? 450 : value == PetState.Sleep ? 250 : 100);
         Draw();
     }
-    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance or PetState.Facepalm or PetState.Flower or PetState.Cry or PetState.TurnBack or PetState.Shy or PetState.PetCat or PetState.PetDog;
+    private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance or PetState.Facepalm or PetState.Flower or PetState.Cry or PetState.TurnBack or PetState.Shy or PetState.PetCat or PetState.PetDog or PetState.Workout;
     internal void React(PetState value, double seconds)
     { emojiAnimating = false; actionUntil = DateTime.UtcNow.AddSeconds(seconds); ChangeState(value); }
     private bool EmojiAllowed => settings.EmojiReactions && !settings.ChatDoNotDisturb && !settings.AssistantHidden && IsVisible && (diagnostics || ChatDesktop.Unlocked());
@@ -609,8 +630,7 @@ public sealed class PetWindow : Window
         // 2. Single Laugh 😁 -> Laughing animation for 4 seconds
         if (trimmed is "😁" or "\U0001F601" or "\uD83D\uDE01")
         {
-            Wake();
-            React(PetState.Laugh, 4);
+            InterruptCurrentAnimationForMessage(PetState.Laugh, 4);
             SoundManager.Play(SoundEvent.MessageReceived, settings);
             return true;
         }
@@ -618,8 +638,7 @@ public sealed class PetWindow : Window
         // 3. Single Facepalm 🤦‍♂️ -> Facepalm animation for 5 seconds
         if (trimmed is "🤦‍♂️" or "🤦" or "🤦‍♀️" or "\U0001F926\u200D\u2642\uFE0F" or "\U0001F926" or "\U0001F926\u200D\u2640\uFE0F")
         {
-            Wake();
-            React(PetState.Facepalm, 5);
+            InterruptCurrentAnimationForMessage(PetState.Facepalm, 5);
             return true;
         }
 
@@ -632,7 +651,18 @@ public sealed class PetWindow : Window
 
         if (CheckSingleEmojiReaction(message.Body.Trim())) return;
 
-        emojiReactions.Incoming(messenger.IdentityContext, message, EmojiAllowed && settings.IncomingEmojiReactions); AdvanceEmoji();
+        bool queued = emojiReactions.Incoming(messenger.IdentityContext, message, EmojiAllowed && settings.IncomingEmojiReactions);
+        if (queued)
+        {
+            imageReactionActive = false;
+            imageReactionPhase1Until = DateTime.MinValue;
+            imageReactionPhase2Until = DateTime.MinValue;
+            emojiAnimating = false;
+            dizzyDrag = false;
+            actionUntil = DateTime.MinValue;
+            Wake();
+        }
+        AdvanceEmoji();
     }
     private void AdvanceEmoji()
     {
@@ -993,6 +1023,12 @@ public sealed class PetWindow : Window
         if (notice.ExpiresAt < DateTime.UtcNow) { ShowNextAnnouncement(); return; }
         HideBubbles();
         if (notice.UrgentMessageId is long urgentId) { settings.UrgentNotificationsShown.Add(notice.UrgentKey ?? (chatUserId + ":" + urgentId)); settings.UrgentNotificationsShown = settings.UrgentNotificationsShown.TakeLast(1000).ToList(); if (!diagnostics) settings.Save(); urgentVisible = true; ShowActivated = false; Show(); animation.Start(); Topmost = true; NativeMethods.SetWindowPos(handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE); }
+        imageReactionActive = false;
+        imageReactionPhase1Until = DateTime.MinValue;
+        imageReactionPhase2Until = DateTime.MinValue;
+        emojiAnimating = false;
+        dizzyDrag = false;
+        actionUntil = DateTime.MinValue;
         Expand(); Wake(); menuOpen = true; announcementVisible = true;
         localNoticeAnimation=notice.LocalAnimation;
         React(notice.LocalAnimation ?? PetState.Notice, notice.LocalAnimation == PetState.Twirl ? 1.2 : notice.LocalAnimation == null ? 3 : 6);
@@ -1057,8 +1093,7 @@ public sealed class PetWindow : Window
         {
             ReceiveAnnouncement(new ClientNotice($"У вас есть непрочитанные сообщения ({unreadChatsCount}) ✉️ Нажмите, чтобы открыть", "Мессенджер", 15) { ChatPeerId = 0 });
         }
-        React(PetState.Celebrate, 5);
-        ShowFaceMail(5);
+        InterruptCurrentAnimationForMessage(PetState.Celebrate, 5, isUrgent: true);
         if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
         {
             SoundManager.Play(SoundEvent.MessageReceived, settings);
@@ -1092,15 +1127,14 @@ public sealed class PetWindow : Window
                 var sender = users.FirstOrDefault(u => u.Id == urgent.SenderId);
                 ReceiveAnnouncement(new ClientNotice("СРОЧНО · " + HelperEmojis.PlainText(urgent.Body[..Math.Min(970,urgent.Body.Length)]), sender?.FullName ?? "Сотрудник", 60, urgent.RecipientId < 0 ? urgent.RecipientId : urgent.SenderId) { UrgentMessageId = urgent.Id, UrgentKey = key, ExpiresAt = urgent.SentAt.ToUniversalTime().AddHours(1) });
                 urgentShown.Add(key);
-                React(PetState.Celebrate, 5);
-                ShowFaceMail(5);
+                InterruptCurrentAnimationForMessage(PetState.Celebrate, 5, isUrgent: true);
                 if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { SoundManager.Play(SoundEvent.Urgent, settings); lastChatSound = DateTime.UtcNow; }
             }
             int prevUnread = unreadChatsCount;
             unreadChatsCount = users.Count(u => u.Unread > 0);
             if (prevUnread > 0 && unreadChatsCount == 0)
             {
-                React(PetState.Joy, 2);
+                InterruptCurrentAnimationForMessage(PetState.Joy, 2);
             }
             Draw();
             tray?.SetUnread(unreadChatsCount > 0);
@@ -1128,8 +1162,7 @@ public sealed class PetWindow : Window
             }
             if (notifications.Count > 0)
             {
-                React(PetState.Joy, 4);
-                ShowFaceMail(4);
+                InterruptCurrentAnimationForMessage(PetState.Joy, 4);
                 bool play = settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
                 if (settings.ChatWindowsNotifications && tray != null)
                 {
@@ -1545,8 +1578,7 @@ public sealed class PetWindow : Window
                 imageReactionPhase2Until = DateTime.UtcNow.AddSeconds(10);
                 actionUntil = imageReactionPhase2Until;
 
-                PetState turnState = isFullscreen ? PetState.TurnBack : (onLeft ? PetState.LookLeft : PetState.LookRight);
-                ChangeState(turnState);
+                ChangeState(PetState.TurnBack);
             }
             else
             {

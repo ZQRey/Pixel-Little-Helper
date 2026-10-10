@@ -854,6 +854,7 @@ public sealed class PetWindow : Window
         var factory = new FrameworkElementFactory(typeof(TextBlock));
         factory.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding());
         factory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        factory.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
         factory.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
         return new DataTemplate { VisualTree = factory };
     }
@@ -887,8 +888,6 @@ public sealed class PetWindow : Window
 
         const double winW = 500;
         const double winH = 400;
-        const double btnWidth = 142;
-        const double btnHeight = 42;
         var bounds = NativeMethods.DesktopBounds();
 
         double spaceTop = anchorY - bounds.Top;
@@ -931,138 +930,17 @@ public sealed class PetWindow : Window
         Width = winW;
         Height = winH;
 
-        double rcX = robotCanvasX + 48;
-        double rcY = robotCanvasY + 48;
-
-        List<Point> buttonPositions = new();
-
-        if (count > 0)
-        {
-            if (nearBottom && nearRight)
-            {
-                // Bottom-right corner (near tray/taskbar): upper-left quadrant arc
-                double startAngle = 105.0 * Math.PI / 180.0;
-                double endAngle = 180.0 * Math.PI / 180.0;
-                for (int i = 0; i < count; i++)
-                {
-                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
-                    double angle = startAngle + t * (endAngle - startAngle);
-                    double rx = count > 4 && (i % 2 == 1) ? 200 : 160;
-                    double ry = count > 4 && (i % 2 == 1) ? 175 : 135;
-                    double targetX = rcX - rx * Math.Abs(Math.Cos(angle));
-                    double targetY = rcY - ry * Math.Sin(angle);
-                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-            else if (nearBottom && nearLeft)
-            {
-                // Bottom-left corner: upper-right quadrant arc
-                double startAngle = 0.0 * Math.PI / 180.0;
-                double endAngle = 75.0 * Math.PI / 180.0;
-                for (int i = 0; i < count; i++)
-                {
-                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
-                    double angle = startAngle + t * (endAngle - startAngle);
-                    double rx = count > 4 && (i % 2 == 1) ? 200 : 160;
-                    double ry = count > 4 && (i % 2 == 1) ? 175 : 135;
-                    double targetX = rcX + rx * Math.Cos(angle);
-                    double targetY = rcY - ry * Math.Sin(angle);
-                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-            else if (nearBottom)
-            {
-                // Along taskbar at bottom: upper semicircle arc above the robot (angles PI down to 0)
-                for (int i = 0; i < count; i++)
-                {
-                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
-                    double angle = Math.PI * (1.0 - t);
-                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
-                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
-                    double targetX = rcX - rx * Math.Cos(angle);
-                    double targetY = rcY - ry * Math.Sin(angle);
-                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-            else if (nearTop)
-            {
-                // Along top screen edge: lower semicircle arc below the robot
-                for (int i = 0; i < count; i++)
-                {
-                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
-                    double angle = Math.PI * (1.0 + t);
-                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
-                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
-                    double targetX = rcX - rx * Math.Cos(angle);
-                    double targetY = rcY - ry * Math.Sin(angle);
-                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-            else if (nearRight)
-            {
-                // Near right screen edge: left semicircle arc
-                for (int i = 0; i < count; i++)
-                {
-                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
-                    double angle = Math.PI * 0.5 + t * Math.PI;
-                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
-                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
-                    double targetX = rcX - rx * Math.Sin(angle);
-                    double targetY = rcY + ry * Math.Cos(angle);
-                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-            else if (nearLeft)
-            {
-                // Near left screen edge: right semicircle arc
-                for (int i = 0; i < count; i++)
-                {
-                    double t = count == 1 ? 0.5 : (double)i / (count - 1);
-                    double angle = -Math.PI * 0.5 + t * Math.PI;
-                    double rx = count > 5 && (i % 2 == 1) ? 195 : 170;
-                    double ry = count > 5 && (i % 2 == 1) ? 160 : 130;
-                    double targetX = rcX + rx * Math.Cos(angle);
-                    double targetY = rcY + ry * Math.Sin(angle);
-                    double posX = Math.Clamp(targetX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(targetY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-            else
-            {
-                // Center: full ellipse around the robot starting from left
-                const double radiusX = 175;
-                const double radiusY = 135;
-                for (int i = 0; i < count; i++)
-                {
-                    double angle = 2.0 * Math.PI * i / count;
-                    double deltaX = -radiusX * Math.Cos(angle);
-                    double deltaY = -radiusY * Math.Sin(angle);
-                    double posX = Math.Clamp(rcX + deltaX - btnWidth / 2.0, 8, winW - btnWidth - 8);
-                    double posY = Math.Clamp(rcY + deltaY - btnHeight / 2.0, 8, winH - btnHeight - 8);
-                    buttonPositions.Add(new Point(posX, posY));
-                }
-            }
-        }
+        var (boxes, actualBtnWidth, actualBtnHeight) = ButtonLayoutEngine.CalculateLayout(
+            count, robotCanvasX, robotCanvasY, winW, winH, nearBottom, nearTop, nearRight, nearLeft);
 
         for (int i = 0; i < count; i++)
         {
-            var pos = buttonPositions[i];
+            var box = boxes[i];
             var action = visibleActions[i];
             var button = MakeButton(action.Title);
             button.ToolTip = action.Title;
             button.Click += async (_, _) => await ExecuteAction(action);
-            AddBubble(button, pos.X, pos.Y, btnWidth, btnHeight);
+            AddBubble(button, box.X, box.Y, box.Width, box.Height);
         }
 
         ClearRegions();

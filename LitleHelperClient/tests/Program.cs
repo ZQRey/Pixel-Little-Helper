@@ -767,6 +767,68 @@ try
     pet.UpdateLayout();
     Check(Math.Abs(pet.Top - anchorScreenY) < 1, "Assistant restored to exact taskbar anchor after closing menu");
 
+    // Section 33: Assistant interactive buttons collision-free layout
+    var layoutScenarios = new (string name, double rx, double ry, bool nearB, bool nearT, bool nearR, bool nearL)[]
+    {
+        ("Bottom-Right Corner (Tray)", 396, 296, true, false, true, false),
+        ("Bottom-Left Corner", 8, 296, true, false, false, true),
+        ("Bottom Edge (Taskbar)", 202, 296, true, false, false, false),
+        ("Top Edge", 202, 8, false, true, false, false),
+        ("Right Edge", 396, 152, false, false, true, false),
+        ("Left Edge", 8, 152, false, false, false, true),
+        ("Center", 202, 152, false, false, false, false)
+    };
+
+    int[] countsToTest = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    foreach (var scenario in layoutScenarios)
+    {
+        foreach (int n in countsToTest)
+        {
+            var (boxes, w, h) = ButtonLayoutEngine.CalculateLayout(
+                n, scenario.rx, scenario.ry, 500, 400, scenario.nearB, scenario.nearT, scenario.nearR, scenario.nearL);
+
+            Check(boxes.Count == n, $"{scenario.name} generated exactly {n} buttons");
+
+            var robotRect = new System.Windows.Rect(scenario.rx, scenario.ry, 96, 96);
+            for (int i = 0; i < boxes.Count; i++)
+            {
+                var box = boxes[i];
+                Check(box.Left >= 7.9 && box.Top >= 7.9 && box.Right <= 492.1 && box.Bottom <= 392.1,
+                    $"{scenario.name} N={n} button #{i} within canvas bounds: [{box.Left:F1}, {box.Top:F1}, {box.Right:F1}, {box.Bottom:F1}]");
+
+                Check(!box.IntersectsWith(robotRect),
+                    $"{scenario.name} N={n} button #{i} does not intersect robot sprite");
+
+                for (int j = i + 1; j < boxes.Count; j++)
+                {
+                    var other = boxes[j];
+                    var expandedA = new System.Windows.Rect(box.X - 2.0, box.Y - 2.0, box.Width + 4.0, box.Height + 4.0);
+                    Check(!expandedA.IntersectsWith(other),
+                        $"{scenario.name} N={n} button #{i} and #{j} do not overlap (min gap >= 4px)");
+                }
+            }
+        }
+    }
+
+    // Verify ShowMenu produces non-overlapping buttons on live WPF canvas
+    typeof(PetWindow).GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    pet.UpdateLayout();
+    var liveButtons = ((System.Windows.Controls.Canvas)pet.Content).Children.OfType<System.Windows.Controls.Button>().ToList();
+    for (int i = 0; i < liveButtons.Count; i++)
+    {
+        var b1 = liveButtons[i];
+        var r1 = new System.Windows.Rect(System.Windows.Controls.Canvas.GetLeft(b1), System.Windows.Controls.Canvas.GetTop(b1), b1.Width, b1.Height);
+        for (int j = i + 1; j < liveButtons.Count; j++)
+        {
+            var b2 = liveButtons[j];
+            var r2 = new System.Windows.Rect(System.Windows.Controls.Canvas.GetLeft(b2), System.Windows.Controls.Canvas.GetTop(b2), b2.Width, b2.Height);
+            var exp = new System.Windows.Rect(r1.X - 2.0, r1.Y - 2.0, r1.Width + 4.0, r1.Height + 4.0);
+            Check(!exp.IntersectsWith(r2), $"Live PetWindow button #{i} and #{j} do not overlap");
+        }
+    }
+    typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
+    pet.UpdateLayout();
+
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

@@ -134,8 +134,8 @@ using (var scope = app.Services.CreateScope())
     await Access.EnsureSchema(db);
     await ChatBroadcasts.Column(db,"Computers","AdMachineObjectId","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","Description","TEXT NOT NULL DEFAULT ''");
-    await ChatBroadcasts.Column(db,"Buttons","TitleTranslationsJson","TEXT NOT NULL DEFAULT '{}'");
-    await ChatBroadcasts.Column(db,"Buttons","DescriptionTranslationsJson","TEXT NOT NULL DEFAULT '{}'");
+    await ChatBroadcasts.Column(db,"Buttons","TitleTranslationsJson","TEXT NOT NULL DEFAULT ''");
+    await ChatBroadcasts.Column(db,"Buttons","DescriptionTranslationsJson","TEXT NOT NULL DEFAULT ''");
     await Messenger.EnsureSchemaAsync(db);
     await ChatGroups.EnsureSchemaAsync(db);
     await AnnouncementService.EnsureSchemaAsync(db);

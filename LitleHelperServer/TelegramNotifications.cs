@@ -30,8 +30,31 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
         if(options.ThreadId>0)body["message_thread_id"]=options.ThreadId;if(keyboard!=null)body["reply_markup"]=keyboard;
         var result=await CallAsync("sendMessage",body,token);return result.TryGetProperty("message_id",out var id)?id.GetInt64():0;
     }
-    internal static string TicketButtonState(TicketRecord ticket)=>TicketManagement.Status(ticket.Status)>=5?"status:"+ticket.Status:ticket.AssignedGlpiUserId>0?"assigned:"+ticket.AssignedGlpiUserId:"claim";
-    private static object TicketKeyboard(TicketRecord ticket)=>new {inline_keyboard=new[]{new[]{new {text=TicketButtonState(ticket)=="claim"?"Принять":ticket.AssignedGlpiUserId>0&&TicketManagement.Status(ticket.Status)<5?"Назначена в GLPI":TicketManagement.StatusName(TicketManagement.Status(ticket.Status)),callback_data=TicketButtonState(ticket)=="claim"?"claim:"+ticket.Id:"claimed"}}}};
+    public static string TicketButtonState(TicketRecord ticket)
+    {
+        if (TicketManagement.Status(ticket.Status) >= 5) return "closed:" + ticket.Id + ":" + ticket.Status;
+        if (ticket.AssignedGlpiUserId > 0) return "claimed:" + ticket.Id + ":" + (ticket.AssignedUsername ?? "");
+        return "claim:" + ticket.Id;
+    }
+    public static string TicketButtonText(TicketRecord ticket)
+    {
+        if (TicketManagement.Status(ticket.Status) >= 5) return "Заявка закрыта";
+        if (ticket.AssignedGlpiUserId > 0)
+        {
+            string name = !string.IsNullOrWhiteSpace(ticket.AssignedUsername) ? ticket.AssignedUsername.Trim() : "Специалист";
+            if (name.Length > 28) name = name[..27] + "…";
+            return "Взял: " + name;
+        }
+        return "Принять";
+    }
+    public static string TicketButtonCallbackData(TicketRecord ticket)
+    {
+        if (TicketManagement.Status(ticket.Status) >= 5) return "closed:" + ticket.Id;
+        if (ticket.AssignedGlpiUserId > 0) return "claimed:" + ticket.Id;
+        return "claim:" + ticket.Id;
+    }
+    private static object TicketKeyboard(TicketRecord ticket) =>
+        new { inline_keyboard = new[] { new[] { new { text = TicketButtonText(ticket), callback_data = TicketButtonCallbackData(ticket) } } } };
     public async Task SyncTicketButtonAsync(TicketRecord ticket,TelegramDelivery delivery,CancellationToken token)
     {
         if(delivery.GroupMessageId==0 || delivery.GroupChatId.Length==0 || !settings.Telegram().ManagementEnabled || delivery.ButtonState==TicketButtonState(ticket))return;
@@ -66,21 +89,60 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
         if (!string.IsNullOrWhiteSpace(notes)) sb.AppendLine($"Примечание: {notes}");
         sb.AppendLine($"Время: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
 
+        await SendToAsync(targetChat, sb.ToString(), null, token, targetThread);
+    }
+
+    public async Task SendAttachmentAsync(string chatId, string fileName, byte[] content, long replyToMessageId, int threadId, CancellationToken token)
+    {
+        var options = settings.Telegram();
+        if (string.IsNullOrWhiteSpace(options.BotToken) || string.IsNullOrWhiteSpace(chatId)) return;
+
+        string ext = Path.GetExtension(fileName).ToLowerInvariant();
+        bool isPhoto = ext is ".jpg" or ".jpeg" or ".png" or ".bmp" or ".webp";
+        string method = isPhoto ? "sendPhoto" : "sendDocument";
+        string fieldName = isPhoto ? "photo" : "document";
+
+        string apiBase = configuration["Telegram:ApiBaseUrl"] ?? "https://api.telegram.org";
+        string url = apiBase.TrimEnd('/') + "/bot" + options.BotToken + "/" + method;
+
         try
         {
-            await SendToAsync(targetChat, sb.ToString(), null, token, targetThread);
+            using var form = new MultipartFormDataContent();
+            form.Add(new StringContent(chatId), "chat_id");
+            if (threadId > 0) form.Add(new StringContent(threadId.ToString()), "message_thread_id");
+            if (replyToMessageId > 0) form.Add(new StringContent(replyToMessageId.ToString()), "reply_to_message_id");
+
+            var fileContent = new ByteArrayContent(content);
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+            form.Add(fileContent, fieldName, fileName);
+
+            using var response = await http.PostAsync(url, form, token);
+            if (!response.IsSuccessStatusCode && isPhoto)
+            {
+                using var docForm = new MultipartFormDataContent();
+                docForm.Add(new StringContent(chatId), "chat_id");
+                if (threadId > 0) docForm.Add(new StringContent(threadId.ToString()), "message_thread_id");
+                if (replyToMessageId > 0) docForm.Add(new StringContent(replyToMessageId.ToString()), "reply_to_message_id");
+                var docContent = new ByteArrayContent(content);
+                docContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                docForm.Add(docContent, "document", fileName);
+                await http.PostAsync(apiBase.TrimEnd('/') + "/bot" + options.BotToken + "/sendDocument", docForm, token);
+            }
         }
         catch { }
     }
+
     public async Task<JsonElement> UpdatesAsync(long offset, CancellationToken token) =>
         await CallAsync("getUpdates", new { offset, timeout = 0, limit = 20, allowed_updates = new[] { "message", "callback_query" } }, token);
-    public async Task AnswerCallbackAsync(string id, string text, CancellationToken token) =>
-        await CallAsync("answerCallbackQuery", new { callback_query_id = id, text, show_alert = false }, token);
-    public async Task MarkClaimedAsync(long chat, long messageId, string text, CancellationToken token)
+    public async Task AnswerCallbackAsync(string id, string text, CancellationToken token, bool showAlert = false) =>
+        await CallAsync("answerCallbackQuery", new { callback_query_id = id, text, show_alert = showAlert }, token);
+    public async Task MarkClaimedAsync(long chat, long messageId, string text, string callbackData, CancellationToken token)
     {
-        try { await CallAsync("editMessageReplyMarkup", new { chat_id = chat, message_id = messageId, reply_markup = new { inline_keyboard = new[] { new[] { new { text, callback_data = "claimed" } } } } }, token); }
+        try { await CallAsync("editMessageReplyMarkup", new { chat_id = chat, message_id = messageId, reply_markup = new { inline_keyboard = new[] { new[] { new { text, callback_data = callbackData } } } } }, token); }
         catch (InvalidOperationException) { /* Assignment already succeeded; a stale group button cannot reassign the ticket. */ }
     }
+    public async Task MarkClaimedAsync(long chat, long messageId, string text, CancellationToken token) =>
+        await MarkClaimedAsync(chat, messageId, text, "claimed", token);
     private async Task<JsonElement> CallAsync(string method, object body, CancellationToken token)
     {
         var options = settings.Telegram();
@@ -114,7 +176,7 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
         return text;
     }
 }
-public class TelegramWorker(IServiceScopeFactory scopes, IntegrationSettings settings, ILogger<TelegramWorker> logger) : BackgroundService
+public class TelegramWorker(IServiceScopeFactory scopes, IntegrationSettings settings, ILogger<TelegramWorker> logger, IConfiguration configuration) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -130,7 +192,29 @@ public class TelegramWorker(IServiceScopeFactory scopes, IntegrationSettings set
                     foreach (var item in due)
                     {
                         item.Attempts++;
-                        try { item.GroupMessageId=await sender.SendTicketTrackedAsync(item.Ticket, stoppingToken); item.GroupChatId=settings.Telegram().ChatId;item.ButtonState=TelegramClient.TicketButtonState(item.Ticket); item.State = "Sent"; item.SentAt = DateTime.UtcNow; item.LastError = ""; }
+                        try
+                        {
+                            item.GroupMessageId = await sender.SendTicketTrackedAsync(item.Ticket, stoppingToken);
+                            item.GroupChatId = settings.Telegram().ChatId;
+                            item.ButtonState = TelegramClient.TicketButtonState(item.Ticket);
+                            item.State = "Sent";
+                            item.SentAt = DateTime.UtcNow;
+                            item.LastError = "";
+
+                            if (item.GroupMessageId > 0)
+                            {
+                                var attachments = await db.TicketAttachments.AsNoTracking().Where(a => a.TicketId == item.TicketId).ToListAsync(stoppingToken);
+                                foreach (var att in attachments)
+                                {
+                                    string filePath = Path.Combine(TicketAttachments.Folder(configuration), att.StorageKey);
+                                    if (File.Exists(filePath))
+                                    {
+                                        byte[] bytes = await File.ReadAllBytesAsync(filePath, stoppingToken);
+                                        await sender.SendAttachmentAsync(settings.Telegram().ChatId, att.FileName, bytes, item.GroupMessageId, settings.Telegram().ThreadId, stoppingToken);
+                                    }
+                                }
+                            }
+                        }
                         catch (InvalidOperationException ex)
                         {
                             item.LastError = ex.Message; item.State = item.Attempts >= 10 ? "Failed" : "Pending";

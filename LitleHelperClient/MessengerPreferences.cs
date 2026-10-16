@@ -27,22 +27,25 @@ internal sealed class MessengerPreferences : Window
         var dim = new Slider { Minimum = 0, Maximum = .85, Value = Math.Clamp(settings.ChatBackgroundDim, 0, .85) }; panel.Children.Add(dim);
         var saves = new List<Action>();
         void Toggle(string label, bool value, Action<bool> save) { var box = new CheckBox { Content = label, IsChecked = value, Margin = new Thickness(0, 8, 0, 0) }; panel.Children.Add(box); saves.Add(() => save(box.IsChecked == true)); }
+        string[] displayModes = ["Topmost", "Normal", "Background"];
+        var displayMode = Choice("Положение помощника", ["Поверх всех окон", "Обычный режим", "На заднем плане (в фоне)"], Math.Max(0, Array.IndexOf(displayModes, settings.DisplayMode)));
         Toggle("Анимация эмодзи в переписке", settings.AnimatedChatEmojis, v => settings.AnimatedChatEmojis = v);
         Toggle("Реакции помощника на эмодзи", settings.EmojiReactions, v => settings.EmojiReactions = v);
         Toggle("Реакции на входящие эмодзи", settings.IncomingEmojiReactions, v => settings.IncomingEmojiReactions = v);
-        Toggle("Звук", settings.ChatSound, v => settings.ChatSound = v);
-        string[] soundProfiles = ["Sound", "VoiceAdult", "VoiceChild"];
-        string[] soundLabels = ["🔔 Звуковые сигналы (sci-fi)", "🤖 Голос помощника (робот)", "🧸 Голос помощника (детский)"];
-        int selectedSoundProfile = Math.Max(0, Array.IndexOf(soundProfiles, settings.SoundProfile));
+        Toggle("Звук", settings.ChatSound && SoundManager.NormalizeProfile(settings.SoundProfile) != "Mute", v => settings.ChatSound = v);
+        string[] soundProfiles = ["Sound", "VoiceAdult", "VoiceChild", "Mute"];
+        string[] soundLabels = ["🔔 Звуковые сигналы (sci-fi)", "🤖 Голос помощника (робот)", "🧸 Голос помощника (детский)", "🔇 Без звука"];
+        int selectedSoundProfile = Math.Max(0, Array.IndexOf(soundProfiles, SoundManager.NormalizeProfile(settings.SoundProfile)));
 
         panel.Children.Add(new TextBlock { Text = "Звуковая схема", Margin = new Thickness(0, 12, 0, 5) });
         var soundDock = new DockPanel();
-        var previewBtn = new Button { Content = "▶ Прослушать", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 5, 10, 5), VerticalAlignment = VerticalAlignment.Center, Cursor = System.Windows.Input.Cursors.Hand };
+        var previewBtn = new Button { Content = "▶ Прослушать", Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 5, 10, 5), VerticalAlignment = VerticalAlignment.Center, Cursor = System.Windows.Input.Cursors.Hand, IsEnabled = selectedSoundProfile < 3 };
         var soundBox = new ComboBox { ItemsSource = soundLabels, SelectedIndex = selectedSoundProfile, Padding = new Thickness(6) };
+        soundBox.SelectionChanged += (_, _) => { previewBtn.IsEnabled = soundBox.SelectedIndex >= 0 && soundBox.SelectedIndex < 3; };
         previewBtn.Click += (_, _) =>
         {
             int idx = soundBox.SelectedIndex;
-            if (idx >= 0 && idx < soundProfiles.Length)
+            if (idx >= 0 && idx < soundProfiles.Length && soundProfiles[idx] != "Mute")
             {
                 SoundManager.PlayPreview(soundProfiles[idx], SoundEvent.MessageReceived);
             }
@@ -58,6 +61,23 @@ internal sealed class MessengerPreferences : Window
         Toggle("Не беспокоить", settings.ChatDoNotDisturb, v => settings.ChatDoNotDisturb = v);
         panel.Children.Add(new TextBlock { Text = "Срочные рассылки показывают помощника поверх окон на срок до 60 секунд и обходят «Не беспокоить».", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,8,0,0) });
         var apply = new Button { Content = "Применить", Margin = new Thickness(0, 16, 0, 0), Padding = new Thickness(10), IsDefault = true };
-        apply.Click += (_, _) => { settings.ChatTheme = themes[theme.SelectedIndex]; settings.ChatFontSize = sizes[font.SelectedIndex]; settings.ChatBackground = backgrounds[background.SelectedIndex]; settings.ChatBackgroundImage = image; settings.ChatBackgroundDim = dim.Value; settings.SoundProfile = soundProfiles[soundBox.SelectedIndex]; foreach (var save in saves) save(); settings.Save(); DialogResult = true; }; panel.Children.Add(apply);
+        apply.Click += (_, _) =>
+        {
+            settings.ChatTheme = themes[theme.SelectedIndex];
+            settings.ChatFontSize = sizes[font.SelectedIndex];
+            settings.ChatBackground = backgrounds[background.SelectedIndex];
+            settings.ChatBackgroundImage = image;
+            settings.ChatBackgroundDim = dim.Value;
+            settings.DisplayMode = displayModes[displayMode.SelectedIndex];
+            string chosenProfile = soundProfiles[soundBox.SelectedIndex];
+            settings.SoundProfile = chosenProfile;
+            if (chosenProfile == "Mute") settings.ChatSound = false;
+            foreach (var save in saves) save();
+            if (settings.ChatSound && settings.SoundProfile == "Mute") settings.SoundProfile = "Sound";
+            settings.Save();
+            if (Application.Current?.MainWindow is PetWindow pet) pet.ApplyDisplayMode();
+            DialogResult = true;
+        };
+        panel.Children.Add(apply);
     }
 }

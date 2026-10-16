@@ -7,6 +7,10 @@ public static class Access
 {
     public static readonly Dictionary<string, string> Catalog = new()
     {
+        ["reports.glpi.view"] = "Просмотр статистики GLPI",
+        ["reports.glpi.all"] = "Статистика GLPI всех филиалов",
+        ["reports.glpi.export"] = "Выгрузка статистики GLPI",
+        ["reports.glpi.settings"] = "Синхронизация и опросы GLPI",
         ["computers.view"] = "Просмотр компьютеров",
         ["computers.manage"] = "Подключение компьютеров",
         ["computers.delete"] = "Удаление компьютеров",
@@ -21,6 +25,7 @@ public static class Access
         ["users.manage"] = "Управление пользователями и всеми правами",
         ["settings.manage"] = "Настройки GLPI, AD, Telegram и филиалов",
         ["updates.manage"] = "Публикация обновлений клиента",
+        ["emergency.manage"] = "Принятие и отбой экстренных тревог",
         ["chat.broadcast"] = "Рассылка всем пользователям мессенджера"
     };
     public static string[] Defaults(string role) => role switch

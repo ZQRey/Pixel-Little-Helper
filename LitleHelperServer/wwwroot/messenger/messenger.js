@@ -487,7 +487,78 @@ async function loadHistory(before){const peer=state.peer;if(!peer)return;const c
 function robotEmoji(key){const frames={helper_wave:'greeting',helper_joy:'joy',helper_thanks:'success',helper_sad:'sad',helper_surprise:'surprise',helper_laugh:'laugh',helper_sleep:'sleep',helper_think:'think',helper_party:'celebrate',helper_dizzy:'dizzy'},span=element('span','helper-emoji');span.title=emojis[key][1];for(let i=1;i<=2;i++){const img=element('img');img.src='/messenger/emoji/'+frames[key]+'_'+i+'.png';img.alt=i===1?emojis[key][1]:'';span.append(img);}return span;}
 function plainEmoji(text){return text.replace(/:(helper_\w+):/g,(match,key)=>emojis[key]?.[0]||match);}
 function richText(text){const n=element('div','message-text');for(const part of text.split(/(https?:\/\/[^\s<>]+|:helper_\w+:)/g)){if(/^https?:\/\//.test(part)){const a=element('a','',part);a.href=part;a.target='_blank';a.rel='noopener noreferrer';n.append(a);}else if(emojis[part.slice(1,-1)]){n.append(robotEmoji(part.slice(1,-1)));}else n.append(document.createTextNode(part));}return n;}
-function renderFeed(bottom){state.urls.forEach(URL.revokeObjectURL);state.urls=[];const feed=$('feed');feed.replaceChildren();if(!state.messages.length&&!state.pending){const empty=element('div','empty');empty.append(element('h2','',t('empty_history')),element('p','',t('empty_history_sub')));feed.append(empty);}if(state.messages.length>=50)feed.append(button(t('prev_messages'),()=>loadHistory(state.messages[0].id),'date'));let lastDate='';for(const m of [...state.messages.filter(m=>m.body.trim()||m.attachments?.length),...(state.peer<0?state.groupEvents.filter(e=>!state.messages.length||new Date(e.sentAt)>=new Date(state.messages[0].sentAt)).map(e=>({...e,isSystem:true})):[])].sort((a,b)=>new Date(a.sentAt)-new Date(b.sentAt))){const date=new Date(m.sentAt),day=date.toLocaleDateString(getLocale());if(day!==lastDate){lastDate=day;feed.append(element('div','date',day===new Date().toLocaleDateString(getLocale())?t('today'):day));}if(m.isSystem){feed.append(element('div','date',date.toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'})+' · '+m.body));continue;}const mine=m.senderId===state.me.id,bubble=element('article','bubble'+(mine?' mine':''));if(state.peer<0&&!mine)bubble.append(element('div','sender',m.senderName||''));if(m.isUrgent)bubble.append(element('strong','',t('urgent_badge')));bubble.append(richText(m.body));bubble.oncontextmenu=e=>{e.preventDefault();const body=modal(t('reaction_title'));for(const emoji of ['👍','❤️','😊','🎉','😔','👋'])body.append(button(emoji,async()=>{await api('reaction/'+state.peer+'/'+m.id,{emoji});$('modal').close();await loadHistory();},'secondary'));};for(const file of m.attachments||[]){const ext=(file.name.split('.').pop()||'').toLowerCase();const isImg=['png','jpg','jpeg','gif','bmp','webp'].includes(ext);const isPdf=ext==='pdf';const isTxt=['txt','log','json','xml','csv','md','sql','ini','yml','yaml'].includes(ext);const icon=isImg?'🖼️ ':isPdf?'📄 ':isTxt?'📑 ':['doc','docx'].includes(ext)?'📝 ':['xls','xlsx'].includes(ext)?'📊 ':['zip','rar','7z'].includes(ext)?'📦 ':'📎 ';bubble.append(button(icon+file.name+' · '+(file.size/1024).toFixed(1)+' КБ',()=>download(file),'file'));if(isImg){const image=element('img','image-thumb');image.alt=file.name;image.loading='lazy';image.src='/api/messenger/files/'+file.id;image.onclick=()=>viewImage(file);bubble.append(image);}else if(isPdf){const prev=button('📄 Открыть PDF',()=>{const body=modal(file.name);const frame=element('iframe');frame.style.width='100%';frame.style.height='72vh';frame.style.border='none';frame.src='/api/messenger/files/'+file.id;body.append(frame,button('Скачать PDF',()=>download(file),'primary'));},'secondary');prev.style.marginTop='4px';bubble.append(prev);}else if(isTxt&&file.size<2*1024*1024){const prev=button('📑 Предпросмотр текста',async()=>{try{const r=await fetch('/api/messenger/files/'+file.id);const txt=await r.text();const body=modal(file.name);const pre=element('pre');pre.style.maxHeight='65vh';pre.style.overflow='auto';pre.style.background='#f8fafc';pre.style.padding='12px';pre.style.borderRadius='6px';pre.style.fontSize='12px';pre.style.whiteSpace='pre-wrap';pre.textContent=txt;body.append(pre,button('Скачать файл',()=>download(file),'primary'));}catch(err){toast(err.message,true);}},'secondary');prev.style.marginTop='4px';bubble.append(prev);}}if(m.isUrgent&&!mine&&!m.acknowledgedAt)bubble.append(button(t('ack_btn'),async()=>{await api('ack/'+m.id,{});await refresh();},'secondary'));bubble.append(element('small','',date.toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'})+(mine?(m.readAt?t('read_mark'):t('saved_mark')):m.acknowledgedAt?t('acked_mark'):'')));const chips=element('div','reactions');for(const reaction of state.extras[m.id]||[])chips.append(button(reaction.emoji+' '+reaction.count,async()=>{await api('reaction/'+state.peer+'/'+m.id,{emoji:reaction.emoji});await loadHistory();},reaction.mine?'selected':''));bubble.append(chips);feed.append(bubble);}if(state.pending&&state.pending.peer===state.peer){const pending=element('article','bubble mine');pending.append(richText(state.pending.body.replace(new RegExp('^(?:(?:/срочно|/танец|/pet|/погладить|/питомец)(?:\\s+|$))+','iu'),'')),element('small','',state.pending.failed?t('send_failed'):t('sending')));feed.append(pending);}if(bottom){feed.scrollTop=feed.scrollHeight;$('new-messages').hidden=true;}}
+function formatSec(s){const m=Math.floor(s/60),sec=Math.floor(s%60);return m+':'+(sec<10?'0':'')+sec;}
+function renderFeed(bottom){state.urls.forEach(URL.revokeObjectURL);state.urls=[];const feed=$('feed');feed.replaceChildren();if(!state.messages.length&&!state.pending){const empty=element('div','empty');empty.append(element('h2','',t('empty_history')),element('p','',t('empty_history_sub')));feed.append(empty);}if(state.messages.length>=50)feed.append(button(t('prev_messages'),()=>loadHistory(state.messages[0].id),'date'));let lastDate='';for(const m of [...state.messages.filter(m=>m.body.trim()||m.attachments?.length),...(state.peer<0?state.groupEvents.filter(e=>!state.messages.length||new Date(e.sentAt)>=new Date(state.messages[0].sentAt)).map(e=>({...e,isSystem:true})):[])].sort((a,b)=>new Date(a.sentAt)-new Date(b.sentAt))){const date=new Date(m.sentAt),day=date.toLocaleDateString(getLocale());if(day!==lastDate){lastDate=day;feed.append(element('div','date',day===new Date().toLocaleDateString(getLocale())?t('today'):day));}if(m.isSystem){feed.append(element('div','date',date.toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'})+' · '+m.body));continue;}const mine=m.senderId===state.me.id,bubble=element('article','bubble'+(mine?' mine':''));if(state.peer<0&&!mine)bubble.append(element('div','sender',m.senderName||''));if(m.isUrgent)bubble.append(element('strong','',t('urgent_badge')));bubble.append(richText(m.body));bubble.oncontextmenu=e=>{e.preventDefault();const body=modal(t('reaction_title'));for(const emoji of ['👍','❤️','😊','🎉','😔','👋'])body.append(button(emoji,async()=>{await api('reaction/'+state.peer+'/'+m.id,{emoji});$('modal').close();await loadHistory();},'secondary'));};for(const file of m.attachments||[]){
+  if(file.isVoice){
+    const voiceWrap=element('div','voice-bubble');
+    const playBtn=element('button','voice-play-btn','▶');
+    playBtn.type='button';
+    const bodyWrap=element('div','voice-body');
+    const waveBox=element('div','voice-waveform');
+    let bars=[];
+    try{bars=JSON.parse(file.waveform||'[]');}catch(e){bars=[];}
+    if(!bars||!bars.length)bars=[0.3,0.5,0.8,0.4,0.6,0.9,0.7,0.5,0.3,0.6,0.8,0.4,0.3,0.5,0.7,0.4];
+    const barEls=[];
+    bars.forEach(val=>{
+      const bar=element('div','voice-bar');
+      bar.style.height=Math.max(4,Math.round(val*24))+'px';
+      waveBox.append(bar);
+      barEls.push(bar);
+    });
+    const meta=element('div','voice-meta');
+    const timeCur=element('span','','0:00');
+    const timeDur=element('span','',(file.durationSeconds||0)>0?formatSec(file.durationSeconds):'');
+    meta.append(timeCur,timeDur);
+    bodyWrap.append(waveBox,meta);
+    voiceWrap.append(playBtn,bodyWrap);
+    let audio=null;
+    playBtn.onclick=()=>{
+      if(!audio){
+        audio=new Audio('/api/messenger/files/'+file.id);
+        audio.ontimeupdate=()=>{
+          timeCur.textContent=formatSec(Math.floor(audio.currentTime));
+          const progress=audio.duration?audio.currentTime/audio.duration:0;
+          const activeCount=Math.floor(progress*barEls.length);
+          barEls.forEach((b,i)=>b.classList.toggle('active',i<=activeCount));
+        };
+        audio.onended=()=>{
+          playBtn.textContent='▶';
+          barEls.forEach(b=>b.classList.remove('active'));
+          timeCur.textContent='0:00';
+        };
+      }
+      if(audio.paused){
+        document.querySelectorAll('audio').forEach(a=>a.pause());
+        audio.play();
+        playBtn.textContent='❚❚';
+      }else{
+        audio.pause();
+        playBtn.textContent='▶';
+      }
+    };
+    bubble.append(voiceWrap);
+    continue;
+  }
+  if(file.isVideoNote){
+    const vidWrap=element('div','video-note-bubble');
+    const vid=element('video');
+    vid.src='/api/messenger/files/'+file.id;
+    vid.playsInline=true;
+    vid.loop=true;
+    vid.autoplay=true;
+    vid.muted=true;
+    const ovr=element('div','video-overlay');
+    const pIcon=element('div','video-play-icon','🔊');
+    ovr.append(pIcon);
+    vidWrap.append(vid,ovr);
+    vidWrap.onclick=()=>{
+      vid.muted=!vid.muted;
+      pIcon.textContent=vid.muted?'🔇':'🔊';
+    };
+    bubble.append(vidWrap);
+    continue;
+  }
+  const ext=(file.name.split('.').pop()||'').toLowerCase();const isImg=['png','jpg','jpeg','gif','bmp','webp'].includes(ext);const isPdf=ext==='pdf';const isTxt=['txt','log','json','xml','csv','md','sql','ini','yml','yaml'].includes(ext);const icon=isImg?'🖼️ ':isPdf?'📄 ':isTxt?'📑 ':['doc','docx'].includes(ext)?'📝 ':['xls','xlsx'].includes(ext)?'📊 ':['zip','rar','7z'].includes(ext)?'📦 ':'📎 ';bubble.append(button(icon+file.name+' · '+(file.size/1024).toFixed(1)+' КБ',()=>download(file),'file'));if(isImg){const image=element('img','image-thumb');image.alt=file.name;image.loading='lazy';image.src='/api/messenger/files/'+file.id;image.onclick=()=>viewImage(file);bubble.append(image);}else if(isPdf){const prev=button('📄 Открыть PDF',()=>{const body=modal(file.name);const frame=element('iframe');frame.style.width='100%';frame.style.height='72vh';frame.style.border='none';frame.src='/api/messenger/files/'+file.id;body.append(frame,button('Скачать PDF',()=>download(file),'primary'));},'secondary');prev.style.marginTop='4px';bubble.append(prev);}else if(isTxt&&file.size<2*1024*1024){const prev=button('📑 Предпросмотр текста',async()=>{try{const r=await fetch('/api/messenger/files/'+file.id);const txt=await r.text();const body=modal(file.name);const pre=element('pre');pre.style.maxHeight='65vh';pre.style.overflow='auto';pre.style.background='#f8fafc';pre.style.padding='12px';pre.style.borderRadius='6px';pre.style.fontSize='12px';pre.style.whiteSpace='pre-wrap';pre.textContent=txt;body.append(pre,button('Скачать файл',()=>download(file),'primary'));}catch(err){toast(err.message,true);}},'secondary');prev.style.marginTop='4px';bubble.append(prev);}}if(m.isUrgent&&!mine&&!m.acknowledgedAt)bubble.append(button(t('ack_btn'),async()=>{await api('ack/'+m.id,{});await refresh();},'secondary'));bubble.append(element('small','',date.toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'})+(mine?(m.readAt?t('read_mark'):t('saved_mark')):m.acknowledgedAt?t('acked_mark'):'')));const chips=element('div','reactions');for(const reaction of state.extras[m.id]||[])chips.append(button(reaction.emoji+' '+reaction.count,async()=>{await api('reaction/'+state.peer+'/'+m.id,{emoji:reaction.emoji});await loadHistory();},reaction.mine?'selected':''));bubble.append(chips);feed.append(bubble);}if(state.pending&&state.pending.peer===state.peer){const pending=element('article','bubble mine');pending.append(richText(state.pending.body.replace(new RegExp('^(?:(?:/срочно|/танец|/pet|/погладить|/питомец)(?:\\s+|$))+','iu'),'')),element('small','',state.pending.failed?t('send_failed'):t('sending')));feed.append(pending);}if(bottom){feed.scrollTop=feed.scrollHeight;$('new-messages').hidden=true;}}
 async function markRead(){if(!state.me||!state.peer||document.hidden||!document.hasFocus()||$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight>100)return;const latest=state.messages.at(-1);const contact=state.contacts.find(c=>c.id===state.peer);if(latest&&contact?.unread){await api('read/'+state.peer+'/'+latest.id,{});contact.unread=0;renderContacts();}}
 $('new-messages').onclick=()=>{$('feed').scrollTop=$('feed').scrollHeight;$('new-messages').hidden=true;markRead().catch(showError);};$('feed').onscroll=()=>{if($('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<90)markRead().catch(showError);};window.addEventListener('focus',()=>markRead().catch(showError));$('back').onclick=()=>$('app').classList.remove('chat-open');
 function addFiles(files){const all=[...state.files,...files];if(all.length>10||all.some(f=>f.size>50*1024*1024)||all.reduce((n,f)=>n+f.size,0)>100*1024*1024)throw Error('До 10 файлов: 50 МБ каждый, 100 МБ всего.');state.files=all;renderFiles();}
@@ -558,7 +629,588 @@ $('chat-search').onclick=()=>{const body=modal(t('search_full_history')),input=e
 function contactActions(c){const body=modal(c.fullName);for(const [label,key]of[[t('pin_toggle'),'pinned'],[t('fav_toggle'),'favourite'],[t('mute_toggle'),'muted']])body.append(button(label,async()=>{const next={pinned:!!c.pinned,favourite:!!c.favourite,muted:!!c.muted};next[key]=!next[key];await api('preferences/'+c.id,next);$('modal').close();await refresh();},'secondary'));if(!c.isGroup)body.append(button(t('add_to_group'),()=>inviteToGroup(c),'secondary'));else{body.append(button(t('group_settings_btn'),async()=>{const group=await api('groups/'+(-c.id));const body=modal(c.fullName);groupActions(body,group);},'secondary'));}}
 function playChatTone(urgent){try{const ctx=new(window.AudioContext||window.webkitAudioContext)();const now=ctx.currentTime;if(urgent){[0,0.15,0.3].forEach(offset=>{const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='triangle';osc.frequency.setValueAtTime(880,now+offset);gain.gain.setValueAtTime(0.3,now+offset);gain.gain.exponentialRampToValueAtTime(0.01,now+offset+0.1);osc.connect(gain);gain.connect(ctx.destination);osc.start(now+offset);osc.stop(now+offset+0.1);});}else{const osc1=ctx.createOscillator(),osc2=ctx.createOscillator();const gain=ctx.createGain();osc1.type='sine';osc2.type='sine';osc1.frequency.setValueAtTime(587.33,now);osc2.frequency.setValueAtTime(880,now+0.08);gain.gain.setValueAtTime(0.18,now);gain.gain.exponentialRampToValueAtTime(0.001,now+0.35);osc1.connect(gain);osc2.connect(gain);gain.connect(ctx.destination);osc1.start(now);osc1.stop(now+0.1);osc2.start(now+0.08);osc2.stop(now+0.35);}}catch(e){}}
 function notify(message){if(!message.body.trim()&&!message.attachments?.length)return;if(message.senderId===state.me?.id)return;if(document.hasFocus()&&!document.hidden&&state.peer===(message.recipientId<0?message.recipientId:message.senderId))return;const quiet=localStorage.getItem('helper.chat.quiet')==='true';if(quiet||state.contacts.find(c=>c.id===(message.recipientId<0?message.recipientId:message.senderId))?.muted)return;playChatTone(message.isUrgent);if('Notification'in window&&Notification.permission==='granted'){const notification=new Notification(message.isUrgent?'СРОЧНО · PixelHelper':'PixelHelper',{body:plainEmoji(message.body).slice(0,200),tag:'helper-'+message.id});notification.onclick=()=>{window.focus();openChat(message.recipientId<0?message.recipientId:message.senderId).catch(showError);};}}
-async function connect(){const generation=++state.generation;state.ws?.close();try{const response=await fetch('/messengerHub/negotiate?negotiateVersion=1',{method:'POST',credentials:'same-origin',headers:{'X-Messenger-Web':'1'}});if(!response.ok)throw Error('Не удалось подключить уведомления');const negotiation=await response.json();if(generation!==state.generation||!state.me)return;const ws=new WebSocket(location.origin.replace(/^http/,'ws')+'/messengerHub?id='+encodeURIComponent(negotiation.connectionToken));state.ws=ws;let handshake=false,buffer='',last=Date.now();const timer=setInterval(()=>{if(Date.now()-last>45000)ws.close();else if(ws.readyState===WebSocket.OPEN)ws.send('{"type":6}\u001e');},15000);const timeout=setTimeout(()=>{if(!handshake)ws.close();},10000);ws.onopen=()=>ws.send('{"protocol":"json","version":1}\u001e');ws.onmessage=e=>{last=Date.now();buffer+=e.data;let split;while((split=buffer.indexOf('\u001e'))>=0){const raw=buffer.slice(0,split);buffer=buffer.slice(split+1);if(!raw)continue;const packet=JSON.parse(raw);if(!handshake){if(packet.error){ws.close();return;}handshake=true;ws.send('{"type":1,"target":"SetMessengerOpen","arguments":[true]}\u001e');$('connection').textContent=t('connected_as')+state.me.fullName;clearTimeout(timeout);refresh();}else if(packet.type===1){if(packet.target==='Typing'){const t=packet.arguments[0];if(t.peer===state.peer){const isPeerPsychologist=t.isPsychologist||state.contacts.find(c=>c.id===t.peer)?.position?.toLowerCase().includes('психолог')||state.contacts.find(c=>c.id===t.peer)?.role==='Psychologist';const amIPsychologist=state.me?.position?.toLowerCase().includes('психолог')||state.me?.role==='Psychologist';let label=isPeerPsychologist?t('typing_psychologist'):(amIPsychologist?t('typing_employee'):t.fullName+t('typing'));$('chat-status').textContent=label;setTimeout(()=>{if(state.peer===t.peer)$('chat-status').textContent=state.contacts.find(c=>c.id===t.peer)?.isOnline?'В сети':'Рабочий чат';},5000);}continue;}if(packet.target==='ChatMessage')notify(packet.arguments[0]);refresh();}else if(packet.type===7)ws.close();}};ws.onclose=()=>{clearInterval(timer);clearTimeout(timeout);if(generation===state.generation&&state.me){$('connection').textContent=t('reconnecting');setTimeout(()=>{if(generation===state.generation&&state.me)connect();},5000);}};ws.onerror=()=>ws.close();}catch(e){$('connection').textContent=t('no_connection');if(state.me&&generation===state.generation)setTimeout(()=>{if(generation===state.generation&&state.me)connect();},10000);}}
+// --- Voice Recording ---
+let voiceRecorder = null, voiceStream = null, voiceTimer = null, voiceStartTime = 0;
+let voiceAudioCtx = null, voiceAnalyser = null, voiceWaveSamples = [];
+
+$('record-voice').onclick = async () => {
+  if (voiceRecorder || videoRecorder || !state.peer) return;
+  try {
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = voiceAudioCtx.createMediaStreamSource(voiceStream);
+    voiceAnalyser = voiceAudioCtx.createAnalyser();
+    voiceAnalyser.fftSize = 64;
+    source.connect(voiceAnalyser);
+    voiceWaveSamples = [];
+
+    const sampleTimer = setInterval(() => {
+      if (!voiceRecorder || voiceRecorder.state !== 'recording') return;
+      const data = new Uint8Array(voiceAnalyser.frequencyBinCount);
+      voiceAnalyser.getByteFrequencyData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i];
+      const avg = sum / (data.length * 255);
+      voiceWaveSamples.push(Math.max(0.1, Math.min(1.0, Number(avg.toFixed(2)))));
+    }, 150);
+
+    const chunks = [];
+    voiceRecorder = new MediaRecorder(voiceStream);
+    voiceRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    voiceRecorder.onstop = async () => {
+      clearInterval(sampleTimer);
+      if (voiceAudioCtx) { voiceAudioCtx.close().catch(()=>{}); voiceAudioCtx = null; }
+      if (voiceStream) { voiceStream.getTracks().forEach(t => t.stop()); voiceStream = null; }
+      if (voiceRecorder.cancelled || !chunks.length) { voiceRecorder = null; return; }
+      const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
+      const duration = Math.max(1, Math.round((Date.now() - voiceStartTime) / 1000));
+      // Сжимаем samples до ~25 точек
+      let finalWave = voiceWaveSamples;
+      if (finalWave.length > 30) {
+        const step = finalWave.length / 25;
+        finalWave = Array.from({ length: 25 }, (_, i) => finalWave[Math.floor(i * step)] || 0.3);
+      }
+      voiceRecorder = null;
+      try {
+        const form = new FormData();
+        form.append('peer', state.peer);
+        form.append('body', '');
+        form.append('isVoice', 'true');
+        form.append('duration', duration.toString());
+        form.append('waveform', JSON.stringify(finalWave));
+        form.append('files', blob, 'voice.webm');
+        const msg = await api('files/send', form);
+        state.messages.push(msg);
+        renderFeed(true);
+        await refresh();
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    voiceRecorder.start(200);
+    voiceStartTime = Date.now();
+    $('recording-bar').hidden = false;
+    $('.composer-row').style.display = 'none';
+    $('recording-timer').textContent = '00:00';
+    voiceTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - voiceStartTime) / 1000);
+      const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+      const s = String(elapsed % 60).padStart(2, '0');
+      $('recording-timer').textContent = `${m}:${s}`;
+      if (elapsed >= 300) $('recording-send').click();
+    }, 500);
+  } catch (err) {
+    showError(new Error('Не удалось получить доступ к микрофону: ' + err.message));
+  }
+};
+
+function stopVoiceRecording(cancel) {
+  if (!voiceRecorder) return;
+  clearInterval(voiceTimer);
+  voiceRecorder.cancelled = cancel;
+  voiceRecorder.stop();
+  $('recording-bar').hidden = true;
+  $('.composer-row').style.display = '';
+}
+$('recording-cancel').onclick = () => stopVoiceRecording(true);
+$('recording-send').onclick = () => stopVoiceRecording(false);
+
+// --- Video Notes (Round Telegram-like videos) ---
+let videoRecorder = null, videoStream = null, videoTimer = null, videoStartTime = 0;
+
+$('record-video').onclick = async () => {
+  if (videoRecorder || voiceRecorder || !state.peer) return;
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 480 }, height: { ideal: 480 }, aspectRatio: 1 },
+      audio: true
+    }).catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: true }));
+
+    $('video-recorder-preview').srcObject = videoStream;
+    $('video-preview-card').hidden = false;
+    $('.composer-row').style.display = 'none';
+    $('video-recording-timer').textContent = '00:00';
+
+    const chunks = [];
+    videoRecorder = new MediaRecorder(videoStream, { mimeType: 'video/webm;codecs=vp8,opus' });
+    videoRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    videoRecorder.onstop = async () => {
+      if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
+      $('video-recorder-preview').srcObject = null;
+      if (videoRecorder.cancelled || !chunks.length) { videoRecorder = null; return; }
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const duration = Math.max(1, Math.round((Date.now() - videoStartTime) / 1000));
+      videoRecorder = null;
+      try {
+        const form = new FormData();
+        form.append('peer', state.peer);
+        form.append('body', '');
+        form.append('isVideoNote', 'true');
+        form.append('duration', duration.toString());
+        form.append('files', blob, 'video_note.webm');
+        const msg = await api('files/send', form);
+        state.messages.push(msg);
+        renderFeed(true);
+        await refresh();
+      } catch (err) {
+        showError(err);
+      }
+    };
+
+    videoRecorder.start(250);
+    videoStartTime = Date.now();
+    videoTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - videoStartTime) / 1000);
+      const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+      const s = String(elapsed % 60).padStart(2, '0');
+      $('video-recording-timer').textContent = `${m}:${s}`;
+      if (elapsed >= 60) $('video-recording-send').click();
+    }, 500);
+  } catch (err) {
+    showError(new Error('Не удалось получить доступ к камере: ' + err.message));
+  }
+};
+
+function stopVideoRecording(cancel) {
+  if (!videoRecorder) return;
+  clearInterval(videoTimer);
+  videoRecorder.cancelled = cancel;
+  videoRecorder.stop();
+  $('video-preview-card').hidden = true;
+  $('.composer-row').style.display = '';
+}
+$('video-recording-cancel').onclick = () => stopVideoRecording(true);
+$('video-recording-send').onclick = () => stopVideoRecording(false);
+
+// --- WebRTC Calls ---
+let rtcConfig = null;
+let currentCall = {
+  id: null,
+  peerId: null,
+  isCaller: false,
+  isVideo: false,
+  pc: null,
+  localStream: null,
+  timer: null,
+  startTime: 0,
+  ringtone: null,
+  recorder: null,
+  recordChunks: [],
+  recordInterval: null,
+  isRecording: false
+};
+
+async function getRtcConfig() {
+  if (rtcConfig) return rtcConfig;
+  try {
+    rtcConfig = await api('webrtc/config');
+  } catch {
+    rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  }
+  return rtcConfig;
+}
+
+function playRingtone() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let count = 0;
+    const ringInterval = setInterval(() => {
+      if (!currentCall.ringtone) { clearInterval(ringInterval); return; }
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator(), osc2 = ctx.createOscillator(), gain = ctx.createGain();
+      osc1.frequency.setValueAtTime(425, now);
+      osc2.frequency.setValueAtTime(475, now);
+      gain.gain.setValueAtTime(0.12, now);
+      gain.gain.setValueAtTime(0, now + 1.2);
+      osc1.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
+      osc1.start(now); osc1.stop(now + 1.2); osc2.start(now); osc2.stop(now + 1.2);
+      count++;
+      if (count > 25) stopRingtone();
+    }, 3000);
+    currentCall.ringtone = { ctx, ringInterval };
+  } catch {}
+}
+
+function stopRingtone() {
+  if (currentCall.ringtone) {
+    clearInterval(currentCall.ringtone.ringInterval);
+    if (currentCall.ringtone.ctx) currentCall.ringtone.ctx.close().catch(()=>{});
+    currentCall.ringtone = null;
+  }
+}
+
+async function safeGetUserMedia(isVideo) {
+  let audioTrack = null;
+  let videoTrack = null;
+
+  // 1. Попытка получить микрофон
+  try {
+    if (navigator.mediaDevices?.getUserMedia) {
+      const aStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioTrack = aStream.getAudioTracks()[0] || null;
+    }
+  } catch (e) {
+    console.warn('Микрофон недоступен:', e);
+  }
+
+  // 2. Если видеозвонок, попытка получить камеру
+  if (isVideo) {
+    try {
+      if (navigator.mediaDevices?.getUserMedia) {
+        const vStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        videoTrack = vStream.getVideoTracks()[0] || null;
+      }
+    } catch (e) {
+      console.warn('Камера с идеальным разрешением недоступна:', e);
+      try {
+        const vStream2 = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoTrack = vStream2.getVideoTracks()[0] || null;
+      } catch (e2) {
+        console.warn('Камера не найдена на устройстве:', e2);
+      }
+    }
+  }
+
+  // 3. Если нет физического микрофона, генерируем беззвучный аудиопоток для работы WebRTC
+  if (!audioTrack) {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const dst = ctx.createMediaStreamDestination();
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      osc.connect(gain);
+      gain.connect(dst);
+      osc.start();
+      audioTrack = dst.stream.getAudioTracks()[0] || null;
+    } catch (err) {
+      console.warn('Не удалось создать резервный аудиопоток:', err);
+    }
+  }
+
+  const tracks = [];
+  if (audioTrack) tracks.push(audioTrack);
+  if (videoTrack) tracks.push(videoTrack);
+
+  if (isVideo && !videoTrack) {
+    notify({ body: 'Веб-камера не найдена. Звонок переключен в аудио-режим.' });
+  }
+  if (!audioTrack) {
+    notify({ body: 'Микрофон не обнаружен. Вы сможете только слушать собеседника.' });
+  }
+
+  return new MediaStream(tracks);
+}
+
+async function startCall(isVideo) {
+  if (!state.peer || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  const isGroup = state.peer < 0;
+  const contact = state.contacts.find(c => c.id === state.peer);
+  const targetName = contact ? contact.fullName : 'Собеседник';
+
+  try {
+    const stream = await safeGetUserMedia(isVideo);
+    currentCall.localStream = stream;
+    $('local-video').srcObject = stream;
+    $('call-remote-name').textContent = targetName + (isVideo ? ' (Видеозвонок)' : ' (Аудиозвонок)');
+    $('call-timer').textContent = 'Вызов…';
+    $('call-modal').showModal();
+    $('call-record').hidden = false;
+    $('web-record-indicator').hidden = true;
+    $('call-record').classList.remove('active');
+
+    currentCall.isCaller = true;
+    currentCall.isVideo = isVideo;
+    currentCall.peerId = state.peer;
+
+    playRingtone();
+
+    if (isGroup) {
+      state.ws.send(JSON.stringify({ type: 1, target: 'StartGroupCall', arguments: [-state.peer, isVideo] }) + '\u001e');
+    } else {
+      state.ws.send(JSON.stringify({ type: 1, target: 'StartCall', arguments: [state.peer, isVideo] }) + '\u001e');
+    }
+  } catch (err) {
+    showError(new Error('Не удалось запустить звонок: ' + err.message));
+  }
+}
+
+$('call-audio').onclick = () => startCall(false);
+$('call-video').onclick = () => startCall(true);
+
+async function setupPeerConnection(callId, targetUserId) {
+  const cfg = await getRtcConfig();
+  const pc = new RTCPeerConnection(cfg);
+  currentCall.pc = pc;
+  currentCall.id = callId;
+
+  if (currentCall.localStream) {
+    currentCall.localStream.getTracks().forEach(t => pc.addTrack(t, currentCall.localStream));
+  }
+
+  pc.ontrack = e => {
+    if (e.streams && e.streams[0]) {
+      $('remote-video').srcObject = e.streams[0];
+    }
+  };
+
+  pc.onicecandidate = e => {
+    if (e.candidate && state.ws?.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({
+        type: 1,
+        target: 'SendIceCandidate',
+        arguments: [callId, targetUserId, e.candidate.candidate, e.candidate.sdpMid || '', e.candidate.sdpMLineIndex || 0]
+      }) + '\u001e');
+    }
+  };
+
+  return pc;
+}
+
+function startCallTimer() {
+  currentCall.startTime = Date.now();
+  clearInterval(currentCall.timer);
+  currentCall.timer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - currentCall.startTime) / 1000);
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    $('call-timer').textContent = `${m}:${s}`;
+  }, 1000);
+}
+
+function endCallCleanUp() {
+  if (currentCall.isRecording) {
+    stopWebCallRecording();
+  }
+  stopRingtone();
+  clearInterval(currentCall.timer);
+  if (currentCall.pc) { currentCall.pc.close(); currentCall.pc = null; }
+  if (currentCall.localStream) {
+    currentCall.localStream.getTracks().forEach(t => t.stop());
+    currentCall.localStream = null;
+  }
+  $('local-video').srcObject = null;
+  $('remote-video').srcObject = null;
+  $('call-modal').close();
+  $('incoming-call-banner').hidden = true;
+  $('call-record').hidden = true;
+  $('web-record-indicator').hidden = true;
+  currentCall.id = null;
+  currentCall.peerId = null;
+  currentCall.isCaller = false;
+}
+
+function startWebCallRecording() {
+  if (currentCall.isRecording || !currentCall.isCaller) return;
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const dest = audioCtx.createMediaStreamDestination();
+    if (currentCall.localStream?.getAudioTracks().length) {
+      audioCtx.createMediaStreamSource(currentCall.localStream).connect(dest);
+    }
+    const remoteStream = $('remote-video').srcObject;
+    if (remoteStream?.getAudioTracks().length) {
+      audioCtx.createMediaStreamSource(remoteStream).connect(dest);
+    }
+    const videoTracks = remoteStream?.getVideoTracks()?.length ? remoteStream.getVideoTracks() : (currentCall.localStream?.getVideoTracks() || []);
+    const tracks = [...videoTracks, ...dest.stream.getAudioTracks()];
+    if (!tracks.length) {
+      notify({ body: 'Нет активных потоков для записи' });
+      return;
+    }
+    const stream = new MediaStream(tracks);
+    currentCall.recordChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
+    const rec = new MediaRecorder(stream, { mimeType });
+    rec.ondataavailable = e => { if (e.data?.size) currentCall.recordChunks.push(e.data); };
+    rec.onstop = async () => {
+      if (!currentCall.recordChunks.length) return;
+      const blob = new Blob(currentCall.recordChunks, { type: 'video/webm' });
+      currentCall.recordChunks = [];
+      const contact = state.contacts.find(c => c.id === currentCall.peerId);
+      const name = (contact?.fullName || 'Собеседник').replace(/[^a-zA-Z0-9а-яА-ЯёЁ_\- ]/g, '').trim();
+      const filename = `Видеозвонок_${name}_${new Date().toISOString().replace(/T/, '_').replace(/:/g, '-').slice(0, 19)}.webm`;
+      try {
+        const res = await fetch(`http://127.0.0.1:49215/api/save-call-recording?name=${encodeURIComponent(filename)}`, {
+          method: 'POST', body: blob, headers: { 'Content-Type': 'video/webm' }
+        });
+        if (res.ok) { notify({ body: 'Запись звонка сохранена в папку «Видео»' }); return; }
+      } catch {}
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+      notify({ body: 'Запись звонка скачана в папку «Видео / Загрузки»' });
+    };
+    rec.start(1000);
+    currentCall.recorder = rec;
+    currentCall.isRecording = true;
+    $('call-record').classList.add('active');
+    $('web-record-indicator').hidden = false;
+    let recSec = 0;
+    clearInterval(currentCall.recordInterval);
+    currentCall.recordInterval = setInterval(() => {
+      recSec++;
+      const m = String(Math.floor(recSec / 60)).padStart(2, '0');
+      const s = String(recSec % 60).padStart(2, '0');
+      $('web-record-timer').textContent = `REC ${m}:${s}`;
+    }, 1000);
+    notify({ body: 'Запись видеозвонка начата' });
+  } catch (err) {
+    showError(new Error('Не удалось начать запись: ' + err.message));
+  }
+}
+
+function stopWebCallRecording() {
+  if (!currentCall.isRecording || !currentCall.recorder) return;
+  currentCall.isRecording = false;
+  clearInterval(currentCall.recordInterval);
+  $('call-record').classList.remove('active');
+  $('web-record-indicator').hidden = true;
+  if (currentCall.recorder.state !== 'inactive') currentCall.recorder.stop();
+}
+
+$('call-record').onclick = () => {
+  if (currentCall.isRecording) stopWebCallRecording();
+  else startWebCallRecording();
+};
+
+$('call-hangup').onclick = () => {
+  if (currentCall.id && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 1, target: 'EndCall', arguments: [currentCall.id] }) + '\u001e');
+  }
+  endCallCleanUp();
+};
+
+$('call-toggle-mic').onclick = () => {
+  if (!currentCall.localStream) return;
+  const audioTrack = currentCall.localStream.getAudioTracks()[0];
+  if (audioTrack) {
+    audioTrack.enabled = !audioTrack.enabled;
+    $('call-toggle-mic').textContent = audioTrack.enabled ? '🎤' : '🔇';
+    $('call-toggle-mic').classList.toggle('muted', !audioTrack.enabled);
+  }
+};
+
+$('call-toggle-cam').onclick = () => {
+  if (!currentCall.localStream) return;
+  const vidTrack = currentCall.localStream.getVideoTracks()[0];
+  if (vidTrack) {
+    vidTrack.enabled = !vidTrack.enabled;
+    $('call-toggle-cam').textContent = vidTrack.enabled ? '📷' : '🚫';
+  }
+};
+
+$('call-toggle-screen').onclick = async () => {
+  if (!currentCall.pc) return;
+  try {
+    const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const screenTrack = screenStream.getVideoTracks()[0];
+    const senders = currentCall.pc.getSenders();
+    const vidSender = senders.find(s => s.track && s.track.kind === 'video');
+    if (vidSender) {
+      vidSender.replaceTrack(screenTrack);
+      screenTrack.onended = () => {
+        const origTrack = currentCall.localStream?.getVideoTracks()[0];
+        if (origTrack) vidSender.replaceTrack(origTrack);
+      };
+    }
+  } catch {}
+};
+
+let incomingCallState = null;
+$('incoming-accept').onclick = async () => {
+  if (!incomingCallState) return;
+  stopRingtone();
+  $('incoming-call-banner').hidden = true;
+  const { callId, callerId, callerName, isVideo } = incomingCallState;
+
+  try {
+    const stream = await safeGetUserMedia(isVideo);
+    currentCall.localStream = stream;
+    $('local-video').srcObject = stream;
+    $('call-remote-name').textContent = callerName + (isVideo ? ' (Видео)' : ' (Аудио)');
+    $('call-timer').textContent = 'Соединение…';
+    $('call-modal').showModal();
+    $('call-record').hidden = true;
+    $('web-record-indicator').hidden = true;
+
+    currentCall.id = callId;
+    currentCall.peerId = callerId;
+    currentCall.isVideo = isVideo;
+    currentCall.isCaller = false;
+
+    await setupPeerConnection(callId, callerId);
+
+    if (state.ws?.readyState === WebSocket.OPEN) {
+      state.ws.send(JSON.stringify({ type: 1, target: 'AcceptCall', arguments: [callId] }) + '\u001e');
+    }
+  } catch (err) {
+    showError(new Error('Не удалось принять вызов: ' + err.message));
+    $('incoming-reject').click();
+  }
+};
+
+$('incoming-reject').onclick = () => {
+  stopRingtone();
+  $('incoming-call-banner').hidden = true;
+  if (incomingCallState && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 1, target: 'RejectCall', arguments: [incomingCallState.callId] }) + '\u001e');
+  }
+  incomingCallState = null;
+};
+
+async function connect(){const generation=++state.generation;state.ws?.close();try{const response=await fetch('/messengerHub/negotiate?negotiateVersion=1',{method:'POST',credentials:'same-origin',headers:{'X-Messenger-Web':'1'}});if(!response.ok)throw Error('Не удалось подключить уведомления');const negotiation=await response.json();if(generation!==state.generation||!state.me)return;const ws=new WebSocket(location.origin.replace(/^http/,'ws')+'/messengerHub?id='+encodeURIComponent(negotiation.connectionToken));state.ws=ws;let handshake=false,buffer='',last=Date.now();const timer=setInterval(()=>{if(Date.now()-last>45000)ws.close();else if(ws.readyState===WebSocket.OPEN)ws.send('{"type":6}\u001e');},15000);const timeout=setTimeout(()=>{if(!handshake)ws.close();},10000);ws.onopen=()=>ws.send('{"protocol":"json","version":1}\u001e');ws.onmessage=async e=>{last=Date.now();buffer+=e.data;let split;while((split=buffer.indexOf('\u001e'))>=0){const raw=buffer.slice(0,split);buffer=buffer.slice(split+1);if(!raw)continue;const packet=JSON.parse(raw);if(!handshake){if(packet.error){ws.close();return;}handshake=true;ws.send('{"type":1,"target":"SetMessengerOpen","arguments":[true]}\u001e');$('connection').textContent=t('connected_as')+state.me.fullName;clearTimeout(timeout);refresh();}else if(packet.type===1){
+  if(packet.target==='Typing'){const t=packet.arguments[0];if(t.peer===state.peer){const isPeerPsychologist=t.isPsychologist||state.contacts.find(c=>c.id===t.peer)?.position?.toLowerCase().includes('психолог')||state.contacts.find(c=>c.id===t.peer)?.role==='Psychologist';const amIPsychologist=state.me?.position?.toLowerCase().includes('психолог')||state.me?.role==='Psychologist';let label=isPeerPsychologist?t('typing_psychologist'):(amIPsychologist?t('typing_employee'):t.fullName+t('typing'));$('chat-status').textContent=label;setTimeout(()=>{if(state.peer===t.peer)$('chat-status').textContent=state.contacts.find(c=>c.id===t.peer)?.isOnline?'В сети':'Рабочий чат';},5000);}continue;}
+  if(packet.target==='ChatMessage'){const msg=packet.arguments[0];if(msg&&(msg.body?.trim()||msg.attachments?.length)){notify(msg);refresh();}}
+  if(packet.target==='IncomingCall'){
+    const [callId, callerId, callerName, isVideo, isGroup, groupId] = packet.arguments;
+    incomingCallState = { callId, callerId, callerName, isVideo, isGroup, groupId };
+    $('incoming-caller-name').textContent = callerName + (isGroup ? ' (Группа)' : '');
+    $('incoming-call-type').textContent = isVideo ? 'Входящий видеозвонок…' : 'Входящий аудиозвонок…';
+    $('incoming-call-banner').hidden = false;
+    playRingtone();
+  }
+  if(packet.target==='CallAccepted'){
+    const [callId, byUserId] = packet.arguments;
+    stopRingtone();
+    startCallTimer();
+    if(currentCall.isCaller && currentCall.id === callId) {
+      const pc = await setupPeerConnection(callId, byUserId);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 1, target: 'SendSdpOffer', arguments: [callId, byUserId, offer.sdp] }) + '\u001e');
+    }
+  }
+  if(packet.target==='SdpOfferReceived'){
+    const [callId, fromUserId, sdp] = packet.arguments;
+    let pc = currentCall.pc;
+    if(!pc) pc = await setupPeerConnection(callId, fromUserId);
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    ws.send(JSON.stringify({ type: 1, target: 'SendSdpAnswer', arguments: [callId, fromUserId, answer.sdp] }) + '\u001e');
+    startCallTimer();
+  }
+  if(packet.target==='SdpAnswerReceived'){
+    const [callId, fromUserId, sdp] = packet.arguments;
+    if(currentCall.pc) {
+      await currentCall.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+    }
+  }
+  if(packet.target==='IceCandidateReceived'){
+    const [callId, fromUserId, candidate, sdpMid, sdpMLineIndex] = packet.arguments;
+    if(currentCall.pc && candidate) {
+      try {
+        await currentCall.pc.addIceCandidate(new RTCIceCandidate({ candidate, sdpMid, sdpMLineIndex }));
+      } catch {}
+    }
+  }
+  if(packet.target==='CallRejected'||packet.target==='CallEnded'){
+    endCallCleanUp();
+    toast('Звонок завершен');
+  }
+}else if(packet.type===7)ws.close();}};ws.onclose=()=>{clearInterval(timer);clearTimeout(timeout);if(generation===state.generation&&state.me){$('connection').textContent=t('reconnecting');setTimeout(()=>{if(generation===state.generation&&state.me)connect();},5000);}};ws.onerror=()=>ws.close();}catch(e){$('connection').textContent=t('no_connection');if(state.me&&generation===state.generation)setTimeout(()=>{if(generation===state.generation&&state.me)connect();},10000);}}
 setInterval(()=>{if(state.me&&!document.hidden)refresh();},30000);$('me').onclick=()=>toast(state.me?.fullName||'');if($('login-lang')) $('login-lang').onclick=()=>$('lang').onclick();applyTranslations();(async()=>{if(location.protocol!=='https:'){$('login-error').textContent='Для входа откройте эту страницу через HTTPS.';return;}try{await start();}catch(e){logoutLocal();if(e.status===401)await signIn('web/windows');else $('login-error').textContent=e.message;}})();
 
 fetch("/messenger/design-tokens.json").then(r=>r.json()).then(tokens=>{designTokens=tokens;applyTokens();}).catch(()=>{});function applyTokens(){if(!designTokens)return;for(const [key,value]of Object.entries(designTokens[document.documentElement.dataset.theme]||designTokens.dark))document.documentElement.style.setProperty("--"+key,value);}

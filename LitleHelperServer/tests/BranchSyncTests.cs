@@ -11,12 +11,25 @@ public static class BranchSyncTests
         Console.WriteLine("PASS " + message);
     }
 
+    private sealed class AgentContext(string machine) : Microsoft.AspNetCore.SignalR.HubCallerContext
+    {
+        public override string ConnectionId => "ticket-context-test";
+        public override string? UserIdentifier => machine;
+        public override System.Security.Claims.ClaimsPrincipal User => new(new System.Security.Claims.ClaimsIdentity(
+            [new(System.Security.Claims.ClaimTypes.Name, machine), new(System.Security.Claims.ClaimTypes.Role, "Agent")], "Agent"));
+        public override IDictionary<object, object?> Items { get; } = new Dictionary<object, object?>();
+        public override Microsoft.AspNetCore.Http.Features.IFeatureCollection Features { get; } = new Microsoft.AspNetCore.Http.Features.FeatureCollection();
+        public override CancellationToken ConnectionAborted => CancellationToken.None;
+        public override void Abort() { }
+    }
     public static async Task RunAsync()
     {
         using var db = new HelperDb(new DbContextOptionsBuilder<HelperDb>().UseSqlite("Data Source=:memory:").Options);
         await db.Database.OpenConnectionAsync();
         await db.Database.EnsureCreatedAsync();
 
+        await SystemButtons.EnsureAsync(db); await SystemButtons.EnsureAsync(db);
+        Check(await db.Buttons.CountAsync(b => b.IsSystem) == 2, "system button seeding is idempotent");
         // 1. Setup branches with prefixes
         var polyclinic = new Branch { Name = "Поликлиника", ComputerPrefixes = "N", IsActive = true };
         var hospital = new Branch { Name = "Больница", ComputerPrefixes = "B", IsActive = true };
@@ -67,6 +80,60 @@ public static class BranchSyncTests
         Check(autoCreated.FullName == "Петрова Анна", "Auto-created user petrova has correct FullName");
         Check(autoCreated.AuthSource == "AD", "Auto-created user petrova has AuthSource AD");
 
-        Console.WriteLine("All BranchSync tests passed successfully.");
+        // Exercise the actual hub endpoint with an Agent identity, regardless of the employee's panel role.
+        var unknown = new Computer { MachineName = "UNKNOWN", Room = "404" };
+        db.Computers.Add(unknown);
+        foreach (var item in new[] { (pc1, polyclinic.Id), (pc2, hospital.Id), (pc3, maternity.Id), (unknown, (int?)null) })
+        {
+            item.Item1.ConnectionId = "ticket-context-test";
+            item.Item1.BranchId = null;
+            await db.SaveChangesAsync();
+            var hub = new HelperHub(db, null!, null!, null!, null!, null!) { Context = new AgentContext(item.Item1.MachineName) };
+            var context = System.Text.Json.JsonSerializer.SerializeToElement(await hub.GetTicketContext());
+            Check(context.GetProperty("detectedBranchId").ToString() == (item.Item2?.ToString() ?? ""), "GetTicketContext detects branch for " + item.Item1.MachineName);
+            Check(context.GetProperty("room").GetString() == item.Item1.Room, "GetTicketContext returns room for " + item.Item1.MachineName);
+        }
+        pc1.BranchId = hospital.Id; await db.SaveChangesAsync();
+        var assignedHub = new HelperHub(db, null!, null!, null!, null!, null!) { Context = new AgentContext(pc1.MachineName) };
+        var assigned = System.Text.Json.JsonSerializer.SerializeToElement(await assignedHub.GetTicketContext());
+        Check(assigned.GetProperty("detectedBranchId").GetInt32() == hospital.Id, "stored computer branch takes precedence over prefix");
+
+        // 5. Multi-branch administrator tests
+        await Branches.EnsureSchemaAsync(db);
+        var multiAdmin = new PanelUser { Username = "multi_admin", Role = Roles.Admin, PasswordHash = "hash" };
+        multiAdmin.BranchIds = [polyclinic.Id, maternity.Id];
+        db.Users.Add(multiAdmin);
+        await db.SaveChangesAsync();
+
+        Check(multiAdmin.BranchIds.Length == 2, "multi-admin has 2 assigned branch IDs");
+        Check(multiAdmin.BranchId == polyclinic.Id, "multi-admin first branch synced to BranchId legacy field");
+
+        var ticketPoly = new TicketRecord { BranchId = polyclinic.Id, Title = "Polyclinic ticket" };
+        var ticketMat = new TicketRecord { BranchId = maternity.Id, Title = "Maternity ticket" };
+        var ticketHosp = new TicketRecord { BranchId = hospital.Id, Title = "Hospital ticket" };
+        var ticketNoBranch = new TicketRecord { BranchId = null, Title = "Global ticket" };
+
+        Check(Branches.CanHandle(multiAdmin, ticketPoly), "multi-admin can handle Polyclinic ticket");
+        Check(Branches.CanHandle(multiAdmin, ticketMat), "multi-admin can handle Maternity ticket");
+        Check(!Branches.CanHandle(multiAdmin, ticketHosp), "multi-admin cannot handle Hospital ticket (not assigned)");
+        Check(Branches.CanHandle(multiAdmin, ticketNoBranch), "multi-admin can handle unassigned/legacy ticket");
+
+        var globalAdmin = new PanelUser { Username = "global_admin", Role = Roles.Admin, PasswordHash = "hash" };
+        globalAdmin.BranchIds = [];
+        Check(Branches.CanHandle(globalAdmin, ticketHosp), "admin with no branches can handle all tickets");
+
+        await Branches.ValidateUserBranchesAsync(db, [polyclinic.Id, hospital.Id]);
+        Check(true, "ValidateUserBranchesAsync passes for valid branches");
+        try
+        {
+            await Branches.ValidateUserBranchesAsync(db, [999999]);
+            throw new Exception("Non-existent branch accepted");
+        }
+        catch (ArgumentException)
+        {
+            Check(true, "ValidateUserBranchesAsync throws ArgumentException on non-existent branch");
+        }
+
+        Console.WriteLine("All BranchSync and Multi-Branch Admin tests passed successfully.");
     }
 }

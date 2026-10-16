@@ -162,11 +162,27 @@ public static class Branches
         return new { success = true, updatedComputers, updatedUsers, message = $"Синхронизировано: {updatedComputers} рабочих станций, {updatedUsers} пользователей." };
     }
 
-    public static bool CanHandle(PanelUser user, TicketRecord ticket) => user.Role == Roles.SuperAdmin || (user.Role == Roles.Admin && user.BranchId == null) || ticket.BranchId == null || user.BranchId == ticket.BranchId;
+    public static bool CanHandle(PanelUser user, TicketRecord ticket)
+    {
+        if (user.Role == Roles.SuperAdmin) return true;
+        var branches = user.BranchIds;
+        if (user.Role == Roles.Admin && branches.Length == 0 && user.BranchId == null) return true;
+        if (ticket.BranchId == null) return true;
+        if (branches.Length > 0) return branches.Contains(ticket.BranchId.Value);
+        return user.BranchId == ticket.BranchId;
+    }
     public static void Require(PanelUser user, TicketRecord ticket)
     { if (!CanHandle(user, ticket)) throw new UnauthorizedAccessException("Заявка относится к другому филиалу. Проверьте филиал в профиле пользователя."); }
     public static async Task ValidateUserAsync(HelperDb db, int? id)
     { if (id != null && !await db.Branches.AnyAsync(b => b.Id == id)) throw new ArgumentException("Выберите действующий филиал."); }
+    public static async Task ValidateUserBranchesAsync(HelperDb db, IEnumerable<int>? ids)
+    {
+        if (ids == null) return;
+        var list = ids.Distinct().ToList();
+        if (list.Count == 0) return;
+        var existingCount = await db.Branches.CountAsync(b => list.Contains(b.Id));
+        if (existingCount != list.Count) throw new ArgumentException("Один или несколько выбранных филиалов не существуют.");
+    }
     public static async Task<Branch?> ValidateTicketAsync(HelperDb db, int? id, string room)
     {
         if (room.Length > 100 || room.Any(char.IsControl)) throw new ArgumentException("Кабинет: до 100 символов без переносов строк.");
@@ -189,6 +205,7 @@ public static class Branches
             ("Branches", "ComputerPrefixes", "TEXT NOT NULL DEFAULT ''"),
             ("Branches", "IpSubnets", "TEXT NOT NULL DEFAULT ''"),
             ("Users", "BranchId", "INTEGER NULL"),
+            ("Users", "BranchIds", "TEXT NOT NULL DEFAULT '[]'"),
             ("Users", "Room", "TEXT NOT NULL DEFAULT ''"),
             ("Computers", "BranchId", "INTEGER NULL"),
             ("Computers", "Room", "TEXT NOT NULL DEFAULT ''"),

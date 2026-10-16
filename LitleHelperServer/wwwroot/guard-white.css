@@ -1,0 +1,81 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #000000;
+    color: #ffffff;
+    font-family: Arial, sans-serif;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    cursor: none;
+    user-select: none;
+}
+
+#alert {
+    box-sizing: border-box;
+    min-height: 100vh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 3vw;
+    border: 12px solid #ffffff;
+    animation: pulse 1s infinite;
+}
+
+#alert[hidden] {
+    display: none;
+}
+
+h1 {
+    font-size: clamp(28px, 5vw, 70px);
+    margin: 0 0 10px 0;
+    font-weight: 900;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+#cabinet {
+    font-size: clamp(70px, 12vw, 160px);
+    font-weight: bold;
+    margin: 15px 0;
+    line-height: 1.1;
+}
+
+.kazakh-title {
+    font-size: clamp(20px, 2.5vw, 32px);
+    margin: 5px 0 15px 0;
+    opacity: 0.95;
+    letter-spacing: 1px;
+}
+
+#details {
+    font-size: clamp(18px, 2.2vw, 30px);
+    color: #cbd5e1;
+    margin: 10px 0;
+    font-weight: 500;
+}
+
+#status {
+    font-size: clamp(22px, 3vw, 38px);
+    color: #7dd3fc;
+    margin: 15px 0;
+    font-weight: bold;
+}
+
+#connection {
+    position: fixed;
+    right: 2px;
+    bottom: 2px;
+    width: 1px;
+    height: 1px;
+    background: #062c0a;
+}
+
+@keyframes pulse {
+    50% {
+        border-color: #dc2626;
+    }
+}

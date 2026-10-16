@@ -5,6 +5,7 @@ let token = sessionStorage.getItem('helper-token'), me, hub, page = 'computers',
 let permissionCatalog={}, rolePermissions={};
 const can=key=>(me?.effectivePermissions||[]).includes(key), manage=()=>can('commands.execute'), superAdmin=()=>can('terminal.execute'), roleName=r=>({SuperAdmin:'Супер администратор',Admin:'Администратор',Operator:'Оператор',User:'Пользователь'})[r]||r;
 const settingsTabs = [
+  { id: 'medical-statuses', title: 'Медицинские статусы', icon: '🩺', perm: 'settings.manage' },
   { id: 'ad', title: 'Active Directory', icon: '👤', perm: 'settings.manage' },
   { id: 'telegram', title: 'Telegram', icon: '✉️', perm: 'settings.manage' },
   { id: 'glpi', title: 'GLPI HelpDesk', icon: '⚙️', perm: 'settings.manage' },
@@ -14,7 +15,7 @@ const settingsTabs = [
   { id: 'messenger', title: 'Мессенджер', icon: '☏', perm: 'settings.manage' },
   { id: 'updates', title: 'Обновления клиента', icon: '↻', perm: 'updates.manage' }
 ];
-const titles = { 
+const titles = { reports:["Статистика GLPI","Заявки, время исполнения и оценки специалистов."], surveys:["Оценить результат","Обратная связь по вашим закрытым заявкам."],
   messenger:["Мессенджер","Личная переписка сотрудников и хранение истории."], 
   branches:["Филиалы","Справочник филиалов для заявок и исполнителей."], 
   messages:['Сообщения клиентам','Отправка сообщений в облачке помощника: всем или выбранным ПК.'], 
@@ -30,7 +31,8 @@ const titles = {
   buttons:['Кнопки помощника','Настройте действия и отправьте изменения на рабочие места.'], 
   users:['Пользователи','Учётные записи, роли и доступ к панели.'], 
   audit:['Журнал аудита','Отправленные команды, ответы и ошибки выполнения.'], 
-  tickets:['Заявки GLPI','Обращения пользователей и их состояние в HelpDesk.'] 
+  tickets:['Заявки GLPI','Обращения пользователей и их состояние в HelpDesk.'],
+  knowledge:['База знаний','Инструкции, частые вопросы и справочник для персонала.']
 };
 const date = v => v ? new Date(v).toLocaleString('ru-RU') : '—';
 function toast(text, error=false){ $('#toast').textContent=text; $('#toast').className=error?'error':''; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(()=>$('#toast').hidden=true,6000); }
@@ -45,10 +47,10 @@ $('#refresh-button').addEventListener('click',()=>loadPage().catch(e=>toast(e.me
 $('#login-form').addEventListener('submit',async e=>{ e.preventDefault(); const button=e.target.querySelector('button'); button.disabled=true; $('#login-error').textContent=''; try{ const data=Object.fromEntries(new FormData(e.target)); const login=await api(data.provider==='ad'?'/auth/ad':'/auth/login','POST',data); acceptLogin(login); await enter(); }catch(error){$('#login-error').textContent=error.message;}finally{button.disabled=false;} });
 function acceptLogin(login){ token=login.token; me=login.user; sessionStorage.setItem('helper-token',token); }
 function logout(){ token=null; me=null; generation++; sessionStorage.removeItem('helper-token'); if(hub)hub.stop(); hub=null; $('#workspace').hidden=true; $('#login-screen').hidden=false; closeModal(); }
-async function enter(){ me=await api('/auth/me'); $('#login-screen').hidden=true; $('#workspace').hidden=false; $('#password-button').hidden=me.authSource==='AD'; $('#identity').innerHTML=`${escape(me.fullName||me.username)}<small>${escape(roleName(me.role))}</small>`; const nav=['computers','buttons','super-buttons','messages','tickets','users','audit','settings'].filter(n=>n==='tickets'||(['messages','super-buttons'].includes(n)&&me.role==='SuperAdmin')||(n==='settings'&&(can('settings.manage')||can('updates.manage')))||can(({computers:'computers.view',buttons:'buttons.manage',users:'users.manage',audit:'audit.view'})[n])); $('#navigation').innerHTML=nav.map(n=>`<button data-page="${n}">${({computers:'▦',buttons:'◇',messages:'✉','super-buttons':'★',users:'♙',audit:'≡',tickets:'▤',settings:'⚙'})[n]} &nbsp; ${titles[n][0]}</button>`).join(''); $('#navigation').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{page=b.dataset.page;loadPage().catch(e=>toast(e.message,true));})); if(me.mustChangePassword){passwordForm(true);return;} page=nav.includes(page)?page:nav[0]; if(manage())scripts=await api('/scripts'); await connectHub(); await loadPage(); }
+async function enter(){ me=await api('/auth/me'); $('#login-screen').hidden=true; $('#workspace').hidden=false; $('#password-button').hidden=me.authSource==='AD'; $('#identity').innerHTML=`${escape(me.fullName||me.username)}<small>${escape(roleName(me.role))}</small>`; const nav=['computers','buttons','super-buttons','messages','tickets','reports','surveys','knowledge','users','audit','settings'].filter(n=>n==='tickets'||n==='surveys'||(n==='reports'&&can('reports.glpi.view'))||n==='knowledge'||(['messages','super-buttons'].includes(n)&&me.role==='SuperAdmin')||(n==='settings'&&(can('settings.manage')||can('updates.manage')))||can(({computers:'computers.view',buttons:'buttons.manage',users:'users.manage',audit:'audit.view'})[n])); $('#navigation').innerHTML=nav.map(n=>`<button data-page="${n}">${({computers:'▦',buttons:'◇',messages:'✉','super-buttons':'★',users:'♙',audit:'≡',tickets:'▤',reports:'▥',surveys:'☆',knowledge:'📚',settings:'⚙'})[n]} &nbsp; ${titles[n][0]}</button>`).join(''); $('#navigation').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{page=b.dataset.page;loadPage().catch(e=>toast(e.message,true));})); if(me.mustChangePassword){passwordForm(true);return;} if(new URLSearchParams(location.search).get('returnTo')==='/guard-white.html' && can('emergency.manage')){location.replace('/guard-white.html');return;} const requestedPage=new URLSearchParams(location.search).get('page');if(requestedPage&&nav.includes(requestedPage))page=requestedPage;page=nav.includes(page)?page:nav[0]; if(manage())scripts=await api('/scripts'); await connectHub(); startSurveyAdminAlerts(); await loadPage(); }
 function passwordForm(required){ modal(required?'Смените начальный пароль':'Смена пароля',`<form id="password-form"><p>Новый пароль: от 8 до 72 символов, до 72 байт UTF-8.</p><label>Текущий пароль<input name="currentPassword" type="password" autocomplete="current-password" required></label><label>Новый пароль<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label><div class="error" id="form-error"></div><button class="primary">Сохранить пароль</button></form>`); $('#password-form').addEventListener('submit',async e=>{ e.preventDefault(); try{ const login=await api('/auth/change-password','POST',Object.fromEntries(new FormData(e.target))); acceptLogin(login); if(hub)await hub.stop(); hub=null; closeModal(); await enter(); toast('Пароль изменён'); }catch(error){$('#form-error').textContent=error.message;} }); }
-async function connectHub(){ if(hub)return; if(!window.signalR){$('#live-status').textContent='● Библиотека SignalR недоступна';return;} hub=new signalR.HubConnectionBuilder().withUrl('/helperHub',{accessTokenFactory:()=>token}).withAutomaticReconnect().build(); const live=online=>{$('#live-status').textContent=online?'● Обновления подключены':'● Соединение потеряно';$('#live-status').className='connection'+(online?' online':'');}; hub.on('ComputerChanged',computer=>{const index=computers.findIndex(c=>c.id===computer.id);if(index<0)computers.push(computer);else computers[index]=computer; if(page==='computers')renderComputers();}); hub.on('ExecutionOutput',e=>{ const task=terminals.get(e.taskId);if(task){task.output+=e.output;renderTerminal();}else{const cached=pendingOutput.get(e.taskId)||{output:''};cached.output=(cached.output+e.output).slice(0,131072);pendingOutput.set(e.taskId,cached);if(pendingOutput.size>256)pendingOutput.delete(pendingOutput.keys().next().value);} }); hub.on('ExecutionResult',e=>{ const task=terminals.get(e.taskId);if(task){task.output=e.result;task.status=e.status;task.exitCode=e.exitCode;renderTerminal();}else{pendingOutput.set(e.taskId,{...e,output:e.result});if(pendingOutput.size>256)pendingOutput.delete(pendingOutput.keys().next().value);} if(page==='audit')loadPage().catch(()=>{}); }); hub.on('TicketCreated',()=>{if(page==='tickets')loadPage().catch(()=>{});}); hub.onreconnecting(()=>live(false)); hub.onreconnected(()=>live(true)); hub.onclose(()=>live(false)); try{await hub.start();live(true);}catch{live(false);toast('Нет живого соединения. Таблицы можно обновлять вручную.',true);} }
-async function loadPage(){ if(!me||me.mustChangePassword)return; const revision=++generation; if(['ad','telegram','glpi','cartridge','emergency','branches','messenger','updates'].includes(page)){settingsTab=page;page='settings';} $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); $('#content').innerHTML='<div class="empty">Загрузка…</div>'; if(page==='settings'){const available=settingsTabs.filter(t=>can(t.perm));if(!available.length){$('#content').innerHTML='<div class="empty">Нет доступных разделов настроек</div>';return;}if(!available.some(t=>t.id===settingsTab))settingsTab=available[0].id;localStorage.setItem('helper-settings-tab',settingsTab);const curTab=available.find(t=>t.id===settingsTab);$('#page-title').textContent='Настройки · '+(curTab?.title||'Система');$('#page-subtitle').textContent=titles[settingsTab] ? titles[settingsTab][1] : titles.settings[1];$('#content').innerHTML=`<div class="settings-tabs">${available.map(t=>`<button type="button" class="settings-tab-btn ${t.id===settingsTab?'active':''}" data-settings-tab="${t.id}"><span class="tab-icon">${t.icon}</span> <span>${escape(t.title)}</span></button>`).join('')}</div><div id="settings-tab-body"><div class="empty">Загрузка…</div></div>`;$('#content').querySelectorAll('[data-settings-tab]').forEach(btn=>btn.addEventListener('click',()=>{settingsTab=btn.dataset.settingsTab;localStorage.setItem('helper-settings-tab',settingsTab);loadPage().catch(e=>toast(e.message,true));}));$('#stats').hidden=true;const rev=generation;try{if(settingsTab==='ad'||settingsTab==='telegram'){const data=await api('/settings/'+settingsTab);if(rev!==generation||!$('#settings-tab-body'))return;if(settingsTab==='ad')renderAdSettings(data);else renderTelegramSettings(data);return;}if(settingsTab==='glpi'){const data=await api('/settings/glpi');if(rev!==generation||!$('#settings-tab-body'))return;renderGlpiSettings(data);return;}if(settingsTab==='cartridge'){const data=await api('/settings/cartridge');if(rev!==generation||!$('#settings-tab-body'))return;renderCartridgeSettings(data);return;}if(settingsTab==='emergency'){const data=await api('/settings/emergency');if(rev!==generation||!$('#settings-tab-body'))return;renderEmergencySettings(data);return;}if(settingsTab==='branches'){const data=await api('/branches');if(rev!==generation||!$('#settings-tab-body'))return;renderBranches(data);return;}if(settingsTab==='messenger'){const data=await api('/settings/messenger');if(rev!==generation||!$('#settings-tab-body'))return;renderMessengerSettings(data);return;}if(settingsTab==='updates'){const data=await api('/settings/updates');if(rev!==generation||!$('#settings-tab-body'))return;renderClientUpdates(data);return;}}catch(err){if($('#settings-tab-body'))$('#settings-tab-body').innerHTML=`<div class="error" style="padding:20px">${escape(err.message)}</div>`;}return;} if(page==='computers'){computers=await api('/computers');if(revision!==generation)return;$('#content').innerHTML=`<div class="toolbar"><input id="computer-filter" placeholder="Поиск по имени ПК, домену, кабинету или пользователю"><select id="status-filter"><option value="all">Все статусы</option><option value="online">Онлайн</option><option value="offline">Офлайн</option></select>${can('computers.manage')?'<button id="enroll-button" class="primary">＋ Подключить ПК</button>':''}</div>${manage()?`<div class="bulk"><span id="selection-count">Выбрано: 0</span><select id="bulk-type">${superAdmin()?'<option value="cmd">CMD</option><option value="powershell">PowerShell</option>':''}<option value="script">Предустановленный скрипт</option><option value="reboot">Перезагрузка</option><option value="shutdown">Выключение</option><option value="inventory">Обновить инвентарь</option></select><input id="bulk-payload" placeholder="Введите команду"><select id="bulk-script" hidden>${scripts.map(s=>`<option value="${escape(s.id)}">${escape(s.title)}</option>`).join('')}</select><button id="bulk-send" class="primary">Для выбранных</button><button id="bulk-all">Для всех ПК</button></div>`:''}<div class="panel"><div class="panel-head"><h2>Рабочие станции</h2><span id="computer-count"></span></div><div class="table-wrap"><table><thead><tr>${manage()?'<th><input id="select-visible" type="checkbox" aria-label="Выбрать видимые ПК"></th>':''}<th>КОМПЬЮТЕР</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>КАБИНЕТ</th><th>СТАТУС</th><th>ПОСЛЕДНЯЯ СВЯЗЬ</th>${computerActions()?'<th>ДЕЙСТВИЯ</th>':''}</tr></thead><tbody id="computer-rows"></tbody></table></div></div>`; $('#computer-filter').addEventListener('input',renderComputers);$('#status-filter').addEventListener('change',renderComputers); if(can('computers.manage'))$('#enroll-button').addEventListener('click',enrollForm); if(manage()){ $('#select-visible').addEventListener('change',e=>{filteredComputers().forEach(c=>e.target.checked?selected.add(c.machineName):selected.delete(c.machineName));renderComputers();}); $('#bulk-type').addEventListener('change',bulkFields); $('#bulk-send').addEventListener('click',()=>bulkSend(false));$('#bulk-all').addEventListener('click',()=>bulkSend(true));bulkFields(); }renderComputers();return;} if(page==='messages'){const [pcs,buttons]=await Promise.all([api('/computers'),api('/super-buttons')]);if(revision!==generation)return;$('#stats').hidden=true;renderMessages(pcs,buttons);return;} if(page==='super-buttons'){const buttons=await api('/super-buttons');if(revision!==generation)return;$('#stats').hidden=true;renderSuperButtons(buttons);return;} const items=await api('/'+page+(page==='tickets'?'?status='+encodeURIComponent(ticketStatusFilter)+(ticketBranchFilter?'&branchId='+encodeURIComponent(ticketBranchFilter):''):'')); if(revision!==generation)return; $('#stats').hidden=true; if(page==='buttons')renderButtons(items);if(page==='users'){const definitions=await api('/permissions');if(revision!==generation)return;permissionCatalog=definitions.catalog;rolePermissions=definitions.roles;renderUsers(items,await api("/branches"));}if(page==='audit')renderAudit(items);if(page==='tickets'){const branches=await api('/branches');if(revision!==generation)return;renderTickets(items,branches);} }
+async function connectHub(){ if(hub)return; if(!window.signalR){$('#live-status').textContent='● Библиотека SignalR недоступна';return;} hub=new signalR.HubConnectionBuilder().withUrl('/helperHub',{accessTokenFactory:()=>token}).withAutomaticReconnect().build(); const live=online=>{$('#live-status').textContent=online?'● Обновления подключены':'● Соединение потеряно';$('#live-status').className='connection'+(online?' online':'');}; hub.on('ComputerChanged',computer=>{const index=computers.findIndex(c=>c.id===computer.id);if(index<0)computers.push(computer);else computers[index]=computer; if(page==='computers')renderComputers();}); hub.on('ExecutionOutput',e=>{ const task=terminals.get(e.taskId);if(task){task.output+=e.output;renderTerminal();}else{const cached=pendingOutput.get(e.taskId)||{output:''};cached.output=(cached.output+e.output).slice(0,131072);pendingOutput.set(e.taskId,cached);if(pendingOutput.size>256)pendingOutput.delete(pendingOutput.keys().next().value);} }); hub.on('ExecutionResult',e=>{ const task=terminals.get(e.taskId);if(task){task.output=e.result;task.status=e.status;task.exitCode=e.exitCode;renderTerminal();}else{pendingOutput.set(e.taskId,{...e,output:e.result});if(pendingOutput.size>256)pendingOutput.delete(pendingOutput.keys().next().value);} if(page==='audit')loadPage().catch(()=>{}); }); hub.on('TicketCreated',()=>{if(page==='tickets')loadPage().catch(()=>{});}); hub.on('SurveyAttentionChanged',()=>pollSurveyAdminAlerts().catch(()=>{})); hub.onreconnecting(()=>live(false)); hub.onreconnected(()=>live(true)); hub.onclose(()=>live(false)); try{await hub.start();live(true);}catch{live(false);toast('Нет живого соединения. Таблицы можно обновлять вручную.',true);} }
+async function loadPage(){ if(!me||me.mustChangePassword)return; const revision=++generation; if(page==='reports'||page==='surveys') { $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); if(page==='reports')await renderGlpiReports();else await renderTicketSurveys();return; } if(['ad','telegram','glpi','cartridge','emergency','branches','messenger','updates'].includes(page)){settingsTab=page;page='settings';} $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); $('#content').innerHTML='<div class="empty">Загрузка…</div>'; if(page==='settings'){const available=settingsTabs.filter(t=>can(t.perm));if(!available.length){$('#content').innerHTML='<div class="empty">Нет доступных разделов настроек</div>';return;}if(!available.some(t=>t.id===settingsTab))settingsTab=available[0].id;localStorage.setItem('helper-settings-tab',settingsTab);const curTab=available.find(t=>t.id===settingsTab);$('#page-title').textContent='Настройки · '+(curTab?.title||'Система');$('#page-subtitle').textContent=titles[settingsTab] ? titles[settingsTab][1] : titles.settings[1];$('#content').innerHTML=`<div class="settings-tabs">${available.map(t=>`<button type="button" class="settings-tab-btn ${t.id===settingsTab?'active':''}" data-settings-tab="${t.id}"><span class="tab-icon">${t.icon}</span> <span>${escape(t.title)}</span></button>`).join('')}</div><div id="settings-tab-body"><div class="empty">Загрузка…</div></div>`;$('#content').querySelectorAll('[data-settings-tab]').forEach(btn=>btn.addEventListener('click',()=>{settingsTab=btn.dataset.settingsTab;localStorage.setItem('helper-settings-tab',settingsTab);loadPage().catch(e=>toast(e.message,true));}));$('#stats').hidden=true;const rev=generation;try{if(settingsTab==='medical-statuses'){const data=await api('/settings/medical-statuses');if(rev!==generation||!$('#settings-tab-body'))return;renderMedicalStatuses(data);return;}if(settingsTab==='ad'||settingsTab==='telegram'){const data=await api('/settings/'+settingsTab);if(rev!==generation||!$('#settings-tab-body'))return;if(settingsTab==='ad')renderAdSettings(data);else renderTelegramSettings(data);return;}if(settingsTab==='glpi'){const data=await api('/settings/glpi');if(rev!==generation||!$('#settings-tab-body'))return;renderGlpiSettings(data);return;}if(settingsTab==='cartridge'){const data=await api('/settings/cartridge');if(rev!==generation||!$('#settings-tab-body'))return;renderCartridgeSettings(data);return;}if(settingsTab==='emergency'){const data=await api('/settings/emergency');if(rev!==generation||!$('#settings-tab-body'))return;renderEmergencySettings(data);return;}if(settingsTab==='branches'){const data=await api('/branches');if(rev!==generation||!$('#settings-tab-body'))return;renderBranches(data);return;}if(settingsTab==='messenger'){const data=await api('/settings/messenger');if(rev!==generation||!$('#settings-tab-body'))return;renderMessengerSettings(data);return;}if(settingsTab==='updates'){const data=await api('/settings/updates');if(rev!==generation||!$('#settings-tab-body'))return;renderClientUpdates(data);return;}}catch(err){if($('#settings-tab-body'))$('#settings-tab-body').innerHTML=`<div class="error" style="padding:20px">${escape(err.message)}</div>`;}return;} if(page==='computers'){computers=await api('/computers');if(revision!==generation)return;$('#content').innerHTML=`<div class="toolbar"><input id="computer-filter" placeholder="Поиск по имени ПК, домену, кабинету или пользователю"><select id="status-filter"><option value="all">Все статусы</option><option value="online">Онлайн</option><option value="offline">Офлайн</option></select>${can('computers.manage')?'<button id="enroll-button" class="primary">＋ Подключить ПК</button>':''}</div>${manage()?`<div class="bulk"><span id="selection-count">Выбрано: 0</span><select id="bulk-type">${superAdmin()?'<option value="cmd">CMD</option><option value="powershell">PowerShell</option>':''}<option value="script">Предустановленный скрипт</option><option value="reboot">Перезагрузка</option><option value="shutdown">Выключение</option><option value="inventory">Обновить инвентарь</option></select><input id="bulk-payload" placeholder="Введите команду"><select id="bulk-script" hidden>${scripts.map(s=>`<option value="${escape(s.id)}">${escape(s.title)}</option>`).join('')}</select><button id="bulk-send" class="primary">Для выбранных</button><button id="bulk-all">Для всех ПК</button></div>`:''}<div class="panel"><div class="panel-head"><h2>Рабочие станции</h2><span id="computer-count"></span></div><div class="table-wrap"><table><thead><tr>${manage()?'<th><input id="select-visible" type="checkbox" aria-label="Выбрать видимые ПК"></th>':''}<th>КОМПЬЮТЕР</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>КАБИНЕТ</th><th>СТАТУС</th><th>ПОСЛЕДНЯЯ СВЯЗЬ</th>${computerActions()?'<th>ДЕЙСТВИЯ</th>':''}</tr></thead><tbody id="computer-rows"></tbody></table></div></div>`; $('#computer-filter').addEventListener('input',renderComputers);$('#status-filter').addEventListener('change',renderComputers); if(can('computers.manage'))$('#enroll-button').addEventListener('click',enrollForm); if(manage()){ $('#select-visible').addEventListener('change',e=>{filteredComputers().forEach(c=>e.target.checked?selected.add(c.machineName):selected.delete(c.machineName));renderComputers();}); $('#bulk-type').addEventListener('change',bulkFields); $('#bulk-send').addEventListener('click',()=>bulkSend(false));$('#bulk-all').addEventListener('click',()=>bulkSend(true));bulkFields(); }renderComputers();return;} if(page==='messages'){const [pcs,buttons]=await Promise.all([api('/computers'),api('/super-buttons')]);if(revision!==generation)return;$('#stats').hidden=true;renderMessages(pcs,buttons);return;} if(page==='super-buttons'){const buttons=await api('/super-buttons');if(revision!==generation)return;$('#stats').hidden=true;renderSuperButtons(buttons);return;} if(page==='knowledge'){const articles=await api('/knowledge-base');if(revision!==generation)return;$('#stats').hidden=true;renderKnowledgeBase(articles);return;} const items=await api('/'+page+(page==='tickets'?'?status='+encodeURIComponent(ticketStatusFilter)+(ticketBranchFilter?'&branchId='+encodeURIComponent(ticketBranchFilter):''):'')); if(revision!==generation)return; $('#stats').hidden=true; if(page==='buttons')renderButtons(items);if(page==='users'){const definitions=await api('/permissions');if(revision!==generation)return;permissionCatalog=definitions.catalog;rolePermissions=definitions.roles;renderUsers(items,await api("/branches"));}if(page==='audit')renderAudit(items);if(page==='tickets'){const branches=await api('/branches');if(revision!==generation)return;renderTickets(items,branches);} }
 
 function filteredComputers(){ const q=$('#computer-filter')?.value.toLowerCase()||'',status=$('#status-filter')?.value||'all';return computers.filter(c=>(c.machineName+' '+c.currentUser+' '+(c.room||'')+' '+c.domainName).toLowerCase().includes(q)&&(status==='all'||c.isOnline===(status==='online'))); }
 const computerActions=()=>manage()||can('inventory.view')||can('computers.delete');
@@ -61,22 +63,23 @@ async function editComputerForm(c){const branches=await api('/branches');modal('
 function terminalForm(machines,tasks=[]){modal('Консоль · '+machines.join(', '),`<div id="terminal-output" class="terminal">Ожидание команды…</div>${superAdmin()?'<form id="terminal-form" class="terminal-input"><select name="type"><option value="cmd">CMD</option><option value="powershell">PowerShell</option></select><input name="payload" placeholder="Введите команду" maxlength="8000" autocomplete="off" required><button class="primary">Выполнить</button></form>':''}<div class="task-label"><span>Ограничение: 3 минуты, 128 КиБ вывода</span><span>Права текущего пользователя ПК</span></div>`);$('#terminal-output').dataset.machines=JSON.stringify(machines);renderTerminal();if($('#terminal-form'))$('#terminal-form').addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));try{await sendCommand(machines,data.type,data.payload);e.target.payload.value='';renderTerminal();}catch(error){toast(error.message,true);}});}
 function renderTerminal(){const output=$('#terminal-output');if(!output)return;const machines=JSON.parse(output.dataset.machines);output.textContent=[...terminals.values()].filter(t=>machines.includes(t.machineName)).map(t=>`[${t.machineName}] ${t.commandType} · ${t.status}${t.exitCode==null?'':' · exit '+t.exitCode}\n${t.output}`).join('\n\n')||'Ожидание команды…';output.scrollTop=output.scrollHeight;}
 function enrollForm(){modal('Подключить рабочую станцию','<form id="enroll-form"><p>Введите имя ПК. Для уже зарегистрированного отключённого ПК будет выдан новый ключ.</p><label>Имя компьютера<input name="machineName" required maxlength="63" placeholder="PC-001"></label><button class="primary">Выдать ключ</button></form>');$('#enroll-form').addEventListener('submit',async e=>{e.preventDefault();try{const result=await api('/computers/enroll','POST',Object.fromEntries(new FormData(e.target)));modal('Ключ · '+result.machineName,`<p>Сохраните ключ: он показывается только сейчас. Укажите его в <code>clientToken</code> файла config.json на этом ПК.</p><div class="key">${escape(result.clientToken)}</div><p><small>Для связи вне доверенной локальной сети используйте HTTPS.</small></p>`);await loadPage();}catch(error){toast(error.message,true);}});}
-async function inventoryForm(c){const inventory=await api('/computers/'+c.id+'/inventory'),h=inventory.hardware;modal('Инвентарь · '+c.machineName,`<div class="inventory-grid"><div><small>Процессор</small>${escape(h.cpuModel||'Нет данных')}</div><div><small>RAM</small>${h.totalRamBytes?(h.totalRamBytes/1073741824).toFixed(1)+' ГиБ':'Нет данных'}</div><div><small>Windows</small>${escape(inventory.osVersion)}</div><div><small>IP</small>${escape(inventory.ipAddress)}</div></div><button id="inventory-refresh">↻ Запросить новый инвентарь</button><h3 class="section-title">Планки памяти</h3>${(h.memorySlots||[]).map(r=>`<p>${escape(r.slot)} · ${(r.capacityBytes/1073741824).toFixed(1)} ГиБ · ${escape(r.manufacturer)} · ${r.speedMHz} МГц</p>`).join('')||'<small>Нет данных</small>'}<h3 class="section-title">Физические диски</h3>${(h.physicalDisks||[]).map(d=>`<p>${escape(d.model)} · ${(d.sizeBytes/1073741824).toFixed(1)} ГиБ · ${escape(d.interfaceType)}</p>`).join('')}<h3 class="section-title">Логические диски</h3>${(h.logicalDisks||[]).map(d=>`<p>${escape(d.name)} · свободно ${(d.freeBytes/1073741824).toFixed(1)} / ${(d.totalBytes/1073741824).toFixed(1)} ГиБ</p>`).join('')}<h3 class="section-title">Установленные программы (${inventory.software.length})</h3><input id="software-filter" placeholder="Найти программу"><div id="software-list"></div>${h.errors?.length?`<p class="error">${escape(h.errors.join('; '))}</p>`:''}`);const render=()=>{$('#software-list').innerHTML=inventory.software.filter(s=>s.name.toLowerCase().includes($('#software-filter').value.toLowerCase())).map(s=>`<p>${escape(s.name)} <small>${escape(s.version)}</small></p>`).join('');};$('#software-filter').addEventListener('input',render);render();$('#inventory-refresh').addEventListener('click',async()=>{try{await sendCommand([c.machineName],'inventory','');toast('Инвентаризация запрошена. Откройте карточку повторно после ответа.');}catch(e){toast(e.message,true);}});}
+async function inventoryForm(c){const inventory=await api('/computers/'+c.id+'/inventory'),h=inventory.hardware;modal('Инвентарь · '+c.machineName,`<div class="inventory-grid"><div><small>Процессор</small>${escape(h.cpuModel||'Нет данных')}</div><div><small>RAM</small>${h.totalRamBytes?(h.totalRamBytes/1073741824).toFixed(1)+' ГиБ':'Нет данных'}</div><div><small>Windows</small>${escape(inventory.osVersion)}</div><div><small>IP</small>${escape(inventory.ipAddress)}</div></div><button id="inventory-refresh">↻ Запросить новый инвентарь</button><h3 class="section-title">Планки памяти</h3>${(h.memorySlots||[]).map(r=>`<p>${escape(r.slot)} · ${(r.capacityBytes/1073741824).toFixed(1)} ГиБ · ${escape(r.manufacturer)} · ${r.speedMHz} МГц</p>`).join('')||'<small>Нет данных</small>'}<h3 class="section-title">Физические диски</h3>${(h.physicalDisks||[]).map(d=>`<p>${escape(d.model)} · ${(d.sizeBytes/1073741824).toFixed(1)} ГиБ · ${escape(d.interfaceType)}</p>`).join('')}<h3 class="section-title">Логические диски</h3>${(h.logicalDisks||[]).map(d=>`<p>${escape(d.name)} · свободно ${(d.freeBytes/1073741824).toFixed(1)} / ${(d.totalBytes/1073741824).toFixed(1)} ГиБ</p>`).join('')}<h3 class="section-title">Принтеры (${(h.printers||[]).length})</h3>${(h.printers||[]).map(p=>`<p>🖨️ <strong>${escape(p.name)}</strong> ${p.isDefault?'<span class="pill">По умолчанию</span>':''} · <span class="${p.hasError?'error':'pill'}">${escape(p.statusText)}</span>${p.jobCount>0?' <em>(заданий: '+p.jobCount+')</em>':''}</p>`).join('')||'<small>Принтеры не обнаружены</small>'}<h3 class="section-title">Установленные программы (${inventory.software.length})</h3><input id="software-filter" placeholder="Найти программу"><div id="software-list"></div>${h.errors?.length?`<p class="error">${escape(h.errors.join('; '))}</p>`:''}`);const render=()=>{$('#software-list').innerHTML=inventory.software.filter(s=>s.name.toLowerCase().includes($('#software-filter').value.toLowerCase())).map(s=>`<p>${escape(s.name)} <small>${escape(s.version)}</small></p>`).join('');};$('#software-filter').addEventListener('input',render);render();$('#inventory-refresh').addEventListener('click',async()=>{try{await sendCommand([c.machineName],'inventory','');toast('Инвентаризация запрошена. Откройте карточку повторно после ответа.');}catch(e){toast(e.message,true);}});}
 function table(headers,rows){return `<div class="panel"><div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows||`<tr><td colspan="${headers.length}"><div class="empty">Пока нет записей</div></td></tr>`}</tbody></table></div></div>`;}
-function renderButtons(items){$('#content').innerHTML=`<div class="toolbar"><button id="add-button" class="primary">＋ Добавить кнопку</button><button id="apply-buttons">Применить изменения</button><small>Сохранение меняет БД. Применение отправляет меню подключённым ПК.</small></div>`+table(['НАЗВАНИЕ','ТИП / ЗНАЧЕНИЕ','ГРУППА','ПОРЯДОК','СТАТУС','ДЕЙСТВИЯ'],items.map(b=>`<tr><td><strong>${escape(b.title)}</strong><small>${escape(b.iconName)}</small></td><td class="wrap">${escape(b.actionType)}<small>${escape(b.payload)}</small></td><td>${escape(b.targetGroup)}</td><td>${b.orderIndex}</td><td><span class="pill ${b.isActive?'':'dim'}">${b.isActive?'Активна':'Выключена'}</span></td><td><div class="actions"><button data-toggle="${b.id}" class="${b.isActive?'':'primary'}">${b.isActive?'Отключить':'Включить'}</button><button data-edit="${b.id}">Изменить</button><button data-delete="${b.id}">Удалить</button></div></td></tr>`).join(''));$('#add-button').addEventListener('click',()=>buttonForm());$('#apply-buttons').addEventListener('click',async()=>{try{const result=await api('/buttons/apply','POST',{});toast('Обновлено помощников: '+result.notified);}catch(e){toast(e.message,true);}});$('#content').querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',async()=>{try{const res=await api('/buttons/'+b.dataset.toggle+'/toggle','POST',{});toast(res.isActive?'Кнопка включена и отправлена на ПК':'Кнопка отключена и скрыта на ПК');await loadPage();}catch(e){toast(e.message,true);}}));$('#content').querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>buttonForm(items.find(i=>i.id===Number(b.dataset.edit)))));$('#content').querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>remove('/buttons/'+b.dataset.delete,'Удалить кнопку?')));}
+function renderButtons(items){$('#content').innerHTML=`<div class="toolbar"><button id="add-button" class="primary">＋ Добавить кнопку</button><button id="apply-buttons">Применить изменения</button><small>Сохранение меняет БД. Применение отправляет меню подключённым ПК.</small></div>`+table(['НАЗВАНИЕ','ТИП / ЗНАЧЕНИЕ','ГРУППА','ПОРЯДОК','СТАТУС','ДЕЙСТВИЯ'],items.map(b=>`<tr><td><strong>${escape(b.title)}</strong>${b.isSystem?'<span class="pill">🔒 Системная</span>':''}<small>${escape(b.iconName)}</small></td><td class="wrap">${escape(b.actionType)}<small>${escape(b.payload)}</small></td><td>${escape(b.targetGroup)}</td><td>${b.orderIndex}</td><td><span class="pill ${b.isActive?'':'dim'}">${b.isActive?'Активна':'Выключена'}</span></td><td><div class="actions"><button data-toggle="${b.id}" class="${b.isActive?'':'primary'}">${b.isActive?'Отключить':'Включить'}</button>${b.isSystem?'':'<button data-edit="'+b.id+'">Изменить</button><button data-delete="'+b.id+'">Удалить</button>'}</div></td></tr>`).join(''));$('#add-button').addEventListener('click',()=>buttonForm());$('#apply-buttons').addEventListener('click',async()=>{try{const result=await api('/buttons/apply','POST',{});toast('Обновлено помощников: '+result.notified);}catch(e){toast(e.message,true);}});$('#content').querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',async()=>{try{const res=await api('/buttons/'+b.dataset.toggle+'/toggle','POST',{});toast(res.isActive?'Кнопка включена и отправлена на ПК':'Кнопка отключена и скрыта на ПК');await loadPage();}catch(e){toast(e.message,true);}}));$('#content').querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>buttonForm(items.find(i=>i.id===Number(b.dataset.edit)))));$('#content').querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>remove('/buttons/'+b.dataset.delete,'Удалить кнопку?')));}
 function buttonForm(button={title:'',actionType:'open_url',payload:'',orderIndex:0,isActive:true,targetGroup:'All',iconName:''}){modal(button.id?'Изменить кнопку':'Новая кнопка',`<form id="button-form"><label>Название<input name="title" value="${escape(button.title)}" maxlength="100" required></label><div class="form-row"><label>Тип<select name="actionType">${['open_folder','open_url',...(superAdmin()?['run_command']:[]),'ticket'].map(type=>`<option ${button.actionType===type?'selected':''}>${type}</option>`).join('')}</select></label><label>Порядок<input name="orderIndex" type="number" min="0" max="10000" value="${button.orderIndex}" required></label></div><label>Значение / путь<textarea name="payload" maxlength="8000">${escape(button.payload)}</textarea></label><small>run_command: полный путь EXE либо JSON {"executable":"C:\\...exe","arguments":[]}.</small><div class="form-row"><label>Группа<input name="targetGroup" value="${escape(button.targetGroup)}" maxlength="120" required placeholder="All / domain:DOMAIN / pc:PCNAME"></label><label>Имя значка<input name="iconName" value="${escape(button.iconName)}" maxlength="50"></label></div><label class="check-label"><input name="isActive" type="checkbox" ${button.isActive?'checked':''}>Активна</label><div class="error" id="form-error"></div><button class="primary">Сохранить</button></form>`);$('#button-form').addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.orderIndex=Number(data.orderIndex);data.isActive=e.target.isActive.checked;try{await api('/buttons'+(button.id?'/'+button.id:''),button.id?'PUT':'POST',data);closeModal();await loadPage();}catch(error){$('#form-error').textContent=error.message;}});}
-function renderUsers(items,branches=[]){$('#content').innerHTML='<div class="toolbar"><input id="user-filter" placeholder="Поиск по имени, логину, кабинету или роли"><button id="add-user" class="primary">＋ Создать пользователя</button><small>Локальные и AD-пользователи Control Center. AD-пользователь появляется после первого входа.</small></div>'+table(['ПОЛЬЗОВАТЕЛЬ','РОЛЬ','ФИЛИАЛ','КАБИНЕТ','СТАТУС','СОЗДАН','ДЕЙСТВИЯ'],items.map(u=>`<tr><td><strong>${escape(u.fullName)}</strong><small>${escape(u.username)} · ${escape(u.authSource||'Local')}</small></td><td><span class="pill">${escape(roleName(u.role))}</span></td><td>${escape(branches.find(b=>b.id===u.branchId)?.name||'Не назначен')}</td><td><strong>${escape(u.room||'—')}</strong></td><td>${u.isActive?'Активен':'Отключён'}${u.mustChangePassword?'<small>Смена пароля обязательна</small>':''}</td><td>${date(u.createdAt)}</td><td><div class="actions"><button data-edit="${u.id}">Изменить / пароль</button>${u.authSource==='AD'?'':`<button data-delete="${u.id}">Удалить</button>`}</div></td></tr>`).join(''));$('#user-filter').addEventListener('input',e=>{$('#content').querySelectorAll('tbody tr').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(e.target.value.toLowerCase()));});$('#add-user').addEventListener('click',()=>userForm());$('#content').querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>userForm(items.find(i=>i.id===Number(b.dataset.edit)))));$('#content').querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>remove('/users/'+b.dataset.delete,'Удалить пользователя?')));}
+function userBranchLabels(u,branches=[]){if(u.role==='SuperAdmin')return'<span class="pill">🌐 Все филиалы</span>';const ids=Array.isArray(u.branchIds)&&u.branchIds.length?u.branchIds:(u.branchId?[u.branchId]:[]);if(!ids.length)return u.role==='Admin'?'<span class="pill">🌐 Все филиалы</span>':'Не назначен';const names=ids.map(id=>branches.find(b=>b.id===id)?.name).filter(Boolean);if(!names.length)return'Не назначен';if(names.length===1)return escape(names[0]);return`<span title="${escape(names.join(', '))}" style="font-weight:500">${escape(names.join(', '))}</span>`;}
+function renderUsers(items,branches=[]){$('#content').innerHTML='<div class="toolbar"><input id="user-filter" placeholder="Поиск по имени, логину, кабинету или роли"><button id="add-user" class="primary">＋ Создать пользователя</button><small>Локальные и AD-пользователи Control Center. AD-пользователь появляется после первого входа.</small></div>'+table(['ПОЛЬЗОВАТЕЛЬ','РОЛЬ','ФИЛИАЛ','КАБИНЕТ','СТАТУС','СОЗДАН','ДЕЙСТВИЯ'],items.map(u=>`<tr><td><strong>${escape(u.fullName)}</strong><small>${escape(u.username)} · ${escape(u.authSource||'Local')}</small></td><td><span class="pill">${escape(roleName(u.role))}</span></td><td>${userBranchLabels(u,branches)}</td><td><strong>${escape(u.room||'—')}</strong></td><td>${u.isActive?'Активен':'Отключён'}${u.mustChangePassword?'<small>Смена пароля обязательна</small>':''}</td><td>${date(u.createdAt)}</td><td><div class="actions"><button data-edit="${u.id}">Изменить / пароль</button>${u.authSource==='AD'?'':`<button data-delete="${u.id}">Удалить</button>`}</div></td></tr>`).join(''));$('#user-filter').addEventListener('input',e=>{$('#content').querySelectorAll('tbody tr').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(e.target.value.toLowerCase()));});$('#add-user').addEventListener('click',()=>userForm());$('#content').querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>userForm(items.find(i=>i.id===Number(b.dataset.edit)))));$('#content').querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>remove('/users/'+b.dataset.delete,'Удалить пользователя?')));}
 function renderUserPermissions(user,preserve=false){
  const container=$('#user-permissions'),form=$('#user-form'); if(!container)return;
  const overrides=preserve?Object.fromEntries([...container.querySelectorAll('[data-permission]')].filter(x=>x.value!=='inherit').map(x=>[x.dataset.permission,x.value==='allow'])):(user.permissions||{}),role=form.elements.role.value;
  container.innerHTML=Object.entries(permissionCatalog).map(([key,label])=>`<label>${escape(label)}<select data-permission="${escape(key)}" ${role==='SuperAdmin'?'disabled':''}><option value="inherit" ${overrides[key]===undefined?'selected':''}>По роли: ${(rolePermissions[role]||[]).includes(key)?'разрешено':'запрещено'}</option><option value="allow" ${overrides[key]===true?'selected':''}>Разрешить</option><option value="deny" ${overrides[key]===false?'selected':''}>Запретить</option></select></label>`).join('');
 }
-async function userForm(user={username:'',fullName:'',role:'User',isActive:true,room:''}){let bindingMachines=[];const userBranches=await api('/branches');if(me.role==='SuperAdmin'){try{bindingMachines=await api('/computers');}catch(e){toast(e.message,true);return;}}modal(user.id?'Учётная запись':'Новый пользователь',`<form id="user-form"><label>Логин<input name="username" value="${escape(user.username)}" maxlength="100" ${user.authSource==='AD'?'readonly':''} required></label><label>Полное имя<input name="fullName" value="${escape(user.fullName)}" maxlength="150"></label><div class="form-row"><label>Роль<select name="role">${['SuperAdmin','Admin','Operator','User'].map(role=>`<option value="${role}" ${user.role===role?'selected':''}>${roleName(role)}</option>`).join('')}</select></label><label>Пароль ${user.id?'(оставьте пустым для сохранения)':''}<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="72" ${user.authSource==='AD'?'disabled':''} ${user.id?'':'required'}></label></div>${me.role==='SuperAdmin'?`<label id="assistant-binding" ${user.role!=='SuperAdmin'?'hidden':''}>Помощник супер администратора<select name="assistantMachine"><option value="">Не привязан</option>${bindingMachines.map(c=>`<option value="${escape(c.machineName)}" ${user.assistantMachine===c.machineName?'selected':''}>${escape(c.machineName)} · ${c.isOnline?'Онлайн':'Офлайн'}</option>`).join('')}</select><small>Отправка из помощника требует входа SuperAdmin и ключа этого ПК.</small></label>`:''}<div class="form-row"><label>Филиал<select name="branchId"><option value="">Все филиалы (SuperAdmin и Администраторы)</option>${userBranches.map(b=>`<option value="${b.id}" ${user.branchId===b.id?'selected':''}>${escape(b.name)}${b.isActive?'':' (отключён)'}</option>`).join('')}</select></label><label>Кабинет<input name="room" maxlength="100" value="${escape(user.room||'')}" placeholder="Например, 120"></label></div><label class="check-label"><input name="isActive" type="checkbox" ${user.isActive?'checked':''}>Активен</label><small>Для AD логин и пароль управляются в домене. Для блокировки входа отключите учётную запись.</small><fieldset><legend>Отдельные права доступа</legend><small>По роли — стандартные права. Разрешить / запретить — индивидуальное исключение. SuperAdmin всегда имеет все права.</small><div id="user-permissions"></div></fieldset><div class="error" id="form-error"></div><button class="primary">Сохранить</button></form>`);renderUserPermissions(user); $('#user-form').elements.role.addEventListener('change',()=>{renderUserPermissions(user,true);if($('#assistant-binding'))$('#assistant-binding').hidden=$('#user-form').elements.role.value!=='SuperAdmin';}); $('#user-form').addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.isActive=e.target.isActive.checked;data.branchId=data.branchId?Number(data.branchId):null;data.room=data.room?data.room.trim():'';if(e.target.elements.assistantMachine)data.assistantMachine=data.role==='SuperAdmin'?e.target.elements.assistantMachine.value:'';data.permissions={};e.target.querySelectorAll('[data-permission]').forEach(input=>{if(input.value!=='inherit')data.permissions[input.dataset.permission]=input.value==='allow';});try{await api('/users'+(user.id?'/'+user.id:''),user.id?'PUT':'POST',data);closeModal();await loadPage();}catch(error){$('#form-error').textContent=error.message;}});}
+async function userForm(user={username:'',fullName:'',role:'User',isActive:true,room:''}){let bindingMachines=[];const userBranches=await api('/branches');if(me.role==='SuperAdmin'){try{bindingMachines=await api('/computers');}catch(e){toast(e.message,true);return;}}const assignedBranchIds=Array.isArray(user.branchIds)&&user.branchIds.length?user.branchIds:(user.branchId?[user.branchId]:[]);modal(user.id?'Учётная запись':'Новый пользователь',`<form id="user-form"><label>Логин<input name="username" value="${escape(user.username)}" maxlength="100" ${user.authSource==='AD'?'readonly':''} required></label><label>Полное имя<input name="fullName" value="${escape(user.fullName)}" maxlength="150"></label><div class="form-row"><label>Роль<select name="role">${['SuperAdmin','Admin','Operator','User'].map(role=>`<option value="${role}" ${user.role===role?'selected':''}>${roleName(role)}</option>`).join('')}</select></label><label>Пароль ${user.id?'(оставьте пустым для сохранения)':''}<input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="72" ${user.authSource==='AD'?'disabled':''} ${user.id?'':'required'}></label></div>${me.role==='SuperAdmin'?`<label id="assistant-binding" ${user.role!=='SuperAdmin'?'hidden':''}>Помощник супер администратора<select name="assistantMachine"><option value="">Не привязан</option>${bindingMachines.map(c=>`<option value="${escape(c.machineName)}" ${user.assistantMachine===c.machineName?'selected':''}>${escape(c.machineName)} · ${c.isOnline?'Онлайн':'Офлайн'}</option>`).join('')}</select><small>Отправка из помощника требует входа SuperAdmin и ключа этого ПК.</small></label>`:''}<label>Кабинет<input name="room" maxlength="100" value="${escape(user.room||'')}" placeholder="Например, 120"></label><fieldset id="user-branches-fieldset" style="margin-top:0.75rem;margin-bottom:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border,#CBD5E1);border-radius:8px"><legend style="font-weight:600;padding:0 0.5rem">Обслуживаемые филиалы</legend><div id="user-branches-hint" style="margin-bottom:0.5rem;font-size:0.85rem;color:var(--muted,#64748B)">${user.role==='Admin'?'Отметьте филиалы, которые обслуживает данный администратор. Если ни один филиал не отмечен — администратор имеет доступ ко всем филиалам организации.':user.role==='SuperAdmin'?'Суперадминистратор имеет доступ ко всем филиалам организации.':'Отметьте филиал (или несколько филиалов), к которым привязан сотрудник.'}</div><div class="user-branches-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.5rem;max-height:180px;overflow-y:auto;padding:2px 0">${userBranches.map(b=>`<label class="check-label" style="display:flex;align-items:center;gap:6px;font-size:0.9rem;cursor:pointer"><input type="checkbox" name="userBranchItem" value="${b.id}" ${assignedBranchIds.includes(b.id)?'checked':''}><span>${escape(b.name)}${b.isActive?'':' <small style="color:var(--muted,#94a3b8)">(откл.)</small>'}</span></label>`).join('')}</div><div style="margin-top:0.6rem;display:flex;gap:0.5rem"><button type="button" id="btn-select-all-branches" style="font-size:0.8rem;padding:3px 10px;cursor:pointer">Выбрать все</button><button type="button" id="btn-clear-all-branches" style="font-size:0.8rem;padding:3px 10px;cursor:pointer">Снять все</button></div></fieldset><label class="check-label"><input name="isActive" type="checkbox" ${user.isActive?'checked':''}>Активен</label><small>Для AD логин и пароль управляются в домене. Для блокировки входа отключите учётную запись.</small><fieldset><legend>Отдельные права доступа</legend><small>По роли — стандартные права. Разрешить / запретить — индивидуальное исключение. SuperAdmin всегда имеет все права.</small><div id="user-permissions"></div></fieldset><div class="error" id="form-error"></div><button class="primary">Сохранить</button></form>`);renderUserPermissions(user);$('#user-form').elements.role.addEventListener('change',e=>{renderUserPermissions(user,true);if($('#assistant-binding'))$('#assistant-binding').hidden=e.target.value!=='SuperAdmin';const hint=$('#user-branches-hint');if(hint){hint.textContent=e.target.value==='Admin'?'Отметьте филиалы, которые обслуживает данный администратор. Если ни один филиал не отмечен — администратор имеет доступ ко всем филиалам организации.':e.target.value==='SuperAdmin'?'Суперадминистратор имеет доступ ко всем филиалам организации.':'Отметьте филиал (или несколько филиалов), к которым привязан сотрудник.';}});const btnAll=$('#btn-select-all-branches'),btnNone=$('#btn-clear-all-branches');if(btnAll)btnAll.addEventListener('click',()=>$('#user-form').querySelectorAll('input[name="userBranchItem"]').forEach(cb=>cb.checked=true));if(btnNone)btnNone.addEventListener('click',()=>$('#user-form').querySelectorAll('input[name="userBranchItem"]').forEach(cb=>cb.checked=false));$('#user-form').addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.isActive=e.target.isActive.checked;const selectedBranches=[...e.target.querySelectorAll('input[name="userBranchItem"]:checked')].map(cb=>Number(cb.value));data.branchIds=selectedBranches;data.branchId=selectedBranches.length>0?selectedBranches[0]:null;data.room=data.room?data.room.trim():'';if(e.target.elements.assistantMachine)data.assistantMachine=data.role==='SuperAdmin'?e.target.elements.assistantMachine.value:'';data.permissions={};e.target.querySelectorAll('[data-permission]').forEach(input=>{if(input.value!=='inherit')data.permissions[input.dataset.permission]=input.value==='allow';});try{await api('/users'+(user.id?'/'+user.id:''),user.id?'PUT':'POST',data);closeModal();await loadPage();}catch(error){$('#form-error').textContent=error.message;}});}
 function renderAudit(items){$('#content').innerHTML=`<div class="toolbar"><input id="audit-filter" placeholder="Поиск по ПК, администратору или команде">${can('audit.all')?'<button id="clear-audit" class="danger">Удалить журнал</button>':''}<small>Последние 500 записей</small></div><div id="audit-table"></div>`;const render=()=>{const q=$('#audit-filter').value.toLowerCase(),rows=items.filter(t=>(t.machineName+' '+t.adminUsername+' '+t.commandPayload).toLowerCase().includes(q));$('#audit-table').innerHTML=table(['ВРЕМЯ / АДМИНИСТРАТОР','КОМПЬЮТЕР','КОМАНДА','СТАТУС','РЕЗУЛЬТАТ'],rows.map(t=>`<tr><td>${date(t.timestamp)}<small>${escape(t.adminUsername)}</small></td><td>${escape(t.machineName)}</td><td class="wrap">${escape(t.commandType)}<small>${escape(t.commandPayload)}</small></td><td>${escape(t.status)}</td><td><button data-result="${t.id}">Открыть${t.exitCode==null?'':' · '+t.exitCode}</button></td></tr>`).join(''));$('#audit-table').querySelectorAll('[data-result]').forEach(b=>b.addEventListener('click',()=>{const t=items.find(i=>i.id===Number(b.dataset.result));modal('Результат · '+t.machineName,`<p>${escape(t.commandType)} · ${escape(t.status)} · Exit ${t.exitCode??'—'}</p><pre class="audit-output">${escape(t.result||'Ответ ещё не получен')}</pre>`);}));};$('#audit-filter').addEventListener('input',render);render();if($('#clear-audit'))$('#clear-audit').addEventListener('click',()=>remove('/audit','Безвозвратно удалить журнал?'));}
 let ticketStatusFilter='all', ticketBranchFilter='';
 const ticketStatusName=value=>({Created:'Новая',1:'Новая',2:'В работе (назначена)',3:'В работе (запланирована)',4:'Ожидание',5:'Выполнена (решена)',6:'Закрыта'})[value]||value;
 function renderTickets(items,branches=[]){$('#content').innerHTML=`<div class="toolbar"><input id="ticket-filter" placeholder="Поиск по номеру, пользователю или тексту"><select id="ticket-status-filter">${[["all","Все статусы"],["active","Активные"],["work","В работе"],["1","Новая"],["2","В работе (назначена)"],["3","В работе (запланирована)"],["4","Ожидание"],["5","Выполнена (решена)"],["6","Закрыта"]].map(([value,label])=>`<option value="${value}" ${ticketStatusFilter===value?"selected":""}>${label}</option>`).join("")}</select><select id="ticket-branch-filter"><option value="">Все доступные филиалы</option><option value="0" ${ticketBranchFilter==='0'?'selected':''}>Без филиала (старые)</option>${branches.map(b=>`<option value="${b.id}" ${ticketBranchFilter===String(b.id)?'selected':''}>${escape(b.name)}</option>`).join('')}</select>${can('tickets.manage')?'<button id="new-ticket" class="primary">＋ Новая заявка</button>':''}</div><div id="ticket-table"></div>`;const render=()=>{const q=$('#ticket-filter').value.toLowerCase();const status=ticketStatusFilter;const visible=t=>status==='all'||(status==='active'&&Number(t.status==='Created'?1:t.status)<5)||(status==='work'&&['2','3'].includes(t.status))||String(t.status==='Created'?1:t.status)===status;$('#ticket-table').innerHTML=table(['GLPI','ПОЛЬЗОВАТЕЛЬ / ПК','ОБРАЩЕНИЕ','СТАТУС','СОЗДАНО',''],items.filter(visible).filter(t=>(t.glpiId+' '+t.username+' '+t.title+' '+t.description+' '+(t.branchName||'')+' '+(t.room||'')).toLowerCase().includes(q)).map(t=>`<tr><td><strong>#${t.glpiId}</strong></td><td>${escape(t.username)}<small>${escape(t.machineName)}</small><small>${escape(t.branchName||'Без филиала')} · кабинет ${escape(t.room||'—')}</small></td><td class="wrap">${escape(t.title||t.description.slice(0,70))}</td><td>${escape(ticketStatusName(t.status))}<small>${escape(t.assignedUsername|| (t.assignedGlpiUserId?"GLPI #"+t.assignedGlpiUserId:""))}</small></td><td>${date(t.createdAt)}</td><td><button data-ticket="${t.id}">Открыть</button></td></tr>`).join(''));$('#ticket-table').querySelectorAll('[data-ticket]').forEach(b=>b.addEventListener('click',()=>ticketForm(items.find(i=>i.id===Number(b.dataset.ticket)))));};$('#ticket-branch-filter').addEventListener('change',e=>{ticketBranchFilter=e.target.value;loadPage().catch(e=>toast(e.message,true));});$('#ticket-filter').addEventListener('input',render);$('#ticket-status-filter').addEventListener('change',e=>{ticketStatusFilter=e.target.value;loadPage().catch(e=>toast(e.message,true));});render();if($('#new-ticket'))$('#new-ticket').addEventListener('click',()=>{modal('Новое обращение',`<form id="ticket-form"><label>Филиал<select name="branchId" ${branches.some(b=>b.isActive)?'required':''}><option value="">Выберите филиал</option>${branches.filter(b=>b.isActive).map(b=>`<option value="${b.id}">${escape(b.name)}</option>`).join('')}</select></label><label>Кабинет<input name="room" maxlength="100" ${branches.some(b=>b.isActive)?'required':''}></label><label>Заголовок<input name="title" maxlength="160" required></label><label>Описание<textarea name="description" maxlength="8000" required></textarea></label><div class="error" id="form-error"></div><button class="primary">Создать в GLPI</button></form>`);$('#ticket-form').addEventListener('submit',async e=>{e.preventDefault();const send=e.target.querySelector('button');send.disabled=true;try{const data=Object.fromEntries(new FormData(e.target));data.branchId=data.branchId?Number(data.branchId):null;const result=await api('/tickets','POST',data);closeModal();await loadPage();toast('Создана заявка #'+result.glpiId);}catch(error){$('#form-error').textContent=error.message;}finally{send.disabled=false;}});});}
-async function ticketForm(ticket){modal('Заявка GLPI #'+ticket.glpiId,`<p>${escape(ticket.username)} · ${escape(ticket.machineName)}</p><p>Филиал: ${escape(ticket.branchName||'Не указан')} · Кабинет: ${escape(ticket.room||'Не указан')}</p><pre class="audit-output">${escape(ticket.description)}</pre><div id="glpi-status"><small>Загрузка данных GLPI…</small></div>${can('tickets.manage')?'<form id="ticket-status-form" class="terminal-input"><select name="status"><option value="1">Новая</option><option value="2">В работе (назначена)</option><option value="3">В работе (запланирована)</option><option value="4">Ожидание</option><option value="5">Выполнена (решена)</option><option value="6">Закрыта</option></select><button class="primary">Изменить статус</button></form>':''}`);try{const detail=await api('/tickets/'+ticket.id);if($('#glpi-status'))$('#glpi-status').textContent='Текущий статус GLPI: '+ticketStatusName(detail.glpi.status);}catch(e){if($('#glpi-status'))$('#glpi-status').textContent=e.message;}if($('#ticket-status-form'))$('#ticket-status-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/tickets/'+ticket.id+'/status','PUT',{status:Number(new FormData(e.target).get('status'))});closeModal();await loadPage();toast('Статус обновлён');}catch(error){toast(error.message,true);}});}
+async function ticketForm(ticket){modal('Заявка GLPI #'+ticket.glpiId,`<p>${escape(ticket.username)} · ${escape(ticket.machineName)}</p><p>Филиал: ${escape(ticket.branchName||'Не указан')} · Кабинет: ${escape(ticket.room||'Не указан')}</p><pre class="audit-output">${escape(ticket.description)}</pre><div id="ticket-attachments-area"></div><div id="glpi-status"><small>Загрузка данных GLPI…</small></div>${can('tickets.manage')?'<form id="ticket-status-form" class="terminal-input"><select name="status"><option value="1">Новая</option><option value="2">В работе (назначена)</option><option value="3">В работе (запланирована)</option><option value="4">Ожидание</option><option value="5">Выполнена (решена)</option><option value="6">Закрыта</option></select><button class="primary">Изменить статус</button></form>':''}`);try{const detail=await api('/tickets/'+ticket.id);if($('#glpi-status'))$('#glpi-status').textContent='Текущий статус GLPI: '+ticketStatusName(detail.glpi.status);if(detail.attachments&&detail.attachments.length&&$('#ticket-attachments-area')){$('#ticket-attachments-area').innerHTML=`<div class="ticket-attachments-box" style="margin:12px 0;padding:10px;background:var(--bg-subtle,#f8fafc);border-radius:8px;border:1px solid var(--border,#e2e8f0)"><h4 style="margin:0 0 8px 0;font-size:13px">📎 Прикреплённые файлы (${detail.attachments.length})</h4><div style="display:flex;flex-wrap:wrap;gap:8px">${detail.attachments.map(a=>{const isImg=/\.(png|jpe?g|gif|bmp|webp)$/i.test(a.fileName);const url=`/api/tickets/${ticket.id}/attachments/${a.id}`;return `<div style="border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px">${isImg?`<a href="${url}" target="_blank"><img src="${url}" style="width:36px;height:36px;object-fit:cover;border-radius:4px" alt="${escape(a.fileName)}"></a>`:`<span style="font-size:18px">📄</span>`}<div><a href="${url}" download="${escape(a.fileName)}" style="font-weight:600;font-size:12px;text-decoration:none;color:#2563eb">${escape(a.fileName)}</a><div style="font-size:11px;color:#64748b">${(a.fileSize/1024).toFixed(1)} КБ</div></div></div>`;}).join('')}</div></div>`;}}catch(e){if($('#glpi-status'))$('#glpi-status').textContent=e.message;}if($('#ticket-status-form'))$('#ticket-status-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/tickets/'+ticket.id+'/status','PUT',{status:Number(new FormData(e.target).get('status'))});closeModal();await loadPage();toast('Статус обновлён');}catch(error){toast(error.message,true);}});}
 async function remove(path,text){if(!confirm(text))return;try{await api(path,'DELETE');await loadPage();}catch(e){toast(e.message,true);}}
 if(token)enter().catch(()=>logout());
 
@@ -271,31 +274,49 @@ function renderEmergencySettings(data){
       <h2>Система экстренного оповещения (AudioRONGTA / ROXTON)</h2>
       <p>Интеграция с системой голосового и визуального оповещения ROXTON и службой вызова медицинских специалистов.</p>
       <form id="emergency-form">
-        <label class="check-label"><input name="enabled" type="checkbox" ${data.enabled?'checked':''}>Включить интеграцию с сервером AudioRONGTA</label>
-        <label>Адрес сервера экстренного оповещения<input name="serverUrl" value="${escape(data.serverUrl||'http://172.16.16.63:8085')}" placeholder="http://172.16.16.63:8085" maxlength="255"></label>
-        <label>Секретный ключ / X-Client-Key (опционально)<input name="apiKey" value="${escape(data.apiKey||'')}" placeholder="Оставьте пустым для авто-авторизации моста или укажите мастер-ключ" maxlength="255"></label>
-        <small style="color:#64748b;display:block;margin-top:-0.5rem;margin-bottom:0.75rem">На сервере AudioRONGTA используется токен рабочего места. Если поле пустое, Little Helper автоматически использует зарегистрированный авторизованный токен моста.</small>
-        <label class="check-label"><input name="allowStandalone" type="checkbox" ${data.allowStandalone!==false?'checked':''}>Автономный режим (оповещения работают напрямую через помощников при недоступности AudioRONGTA)</label>
-        <label class="check-label"><input name="allowClientTrigger" type="checkbox" ${data.allowClientTrigger!==false?'checked':''}>Разрешить сотрудникам инициировать тревогу из трея помощника</label>
+        <div style="padding:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:1rem">
+          <h3 style="margin-top:0;font-size:1.05rem;color:#1e293b;display:flex;align-items:center;gap:6px">
+            <span>📡</span> Шлюз связи с сервером AudioRONGTA
+          </h3>
+          <label class="check-label" style="font-weight:600"><input name="enabled" type="checkbox" ${data.enabled?'checked':''}>Включить интеграцию с сервером AudioRONGTA</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.5rem">
+            <label>Адрес сервера экстренного оповещения<input name="serverUrl" value="${escape(data.serverUrl||'http://172.16.16.63:8085')}" placeholder="http://172.16.16.63:8085" maxlength="255"></label>
+            <label>Секретный ключ / X-Client-Key (опционально)<input name="apiKey" value="${escape(data.apiKey||'')}" placeholder="Оставьте пустым для авто-авторизации моста или укажите мастер-ключ" maxlength="255"></label>
+          </div>
+          <small style="color:#64748b;display:block;margin-top:0.25rem;margin-bottom:0.75rem">На сервере AudioRONGTA используется токен рабочего места. Если поле пустое, Little Helper автоматически использует зарегистрированный авторизованный токен моста.</small>
+          <div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:0.5rem">
+            <label class="check-label"><input name="allowStandalone" type="checkbox" ${data.allowStandalone!==false?'checked':''}>Автономный режим (оповещения работают напрямую через помощников при недоступности AudioRONGTA)</label>
+            <label class="check-label"><input name="allowClientTrigger" type="checkbox" ${data.allowClientTrigger!==false?'checked':''}>Разрешить сотрудникам инициировать тревогу из трея помощника</label>
+          </div>
+          <div style="margin-top:0.75rem">
+            <button type="button" id="emergency-sync-all" class="secondary" style="font-size:0.85rem">🔄 Первоначальная синхронизация отделений и компьютеров с AudioRONGTA</button>
+          </div>
+        </div>
+
+        <div style="padding:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:1rem">
+          <label class="check-label" style="font-weight:600;margin-bottom:0.5rem"><input name="broadcastAllBranches" type="checkbox" ${data.broadcastAllBranches?'checked':''}>Массовые коды во все филиалы (без ограничения текущим корпусом)</label>
+          ${emergencyCodeMatrix(data)}
+        </div>
         
         <h3 style="margin-top:1.5rem">Служба вызова медицинских специалистов</h3>
-        <p style="font-size:0.85rem;color:#64748b">Настройте отделения и логины Windows ответственных специалистов (логины через запятую).</p>
+        <p style="font-size:0.85rem;color:#64748b">Выберите сотрудников и группы для каждого отделения.</p>
         <div id="dept-list" style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem">
           ${depts.map((d,idx)=>`
             <div style="display:flex;gap:0.5rem;align-items:center;padding:0.5rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff">
               <input style="width:50px" type="color" value="${escape(d.color||'#2563eb')}" data-dept-color="${idx}">
               <input style="flex:2" value="${escape(d.name)}" placeholder="Название отделения" data-dept-name="${idx}">
-              <input style="flex:3" value="${escape((d.responsibleUsers||[]).join(', '))}" placeholder="Windows логины ответственных (user1, user2)" data-dept-users="${idx}">
+              <input style="flex:2" value="${escape(d.specialistTitle||'')}" placeholder="Специалист / шаблон вызова" data-dept-title="${idx}">
+              <div style="flex:3" data-dept-selector="${idx}"></div>
               <button type="button" class="quiet danger" data-dept-remove="${idx}">✕</button>
             </div>
-          `).join('')||'<div class="empty">Отделения не настроены (будет отправляться всем подключённым ПК)</div>'}
+          `).join('')||'<div class="empty">Отделения не настроены. Назначьте ответственных перед вызовом.</div>'}
         </div>
         <button type="button" id="add-dept-btn" class="secondary" style="margin-bottom:1rem">＋ Добавить отделение</button>
 
         <div style="margin-top:1rem;margin-bottom:1rem;padding:0.75rem;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px">
-          <label style="font-weight:600;color:#1e40af">💙 Назначенные специалисты «Код Синий» (Реанимация / СЛР)
-            <input name="codeBlueResponsibleUsers" value="${escape((data.codeBlueResponsibleUsers||[]).join(', '))}" placeholder="doc_reanimator1, doc_reanimator2">
-          </label>
+          <div style="font-weight:600;color:#1e40af">💙 Назначенные специалисты «Код Синий» (Реанимация / СЛР)
+            <div id="code-blue-selector"></div>
+          </div>
           <small style="color:#3b82f6">При активации вызова «Код Синий» (например, из кабинета 120) тревожный полноэкранный экран со звуком срабатывает только на компьютерах этих специалистов данного филиала.</small>
         </div>
 
@@ -339,7 +360,7 @@ function renderEmergencySettings(data){
             </select>
           </label>
           <label>Кабинет / Место происшествия
-            <input id="manual-alert-cabinet" placeholder="Например: Кабинет 204">
+            <select id="manual-alert-branch"><option value="">Выберите филиал</option></select><input id="manual-alert-cabinet" placeholder="Например: Кабинет 204">
           </label>
         </div>
         <label>Примечание / Инструкция
@@ -377,7 +398,7 @@ function renderEmergencySettings(data){
     </div>`;
 
     $('#add-dept-btn').addEventListener('click',()=>{
-      depts.push({id:Date.now(),name:'',specialistTitle:'',color:'#2563eb',responsibleUsers:[]});
+      depts.push({id:Math.max(0,...depts.map(d=>Number(d.id)||0))+1,name:'',specialistTitle:'',color:'#2563eb',responsibleUsers:[]});
       render();
     });
     host.querySelectorAll('[data-dept-remove]').forEach(b=>b.addEventListener('click',()=>{
@@ -390,11 +411,17 @@ function renderEmergencySettings(data){
     host.querySelectorAll('[data-dept-name]').forEach(input=>input.addEventListener('input',e=>{
       depts[Number(e.target.dataset.deptName)].name=e.target.value;
     }));
-    host.querySelectorAll('[data-dept-users]').forEach(input=>input.addEventListener('input',e=>{
-      depts[Number(e.target.dataset.deptUsers)].responsibleUsers=e.target.value.split(',').map(s=>s.trim()).filter(Boolean);
+    host.querySelectorAll('[data-dept-title]').forEach(input=>input.addEventListener('input',e=>{
+      depts[Number(e.target.dataset.deptTitle)].specialistTitle=e.target.value;
     }));
 
     const form=$('#emergency-form'), result=$('#emergency-result');
+    mountUserGroupSelector($('#code-blue-selector'),data.codeBlueResponsibleUsers,data.codeBlueResponsibleGroups,(users,groups)=>{data.codeBlueResponsibleUsers=users;data.codeBlueResponsibleGroups=groups;});
+    host.querySelectorAll('[data-dept-selector]').forEach(root=>{
+        const department=depts[Number(root.dataset.deptSelector)];
+        mountUserGroupSelector(root,department.responsibleUsers,department.responsibleGroups,(users,groups)=>{department.responsibleUsers=users;department.responsibleGroups=groups;});
+    });
+
     form.addEventListener('submit',async e=>{
       e.preventDefault();
       try{
@@ -404,7 +431,12 @@ function renderEmergencySettings(data){
           apiKey:form.elements.apiKey.value.trim(),
           allowStandalone:form.elements.allowStandalone.checked,
           allowClientTrigger:form.elements.allowClientTrigger.checked,
-          codeBlueResponsibleUsers:form.elements.codeBlueResponsibleUsers?form.elements.codeBlueResponsibleUsers.value.split(',').map(s=>s.trim()).filter(Boolean):[],
+          codeBlueResponsibleUsers:data.codeBlueResponsibleUsers||[],
+          codeBlueResponsibleGroups:data.codeBlueResponsibleGroups||[],
+          broadcastAllBranches:form.elements.broadcastAllBranches.checked,
+          allowedCodes:[...form.querySelectorAll('[data-code-enabled]:checked')].map(c=>c.dataset.codeEnabled).concat(['SPECIALIST_CALL']),
+          codeLaunchRoles:Object.fromEntries(emergencyCodes.map(code=>[code,[...form.querySelectorAll('[data-code-role="'+code+'"]:checked')].map(c=>c.value)])),
+          emergencyCodeLanguages:Object.fromEntries(emergencyCodes.map(code=>[code,[...form.querySelectorAll('[data-code-language="'+code+'"]:checked')].map(c=>c.value)])),
           telegramAlertsEnabled:form.elements.telegramAlertsEnabled?form.elements.telegramAlertsEnabled.checked:true,
           telegramChatId:form.elements.telegramChatId?form.elements.telegramChatId.value.trim():'',
           telegramThreadId:form.elements.telegramThreadId&&form.elements.telegramThreadId.value?parseInt(form.elements.telegramThreadId.value,10)||0:0,
@@ -416,6 +448,11 @@ function renderEmergencySettings(data){
       }catch(err){result.textContent=err.message;result.className='error';}
     });
 
+    $('#emergency-sync-all').addEventListener('click',async()=>{
+        result.textContent='Синхронизация…';
+        try{const value=await api('/settings/emergency/sync-all','POST',{});result.textContent='Синхронизировано рабочих мест: '+value.clients;}
+        catch(error){result.textContent=error.message;result.className='error';}
+    });
     $('#emergency-ping-btn').addEventListener('click',async()=>{
       result.textContent='Проверка связи с сервером AudioRONGTA…';result.className='';
       try{
@@ -435,6 +472,8 @@ function renderEmergencySettings(data){
       if(!confirm('Вы уверены, что хотите отправить сигнал ОТБОЙ ТРЕВОГИ и сбросить активные экстренные оповещения на всех ПК?')) return;
       try{
         const r=await api('/settings/emergency/cancel','POST',{});
+        const deliveries=await api('/emergency/deliveries');
+        if(deliveries.some(d=>d.externalState==='CancelPending')) r.message+=' Внешняя система ещё не подтвердила отбой.';
         result.textContent=r.message;result.className='';toast(r.message);
       }catch(err){result.textContent=err.message;result.className='error';toast(err.message,true);}
     };
@@ -454,13 +493,16 @@ function renderEmergencySettings(data){
       });
     }
 
+    api('/branches').then(branches=>{const select=$('#manual-alert-branch');if(select)select.innerHTML='<option value="">Выберите филиал</option>'+branches.filter(b=>b.isActive).map(b=>'<option value="'+b.id+'">'+escape(b.name)+'</option>').join('');}).catch(()=>{});
     $('#manual-alert-trigger').addEventListener('click',async()=>{
       const code=$('#manual-alert-code').value;
       const cab=$('#manual-alert-cabinet').value.trim();
       const notes=$('#manual-alert-notes').value.trim();
-      if(!confirm('ВНИМАНИЕ! Вы подтверждаете немедленный запуск экстренного кода '+code+' на всех рабочих местах?')) return;
+      const branchId=Number($('#manual-alert-branch').value)||null;
+      if(!branchId && !data.broadcastAllBranches){toast('Выберите филиал для оповещения',true);return;}
+      if(!confirm('ВНИМАНИЕ! Вы подтверждаете немедленный запуск экстренного кода '+code+' для выбранных получателей?')) return;
       try{
-        await api('/integrations/emergency/alert','POST',{code,cabinet:cab,notes});
+        await api('/integrations/emergency/alert','POST',{code,cabinet:cab,notes,branchId});
         toast('Экстренное оповещение запущено!');
       }catch(err){toast(err.message,true);}
     });
@@ -468,3 +510,243 @@ function renderEmergencySettings(data){
   render();
 }
 
+function renderKnowledgeBase(articles) {
+  const categories = ['Все', ...new Set(articles.map(a => a.category).filter(Boolean))];
+  $('#content').innerHTML = `
+    <div class="toolbar">
+      <input id="kb-filter" placeholder="Поиск по статьям и ключевым словам...">
+      <select id="kb-cat-filter">
+        ${categories.map(c => `<option value="${escape(c)}">${escape(c)}</option>`).join('')}
+      </select>
+      ${can('buttons.manage') ? '<button id="kb-add-btn" class="primary">＋ Создать статью</button>' : ''}
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Статьи базы знаний</h2><span id="kb-count">${articles.length} статей</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>ЗАГОЛОВОК</th><th>КАТЕГОРИЯ</th><th>КЛЮЧЕВЫЕ СЛОВА</th><th>ПРОСМОТРЫ</th><th>ОБНОВЛЕНО</th>${can('buttons.manage') ? '<th>ДЕЙСТВИЯ</th>' : ''}</tr>
+          </thead>
+          <tbody id="kb-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  function drawRows() {
+    const q = ($('#kb-filter')?.value || '').toLowerCase();
+    const cat = $('#kb-cat-filter')?.value || 'Все';
+    const filtered = articles.filter(a => {
+      const matchCat = cat === 'Все' || a.category === cat;
+      const matchQ = !q || (a.title + ' ' + a.keywords + ' ' + (a.category || '')).toLowerCase().includes(q);
+      return matchCat && matchQ;
+    });
+    $('#kb-count').textContent = filtered.length + ' показано';
+    $('#kb-rows').innerHTML = filtered.map(a => `
+      <tr>
+        <td><strong>${a.isPinned ? '📌 ' : ''}${escape(a.title)}</strong></td>
+        <td><span class="status online">${escape(a.category)}</span></td>
+        <td><small>${escape(a.keywords || '—')}</small></td>
+        <td>${a.viewCount}</td>
+        <td><small>${date(a.updatedAt)}</small></td>
+        ${can('buttons.manage') ? `<td><div class="actions">
+          <button data-kb-view="${a.id}">👁 Просмотр</button>
+          <button data-kb-edit="${a.id}">✏ Изменить</button>
+          <button data-kb-del="${a.id}">Удалить</button>
+        </div></td>` : ''}
+      </tr>
+    `).join('') || `<tr><td colspan="6"><div class="empty">Статьи не найдены</div></td></tr>`;
+
+    $('#kb-rows').querySelectorAll('[data-kb-view]').forEach(b => b.addEventListener('click', () => {
+      const art = articles.find(x => x.id === Number(b.dataset.kbView));
+      if (art) viewArticleModal(art);
+    }));
+    $('#kb-rows').querySelectorAll('[data-kb-edit]').forEach(b => b.addEventListener('click', () => {
+      const art = articles.find(x => x.id === Number(b.dataset.kbEdit));
+      if (art) editArticleModal(art);
+    }));
+    $('#kb-rows').querySelectorAll('[data-kb-del]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('Удалить эту статью?')) return;
+      try {
+        await api('/knowledge-base/' + b.dataset.kbDel, 'DELETE');
+        toast('Статья удалена');
+        await loadPage();
+      } catch (e) { toast(e.message, true); }
+    }));
+  }
+
+  $('#kb-filter').addEventListener('input', drawRows);
+  $('#kb-cat-filter').addEventListener('change', drawRows);
+  if (can('buttons.manage')) $('#kb-add-btn').addEventListener('click', () => editArticleModal(null));
+  drawRows();
+}
+
+function viewArticleModal(art) {
+  modal(art.title, `
+    <div style="padding: 10px 0;">
+      <div style="margin-bottom: 12px;"><span class="status online">${escape(art.category)}</span> <small style="margin-left: 10px;">Просмотров: ${art.viewCount}</small></div>
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; white-space: pre-wrap; font-family: inherit; line-height: 1.6;">${escape(art.contentMarkdown)}</div>
+    </div>
+  `);
+}
+
+function editArticleModal(art) {
+  modal(art ? 'Редактирование статьи' : 'Новая статья базы знаний', `
+    <form id="kb-form">
+      <label>Заголовок<input name="title" required maxlength="200" value="${escape(art?.title || '')}" placeholder="Например: Как настроить печать"></label>
+      <label>Категория<input name="category" required maxlength="100" value="${escape(art?.category || 'General')}" placeholder="DMED, ЕИСЗ, NCALayer, Принтеры и картриджи, ЭЦП"></label>
+      <label>Ключевые слова (через запятую)<input name="keywords" maxlength="300" value="${escape(art?.keywords || '')}" placeholder="печать, очередь, бумага"></label>
+      <label>Содержимое статьи (Markdown / текст)<textarea name="contentMarkdown" rows="10" required style="width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px;">${escape(art?.contentMarkdown || '')}</textarea></label>
+      <label style="display: flex; align-items: center; gap: 8px; margin-top: 8px;"><input type="checkbox" name="isPinned" ${art?.isPinned ? 'checked' : ''}> Закрепить статью вверху списка</label>
+      <div class="error" id="form-error"></div>
+      <div class="form-actions" style="margin-top: 14px;"><button class="primary" type="submit">Сохранить статью</button></div>
+    </form>
+  `);
+  $('#kb-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {
+      title: fd.get('title'),
+      category: fd.get('category'),
+      keywords: fd.get('keywords') || '',
+      contentMarkdown: fd.get('contentMarkdown') || '',
+      isPinned: fd.get('isPinned') === 'on'
+    };
+    try {
+      if (art) await api('/knowledge-base/' + art.id, 'PUT', body);
+      else await api('/knowledge-base', 'POST', body);
+      closeModal();
+      toast('Статья сохранена');
+      await loadPage();
+    } catch (err) { $('#form-error').textContent = err.message; }
+  });
+}
+
+
+
+function renderMedicalStatuses(items) {
+  const root = $('#settings-tab-body');
+  root.innerHTML = '<div class="toolbar"><button id="medical-add" class="primary">＋ Добавить статус</button></div>' +
+    table(['СТАТУС','ЗВУК','TTS','ПОРЯДОК','АКТИВНОСТЬ','ДЕЙСТВИЯ'],items.map(s => '<tr><td><strong style="color:'+escape(s.colorHex)+'">'+escape(s.emoji)+' '+escape(s.title)+'</strong><small>'+escape(s.key)+'</small></td><td>'+(s.muteSounds?'Тихий режим':'Включён')+'</td><td>'+(s.muteTts?'Приглушён':'Включён')+'</td><td>'+s.orderIndex+'</td><td>'+(s.isActive?'Активен':'Отключён')+'</td><td><button data-medical-edit="'+s.id+'">Изменить</button>'+(s.key==='Available'?'':'<button data-medical-delete="'+s.id+'">Удалить</button>')+'</td></tr>').join(''));
+  $('#medical-add').onclick = () => medicalStatusForm();
+  root.querySelectorAll('[data-medical-edit]').forEach(b=>b.onclick=()=>medicalStatusForm(items.find(s=>s.id===Number(b.dataset.medicalEdit))));
+  root.querySelectorAll('[data-medical-delete]').forEach(b=>b.onclick=()=>remove('/settings/medical-statuses/'+b.dataset.medicalDelete,'Удалить медицинский статус?'));
+}
+function medicalStatusForm(s={key:'',title:'',emoji:'🟢',colorHex:'#16A34A',muteSounds:false,muteTts:false,orderIndex:0,isActive:true,description:''}) {
+  modal(s.id?'Изменить статус':'Новый статус','<form id="medical-form"><label>Ключ<input name="key" required maxlength="50" value="'+escape(s.key)+'" '+(s.id?'readonly':'')+'></label><label>Название<input name="title" required maxlength="100" value="'+escape(s.title)+'"></label><div class="form-row"><label>Эмодзи<input name="emoji" maxlength="16" value="'+escape(s.emoji)+'"></label><label>Цвет<input type="color" name="colorHex" value="'+escape(s.colorHex)+'"></label></div><label>Порядок<input name="orderIndex" type="number" min="0" max="10000" value="'+s.orderIndex+'"></label><label>Описание<textarea name="description" maxlength="1000">'+escape(s.description)+'</textarea></label>'+['muteSounds','muteTts','isActive'].map((key,i)=>'<label class="check-label"><input type="checkbox" name="'+key+'" '+(s[key]?'checked':'')+'>'+['Тихий режим','Глушить TTS','Активен'][i]+'</label>').join('')+'<p id="medical-error" class="error"></p><button class="primary">Сохранить</button></form>');
+  $('#medical-form').onsubmit=async e=>{
+    e.preventDefault();const data=Object.fromEntries(new FormData(e.target));data.orderIndex=Number(data.orderIndex);
+    ['muteSounds','muteTts','isActive'].forEach(k=>data[k]=e.target.elements[k].checked);
+    try {await api('/settings/medical-statuses'+(s.id?'/'+s.id:''),s.id?'PUT':'POST',data);closeModal();await loadPage();}
+    catch(error){$('#medical-error').textContent=error.message;}
+  };
+}
+let emergencyRecipientCatalog;
+async function mountUserGroupSelector(root, users, groups, changed) {
+  if(!root) return;
+  try {
+    if(!emergencyRecipientCatalog) emergencyRecipientCatalog=api('/settings/emergency/recipients').then(data=>({users:data.users||[],groups:data.groups||[]}));
+    const catalog=await emergencyRecipientCatalog;if(!root.isConnected)return;
+    let selectedUsers=[...(users||[])],selectedGroups=[...(groups||[])];
+    const chips=document.createElement('div'),input=document.createElement('input'),results=document.createElement('div');
+    input.type='search';input.placeholder='Поиск по ФИО, логину, кабинету или внутренней группе';
+    results.style.cssText='max-height:160px;overflow:auto;border:1px solid #cbd5e1;border-radius:6px;background:#fff';
+    root.replaceChildren(chips,input,results);
+    const entries=[...catalog.users.map(u=>({value:u.value,label:(u.label||u.login)+' · '+u.login+(u.room?' · Каб. '+u.room:''),group:false})),...catalog.groups.map(g=>({...g,group:true}))];
+    const refresh=()=>{
+      chips.replaceChildren(...[...selectedUsers.map(value=>({value,group:false})),...selectedGroups.map(value=>({value,group:true}))].map(item=>{
+        const button=document.createElement('button');button.type='button';button.className='quiet';button.textContent=(item.group?'👥 ':'👤 ')+(entries.find(e=>e.value===item.value)?.label||item.value)+' ✕';
+        button.onclick=()=>{if(item.group)selectedGroups=selectedGroups.filter(v=>v!==item.value);else selectedUsers=selectedUsers.filter(v=>v!==item.value);changed(selectedUsers,selectedGroups);refresh();};return button;
+      }));
+      const query=input.value.trim().toLowerCase();
+      results.replaceChildren(...entries.filter(e=>e.label.toLowerCase().includes(query)&&!(e.group?selectedGroups:selectedUsers).includes(e.value)).map(item=>{
+        const button=document.createElement('button');button.type='button';button.style.cssText='display:block;width:100%;text-align:left;padding:6px 10px;border:none;background:transparent;cursor:pointer';
+        button.textContent=(item.group?'👥 ':'👤 ')+item.label;
+        button.onmouseover=()=>button.style.background='#f1f5f9';
+        button.onmouseout=()=>button.style.background='transparent';
+        button.onclick=()=>{(item.group?selectedGroups:selectedUsers).push(item.value);changed(selectedUsers,selectedGroups);refresh();};return button;
+      }));
+    };
+    input.oninput=refresh;refresh();
+  }catch(error){root.textContent='Не удалось загрузить сотрудников: '+error.message;}
+}
+const emergencyCodes=['CODE_RED','CODE_YELLOW','CODE_BLACK','CODE_PINK','CODE_ORANGE','CODE_WHITE','CODE_BLUE'];
+const emergencyCodeMeta = {
+  CODE_RED: { label: 'Красный код', desc: 'Пожар / Задымление / Эвакуация', color: '#dc2626', icon: '🔴' },
+  CODE_YELLOW: { label: 'Жёлтый код', desc: 'ЧС / Внутренняя авария', color: '#ca8a04', icon: '🟡' },
+  CODE_BLACK: { label: 'Чёрный код', desc: 'Угроза теракта / Взрывное устройство', color: '#18181b', icon: '⚫' },
+  CODE_PINK: { label: 'Розовый код', desc: 'Похищение / потеря ребёнка', color: '#db2777', icon: '🌸' },
+  CODE_ORANGE: { label: 'Оранжевый код', desc: 'Опасные вещества / Авария', color: '#ea580c', icon: '🟠' },
+  CODE_WHITE: { label: 'Белый код', desc: 'Тихий вызов охраны / Нападение', color: '#475569', icon: '⚪' },
+  CODE_BLUE: { label: 'Синий код', desc: 'Реанимация / СЛР', color: '#2563eb', icon: '🔵' }
+};
+
+function emergencyCodeMatrix(data) {
+  const roles=['SuperAdmin','Admin','Operator','Psychologist','User'];
+  const langLabels = { ru: 'RU', kk: 'KZ', en: 'EN', zh: 'ZH' };
+  return `<div class="emergency-matrix-card" style="margin:0.75rem 0;padding:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
+    <div style="margin-bottom:0.75rem">
+      <h3 style="margin:0 0 0.25rem 0;font-size:1.05rem;color:#1e293b;display:flex;align-items:center;gap:6px">
+        <span>🚨</span> Доступность, роли и языки тревожных кодов
+      </h3>
+      <p style="margin:0;font-size:0.85rem;color:#64748b">
+        Укажите, какие тревожные коды включены в учреждении, каким ролям пользователей разрешён их запуск и на каких языках воспроизводится оповещение.
+      </p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="table" style="width:100%;font-size:0.85rem;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+        <thead>
+          <tr style="background:#f1f5f9;color:#475569;text-align:left;border-bottom:2px solid #e2e8f0">
+            <th style="padding:10px 12px;width:40px;text-align:center">Вкл</th>
+            <th style="padding:10px 12px;min-width:210px">Тревожный код</th>
+            <th style="padding:10px 12px">Роли с правом запуска</th>
+            <th style="padding:10px 12px;min-width:140px">Языки вещания</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${emergencyCodes.map(code=>{
+            const meta = emergencyCodeMeta[code] || { label: code, desc: '', color: '#2563eb', icon: '⚠️' };
+            const isEnabled = !data.allowedCodes || data.allowedCodes.includes(code);
+            const langs = ['CODE_WHITE','CODE_BLUE'].includes(code) ? ['ru','kk'] : ['ru','kk','en','zh'];
+            return `<tr style="border-bottom:1px solid #f1f5f9">
+              <td style="padding:10px 12px;text-align:center;vertical-align:middle">
+                <input type="checkbox" data-code-enabled="${code}" ${isEnabled?'checked':''} title="Включить код в организации" style="width:17px;height:17px;cursor:pointer">
+              </td>
+              <td style="padding:10px 12px;vertical-align:middle">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${meta.color}18;border:1px solid ${meta.color}44;font-size:12px">${meta.icon}</span>
+                  <div>
+                    <strong style="color:${meta.color};display:block;line-height:1.2">${escape(meta.label)}</strong>
+                    <small style="color:#64748b;font-size:0.75rem">${escape(meta.desc)}</small>
+                  </div>
+                </div>
+              </td>
+              <td style="padding:10px 12px;vertical-align:middle">
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  ${roles.map(role => {
+                    const checked = !data.codeLaunchRoles?.[code] || data.codeLaunchRoles[code].includes(role);
+                    return `<label class="check-label" style="display:inline-flex;align-items:center;gap:4px;padding:3px 7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;font-size:0.78rem;cursor:pointer;margin:0">
+                      <input type="checkbox" data-code-role="${code}" value="${role}" ${checked?'checked':''}>
+                      <span>${escape(roleName(role))}</span>
+                    </label>`;
+                  }).join('')}
+                </div>
+              </td>
+              <td style="padding:10px 12px;vertical-align:middle">
+                <div style="display:flex;flex-wrap:wrap;gap:5px">
+                  ${langs.map(lang => {
+                    const checked = !data.emergencyCodeLanguages?.[code] || data.emergencyCodeLanguages[code].includes(lang);
+                    return `<label class="check-label" style="display:inline-flex;align-items:center;gap:3px;padding:3px 6px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;font-size:0.75rem;cursor:pointer;color:#1e40af;font-weight:600;margin:0">
+                      <input type="checkbox" data-code-language="${code}" value="${lang}" ${checked?'checked':''}>
+                      <span>${langLabels[lang]||lang.toUpperCase()}</span>
+                    </label>`;
+                  }).join('')}
+                </div>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}

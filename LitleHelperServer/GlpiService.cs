@@ -81,23 +81,59 @@ public partial class GlpiService(HttpClient http, GlpiSettingsStore store, ILogg
             throw new InvalidOperationException("Вместо REST API GLPI вернул страницу входа. Укажите адрес, заканчивающийся /apirest.php. Автовход браузера не авторизует серверное API.");
         if (!jsonValid) throw new InvalidOperationException("GLPI вернул некорректный JSON. Проверьте адрес REST API и настройки прокси.");
     }
+    public async Task<int?> UploadDocumentAsync(int ticketId, string fileName, byte[] content, string session, CancellationToken token = default)
+    {
+        try
+        {
+            using var request = Request(HttpMethod.Post, "Document", session);
+            var multipart = new MultipartFormDataContent();
+            var manifest = JsonSerializer.Serialize(new { input = new { name = fileName, _filename = new[] { fileName } } });
+            multipart.Add(new StringContent(manifest), "uploadManifest");
+            var fileContent = new ByteArrayContent(content);
+            fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            multipart.Add(fileContent, "filename[0]", fileName);
+            request.Content = multipart;
+            using var result = await http.SendAsync(request, token);
+            if (!result.IsSuccessStatusCode)
+            {
+                logger.LogWarning("GLPI UploadDocument failed with status {Status}", result.StatusCode);
+                return null;
+            }
+            using var json = JsonDocument.Parse(await result.Content.ReadAsStringAsync(token));
+            if (!json.RootElement.TryGetProperty("id", out var idProp)) return null;
+            int docId = idProp.GetInt32();
+
+            using var linkRequest = Request(HttpMethod.Post, "Document_Item", session);
+            linkRequest.Content = JsonContent.Create(new { input = new { documents_id = docId, items_id = ticketId, itemtype = "Ticket" } });
+            using var linkResult = await http.SendAsync(linkRequest, token);
+            if (!linkResult.IsSuccessStatusCode)
+            {
+                logger.LogWarning("GLPI Document_Item link failed with status {Status}", linkResult.StatusCode);
+            }
+            return docId;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to upload document '{FileName}' to GLPI ticket #{TicketId}", fileName, ticketId);
+            return null;
+        }
+    }
     public async Task<int> CreateTicketAsync(string username, string machineName, string text, CancellationToken token = default)
+        => await CreateTicketAsync(username, machineName, text, (IEnumerable<TicketAttachmentDto>?)null, token);
+
+    public async Task<int> CreateTicketAsync(string username, string machineName, string text, IEnumerable<TicketAttachmentDto>? attachments, CancellationToken token = default)
     {
         string session = await Init(token);
         try
         {
-            string query = "search/User?criteria[0][field]=1&criteria[0][searchtype]=equals&criteria[0][value]=" + Uri.EscapeDataString(username) + "&forcedisplay[0]=2";
-            using var search = Request(HttpMethod.Get, query, session);
-            using var response = await http.SendAsync(search, token); await EnsureSuccess(response, token);
-            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
-            int requester = settings.ServiceUserId;
-            if (json.RootElement.TryGetProperty("data", out var rows) && rows.ValueKind == JsonValueKind.Array && rows.GetArrayLength() > 0)
-            {
-                var first = rows[0];
-                if (first.TryGetProperty("2", out var id) || first.TryGetProperty("id", out id))
-                    requester = id.ValueKind == JsonValueKind.Number ? id.GetInt32() : int.Parse(id.GetString()!);
+            logger.LogInformation("GLPI CreateTicketAsync: username='{Username}', machine='{MachineName}'", username, machineName);
+            int requester;
+            try { requester = await FindUserInSessionAsync(username, session, token); }
+            catch (GlpiUserNotFoundException) {
+                requester = settings.ServiceUserId;
+                logger.LogWarning("GLPI requester {Username} was not found; configured fallback is {Requester}",username,requester);
             }
-            if (requester <= 0) throw new InvalidOperationException("Пользователь GLPI не найден. Укажите положительный ServiceUserId для fallback.");
+            if (requester <= 0) throw new InvalidOperationException($"Пользователь GLPI '{username}' не найден. Укажите положительный ServiceUserId для fallback.");
             using var create = Request(HttpMethod.Post, "Ticket", session);
             create.Content = JsonContent.Create(new { input = new
             {
@@ -107,7 +143,18 @@ public partial class GlpiService(HttpClient http, GlpiSettingsStore store, ILogg
             } });
             using var result = await http.SendAsync(create, token); await EnsureSuccess(result, token);
             using var ticket = JsonDocument.Parse(await result.Content.ReadAsStringAsync(token));
-            return ticket.RootElement.GetProperty("id").GetInt32();
+            int ticketId = ticket.RootElement.GetProperty("id").GetInt32();
+            logger.LogInformation("GLPI заявка #{TicketId} успешно создана для пользователя '{Username}' (Requester ID={Requester})", ticketId, username, requester);
+
+            if (attachments != null)
+            {
+                foreach (var att in attachments)
+                {
+                    await UploadDocumentAsync(ticketId, att.FileName, att.Content, session, token);
+                }
+            }
+
+            return ticketId;
         }
         finally { await Kill(session); }
     }
@@ -148,15 +195,27 @@ public partial class GlpiService(HttpClient http, GlpiSettingsStore store, ILogg
         finally { await Kill(session); }
     }
     public static int Number(JsonElement value) => value.ValueKind == JsonValueKind.Number ? value.GetInt32() : int.Parse(value.GetString()!);
-    public async Task<int> FindTechnicianAsync(string account, CancellationToken token)
+    public async Task<int> FindTechnicianAsync(string account,CancellationToken token) {
+        string session=await Init(token);
+        try {return await FindUserInSessionAsync(account,session,token);}
+        finally {await Kill(session);}
+    }
+    private async Task<JsonElement> ReadInSessionAsync(string path,string session,CancellationToken token) {
+        using var request=Request(HttpMethod.Get,path,session);
+        using var response=await http.SendAsync(request,token);await EnsureSuccess(response,token);
+        using var json=JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));return json.RootElement.Clone();
+    }
+    private async Task<int> FindUserInSessionAsync(string account,string session,CancellationToken token)
     {
         // GLPI's User login is an itemlink: equals compares the numeric ID.
         // Anchored text search compares the complete login instead.
-        var json = await CallAsync(HttpMethod.Get, "search/User?criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]=" + Uri.EscapeDataString("^" + account + "$") + "&forcedisplay[0]=2&range=0-2", null, token);
-        if (!json.TryGetProperty("data", out var rows) || rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() != 1)
+        var json = await ReadInSessionAsync("search/User?criteria[0][field]=1&criteria[0][searchtype]=contains&criteria[0][value]=" + Uri.EscapeDataString("^" + account + "$") + "&forcedisplay[0]=2&range=0-2", session, token);
+        if (!json.TryGetProperty("data", out var rows) || rows.ValueKind != JsonValueKind.Array || rows.GetArrayLength() == 0)
+            throw new GlpiUserNotFoundException("Пользователь GLPI не найден.");
+        if (rows.GetArrayLength() != 1 || (json.TryGetProperty("totalcount",out var total) && Number(total) != 1))
             throw new InvalidOperationException("В GLPI должен существовать ровно один пользователь с логином AD " + account + ".");
         int id = Number(rows[0].GetProperty("2"));
-        var user = await CallAsync(HttpMethod.Get, "User/" + id, null, token);
+        var user = await ReadInSessionAsync("User/" + id, session, token);
         if (!user.GetProperty("name").GetString()!.Equals(account, StringComparison.OrdinalIgnoreCase) || Number(user.GetProperty("is_active")) != 1 || Number(user.GetProperty("is_deleted")) != 0)
             throw new InvalidOperationException("Пользователь GLPI отключён или его логин не совпадает с AD.");
         return id;
@@ -180,4 +239,11 @@ public partial class GlpiService(HttpClient http, GlpiSettingsStore store, ILogg
     }
     public async Task<JsonElement> FollowupsAsync(int id, CancellationToken token) =>
         await CallAsync(HttpMethod.Get, "Ticket/" + id + "/ITILFollowup?range=0-999", null, token);
+    public async Task<JsonElement> SolutionsAsync(int id, CancellationToken token)
+    {
+        try { return await CallAsync(HttpMethod.Get, "Ticket/" + id + "/ITILSolution?range=0-999", null, token); }
+        catch { return default; }
+    }
 }
+
+public sealed class GlpiUserNotFoundException(string message) : InvalidOperationException(message);

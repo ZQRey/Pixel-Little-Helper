@@ -12,7 +12,7 @@ namespace PixelHelper;
 public sealed class EmergencyAlertWindow : Window
 {
     private readonly EmergencyAlertNotice notice;
-    private readonly Action<bool>? onResponse;
+    private readonly Func<bool, Task>? onResponse;
     private readonly bool isTest;
     private readonly Action? onCancel;
     private readonly Sprites sprites = new();
@@ -24,7 +24,7 @@ public sealed class EmergencyAlertWindow : Window
     private TextBlock? timerBlock;
     private PetState petState = PetState.Notice;
 
-    public EmergencyAlertWindow(EmergencyAlertNotice notice, Action<bool>? onResponse = null, bool isTest = false, Action? onCancel = null)
+    public EmergencyAlertWindow(EmergencyAlertNotice notice, Func<bool, Task>? onResponse = null, bool isTest = false, Action? onCancel = null)
     {
         this.notice = notice;
         this.onResponse = onResponse;
@@ -266,6 +266,12 @@ public sealed class EmergencyAlertWindow : Window
         };
         cardStack.Children.Add(messageBlock);
 
+        cardStack.Children.Add(new TextBlock
+        {
+            Text=string.Join("\n", EmergencyPhrases.Languages(notice).Select(language=>EmergencyPhrases.Text(notice,language))),
+            FontSize=18, Foreground=Brushes.White, TextWrapping=TextWrapping.Wrap,
+            TextAlignment=TextAlignment.Center, MaxWidth=760, Margin=new Thickness(0,8,0,8)
+        });
         // 4. Room / Cabinet Info if provided
         if (!string.IsNullOrWhiteSpace(notice.Cabinet))
         {
@@ -373,10 +379,12 @@ public sealed class EmergencyAlertWindow : Window
                 Cursor = Cursors.Hand,
                 Margin = new Thickness(0, 0, 16, 0)
             };
-            acceptBtn.Click += (_, _) =>
+            acceptBtn.Click += async (_, _) =>
             {
-                onResponse?.Invoke(true);
-                CloseWithStatus(Loc.T("CallAcknowledged"));
+                acceptBtn.IsEnabled=false;
+                try { if(onResponse!=null) await onResponse(true); CloseWithStatus(Loc.T("CallAcknowledged")); }
+                catch(Exception ex) {MessageBox.Show(this,ex.Message,"Подтверждение вызова");}
+                finally {acceptBtn.IsEnabled=true;}
             };
 
             var declineBtn = new Button
@@ -391,10 +399,12 @@ public sealed class EmergencyAlertWindow : Window
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand
             };
-            declineBtn.Click += (_, _) =>
+            declineBtn.Click += async (_, _) =>
             {
-                onResponse?.Invoke(false);
-                CloseWithStatus(Loc.T("CallDeclined"));
+                declineBtn.IsEnabled=false;
+                try {if(onResponse!=null) await onResponse(false);CloseWithStatus(Loc.T("CallDeclined"));}
+                catch(Exception ex) {MessageBox.Show(this,ex.Message,"Отказ от вызова");}
+                finally {declineBtn.IsEnabled=true;}
             };
 
             buttonsRow.Children.Add(acceptBtn);
@@ -465,7 +475,7 @@ public sealed class EmergencyAlertWindow : Window
             cardStack.Children.Add(manageRow);
         }
 
-        centerCard.Child = cardStack;
+        centerCard.Child = new ScrollViewer { Content = cardStack, MaxHeight = SystemParameters.WorkArea.Height - 40, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         rootGrid.Children.Add(centerCard);
         Content = rootGrid;
     }

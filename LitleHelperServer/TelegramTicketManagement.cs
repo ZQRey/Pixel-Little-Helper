@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Novell.Directory.Ldap;
 using System.ComponentModel.DataAnnotations;
@@ -121,7 +121,7 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
             if (assigned.Length == 0) await glpi.AssignAsync(ticket.GlpiId, actor.GlpiUserId, token);
             assigned = await glpi.AssigneesAsync(ticket.GlpiId, token);
             if (assigned.Length != 1 || assigned[0] != actor.GlpiUserId) throw new InvalidOperationException("GLPI не подтвердил назначение. Проверьте права API и исполнителя.");
-            ticket.AssignedGlpiUserId = actor.GlpiUserId; ticket.AssignedUsername = actor.User.Username;
+            ticket.AssignedGlpiUserId = actor.GlpiUserId; ticket.AssignedUsername = actor.User.FullName.Length > 0 ? actor.User.FullName : actor.User.Username;
             await SyncUnlockedAsync(ticket, token);
             db.AuditLogs.Add(new() { AdminUsername = actor.User.Username, MachineName = ticket.MachineName, CommandType = "telegram_ticket_claim", CommandPayload = "GLPI #" + ticket.GlpiId, Status = "Completed", Result = "Назначен GLPI User #" + actor.GlpiUserId });
             await db.SaveChangesAsync(token);
@@ -215,11 +215,16 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
     {
         Branches.Require(actor.User, ticket);
         await tickets.SyncAsync(ticket, token);
-        if (!(await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)) throw new UnauthorizedAccessException("Эта заявка назначена другому исполнителю.");
+        var assignees = await glpi.AssigneesAsync(ticket.GlpiId, token);
+        bool assignedToMe = assignees.Contains(actor.GlpiUserId);
         var history = await glpi.FollowupsAsync(ticket.GlpiId, token);
         string comments = RecentReplies(history);
         string text = $"Заявка GLPI #{ticket.GlpiId}\n{TicketManagement.StatusName(TicketManagement.Status(ticket.Status))}\n{ticket.Username} · {ticket.MachineName}\nФилиал: {ticket.BranchName} · Кабинет: {ticket.Room}\n{ticket.Title}\n{ticket.Description}\n\nПоследние ответы:\n{comments}";
-        object[][] buttons = TicketManagement.Status(ticket.Status) == 6 ? [] :
+        object[][] buttons = !assignedToMe
+            ? (assignees.Length == 0 && TicketManagement.Status(ticket.Status) < 5
+                ? [[Button("Принять", "claim:" + ticket.Id), Button("Обновить", "open:" + ticket.Id)]]
+                : [[Button("Обновить", "open:" + ticket.Id)]])
+            : TicketManagement.Status(ticket.Status) == 6 ? [] :
             [[Button("Ответить", "reply:" + ticket.Id), Button("Добавить решение", "solve:" + ticket.Id)],
              [Button("В работе", "status:" + ticket.Id + ":2"), Button("Ожидание", "status:" + ticket.Id + ":4")],
              [Button("Закрыть", "status:" + ticket.Id + ":6"), Button("Обновить", "open:" + ticket.Id)]];
@@ -236,6 +241,93 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         string result = string.Join("\n", replies);
         return result.Length == 0 ? "Ответов пока нет." : result;
     }
+    public static string FormatDuration(TimeSpan d)
+    {
+        if (d.TotalDays >= 1) return $"{(int)d.TotalDays} дн. {d.Hours} ч. {d.Minutes} мин.";
+        if (d.TotalHours >= 1) return $"{d.Hours} ч. {d.Minutes} мин.";
+        if (d.TotalMinutes >= 1) return $"{d.Minutes} мин. {d.Seconds} сек.";
+        return $"{(int)d.TotalSeconds} сек.";
+    }
+    public static string AllRepliesFormatted(JsonElement history, JsonElement solutions = default)
+    {
+        var replies = new List<string>();
+        if (history.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var r in history.EnumerateArray())
+            {
+                if (r.TryGetProperty("is_private", out var p) && GlpiService.Number(p) != 0) continue;
+                string content = r.TryGetProperty("content", out var c) ? Plain(c.GetString() ?? "").Trim() : "";
+                if (content.Length == 0) continue;
+                string date = r.TryGetProperty("date_creation", out var d) ? d.GetString() ?? "" : "";
+                string prefix = date.Length > 0 ? $"[{date}] " : "";
+                replies.Add(prefix + content);
+            }
+        }
+        if (solutions.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var s in solutions.EnumerateArray())
+            {
+                string content = s.TryGetProperty("content", out var c) ? Plain(c.GetString() ?? "").Trim() : "";
+                if (content.Length == 0) continue;
+                string date = s.TryGetProperty("date_creation", out var d) ? d.GetString() ?? "" : "";
+                string prefix = date.Length > 0 ? $"[Решение · {date}] " : "[Решение] ";
+                replies.Add(prefix + content);
+            }
+        }
+        return replies.Count > 0 ? string.Join("\n\n", replies) : "Ответов пока нет.";
+    }
+    public static string BuildClosedTicketReport(TicketRecord ticket, string comments)
+    {
+        string userDisplay = string.IsNullOrWhiteSpace(ticket.UserFullName)
+            ? ticket.Username
+            : (string.IsNullOrWhiteSpace(ticket.Username) || ticket.Username.Equals(ticket.UserFullName, StringComparison.OrdinalIgnoreCase)
+                ? ticket.UserFullName
+                : $"{ticket.UserFullName} ({ticket.Username})");
+        string assignee = !string.IsNullOrWhiteSpace(ticket.AssignedUsername) ? ticket.AssignedUsername : "Не назначен";
+        var duration = (ticket.SyncedAt ?? DateTime.UtcNow) - ticket.CreatedAt;
+        if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+        string durationStr = FormatDuration(duration);
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"📋 Отчёт по закрытой заявке GLPI #{ticket.GlpiId}");
+        sb.AppendLine($"Тема: {ticket.Title}");
+        sb.AppendLine($"Статус: {TicketManagement.StatusName(TicketManagement.Status(ticket.Status))}");
+        sb.AppendLine($"Пользователь: {userDisplay}");
+        sb.AppendLine($"Компьютер: {ticket.MachineName}");
+        if (!string.IsNullOrWhiteSpace(ticket.BranchName)) sb.AppendLine($"Филиал: {ticket.BranchName}");
+        if (!string.IsNullOrWhiteSpace(ticket.Room)) sb.AppendLine($"Кабинет: {ticket.Room}");
+        sb.AppendLine($"Исполнитель: {assignee}");
+        sb.AppendLine($"Создана: {ticket.CreatedAt:yyyy-MM-dd HH:mm:ss} UTC");
+        if (ticket.SyncedAt.HasValue) sb.AppendLine($"Закрыта: {ticket.SyncedAt.Value:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"Время активности: {durationStr}");
+        sb.AppendLine();
+        sb.AppendLine($"Описание проблемы:\n{ticket.Description}");
+        sb.AppendLine();
+        sb.AppendLine($"Сообщения в заявке:\n{comments}");
+
+        return Limit(sb.ToString());
+    }
+    private async Task SendClosedTicketReportAsync(long recipientId, TicketRecord ticket, CancellationToken token)
+    {
+        string commentsText = "Ответов пока нет.";
+        try
+        {
+            var history = await glpi.FollowupsAsync(ticket.GlpiId, token);
+            var solutions = await glpi.SolutionsAsync(ticket.GlpiId, token);
+            commentsText = AllRepliesFormatted(history, solutions);
+        }
+        catch { }
+
+        string report = BuildClosedTicketReport(ticket, commentsText);
+        try
+        {
+            await telegram.SendToAsync(recipientId.ToString(), report, null, token);
+        }
+        catch (InvalidOperationException)
+        {
+            await telegram.SendToAsync(settings.Telegram().ChatId, $"Уважаемый супер-администратор, бот не может написать вам в личные сообщения. Откройте диалог с ботом и нажмите /start.", null, token);
+        }
+    }
     private static string Limit(string value) => value.Length <= 3800 ? value : value[..(char.IsHighSurrogate(value[3799]) ? 3799 : 3800)] + "…";
     public async Task HandleAsync(JsonElement update, CancellationToken token)
     {
@@ -248,23 +340,24 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
         JsonElement message = callback && item.TryGetProperty("message", out var m) ? m : item;
         if (message.TryGetProperty("chat", out var c)) { chat = c.GetProperty("id").GetInt64(); chatType = c.GetProperty("type").GetString() ?? ""; }
         string command = callback ? item.GetProperty("data").GetString() ?? "" : item.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
-        if (callback && command == "claimed") { await ConfirmAsync(callbackId!, sender, "Заявка уже принята", token); return; }
+        if (callback && (command == "claimed" || command.StartsWith("claimed:"))) { await telegram.AnswerCallbackAsync(callbackId!, "Заявка уже принята в работу", token); return; }
         if (!callback && command.Length == 0) return;
         if (!callback && chatType != "private") return;
-        if (callback && command.StartsWith("claim:") && chat.ToString() != settings.Telegram().ChatId) return;
-        if (callback && !command.StartsWith("claim:") && (chatType != "private" || chat != sender)) return;
+        bool isGroupManagement = callback && chat.ToString() == settings.Telegram().ChatId && (command.StartsWith("claim:") || command.StartsWith("closed:"));
+        if (callback && !isGroupManagement && (chatType != "private" || chat != sender)) return;
         try
         {
             var actor = await ActorAsync(sender, token);
-            if (command is "/start" or "/my" or "Мои заявки")
+            if (command is "/start" or "/my" or "Мои заявки" or "/open" or "Открытые заявки")
             {
-                if (command == "/start") await telegram.SendToAsync(sender.ToString(), "Управление заявками GLPI. «Мои заявки» — назначенные обращения, «Отмена» — отменить ввод ответа.", new { keyboard = new[] { new[] { new { text = "Мои заявки" }, new { text = "Отмена" } } }, resize_keyboard = true }, token);
+                if (command == "/start") await telegram.SendToAsync(sender.ToString(), "Управление заявками GLPI. «Открытые заявки» (/open) — все открытые обращения доступных филиалов, «Мои заявки» (/my) — назначенные вам. Неназначенную заявку можно принять из карточки. «Отмена» — отменить ввод ответа.", new { keyboard = new[] { new[] { new { text = "Открытые заявки" }, new { text = "Мои заявки" }, new { text = "Отмена" } } }, resize_keyboard = true }, token);
                 var all = await db.Tickets.Where(t => t.Status != "6").OrderByDescending(t => t.CreatedAt).ToListAsync(token);
+                bool showAll = command is "/open" or "Открытые заявки";
                 var mine = new List<TicketRecord>();
-                foreach (var ticket in all.Where(t => Branches.CanHandle(actor.User, t))) { await tickets.SyncAsync(ticket, token); if (TicketManagement.Status(ticket.Status) < 5 && (await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)) mine.Add(ticket); }
-                var rows = mine.Select(t => new[] { Button("#" + t.GlpiId + " · " + TicketManagement.StatusName(TicketManagement.Status(t.Status)), "open:" + t.Id) }).Chunk(80);
-                if (mine.Count == 0) await telegram.SendToAsync(sender.ToString(), "Активных заявок на вас нет. Команда /my — мои заявки; /cancel — отмена ввода ответа.", null, token);
-                else foreach (var chunk in rows) await telegram.SendToAsync(sender.ToString(), "Ваши активные заявки:", new { inline_keyboard = chunk }, token);
+                foreach (var ticket in all.Where(t => Branches.CanHandle(actor.User, t))) { await tickets.SyncAsync(ticket, token); if (TicketManagement.Status(ticket.Status) < 5 && (showAll || (await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId))) mine.Add(ticket); }
+                var rows = mine.Select(t => new[] { Button("#" + t.GlpiId + " · " + TicketManagement.StatusName(TicketManagement.Status(t.Status)) + " · " + t.Title, "open:" + t.Id) }).Chunk(80);
+                if (mine.Count == 0) await telegram.SendToAsync(sender.ToString(), showAll ? "Открытых заявок в доступных филиалах нет." : "Активных заявок на вас нет. /open — открытые заявки; /my — мои заявки; /cancel — отмена ввода ответа.", null, token);
+                else foreach (var chunk in rows) await telegram.SendToAsync(sender.ToString(), showAll ? "Открытые заявки (" + mine.Count + "). Выберите заявку:" : "Ваши активные заявки:", new { inline_keyboard = chunk }, token);
             }
             else if (command is "/cancel" or "Отмена")
             {
@@ -277,6 +370,17 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                 string[] parts = command.Split(':');
                 if (parts.Length < 2 || !int.TryParse(parts[1], out int ticketId)) throw new ArgumentException("Неизвестная команда.");
                 var ticket = await db.Tickets.FindAsync([ticketId], token) ?? throw new ArgumentException("Заявка не найдена.");
+                if (parts[0] == "closed")
+                {
+                    if (actor.User.Role != Roles.SuperAdmin)
+                    {
+                        if (callbackId != null) await telegram.AnswerCallbackAsync(callbackId, "Заявка уже закрыта и принять её нельзя.", token, showAlert: true);
+                        return;
+                    }
+                    if (callbackId != null) await telegram.AnswerCallbackAsync(callbackId, "Отчёт отправлен в личные сообщения", token);
+                    await SendClosedTicketReportAsync(sender, ticket, token);
+                    return;
+                }
                 Branches.Require(actor.User, ticket);
                 if (parts[0] == "claim")
                 {
@@ -284,7 +388,8 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                     await telegram.SendToAsync(sender.ToString(), "Принимаю заявку GLPI #" + ticket.GlpiId + "…", null, token);
                     await tickets.ClaimAsync(ticket, actor, token);
                     await ConfirmAsync(callbackId!, sender, "Назначено на " + actor.User.Username, token); callbackId = null;
-                    if (message.TryGetProperty("message_id", out var mid)) await telegram.MarkClaimedAsync(chat, mid.GetInt64(), "Принята: " + actor.User.Username, token);
+                    if (message.TryGetProperty("message_id", out var mid))
+                        await telegram.MarkClaimedAsync(chat, mid.GetInt64(), TelegramClient.TicketButtonText(ticket), TelegramClient.TicketButtonCallbackData(ticket), token);
                     await CardAsync(sender, ticket, actor, token);
                 }
                 else if (parts[0] == "open") await CardAsync(sender, ticket, actor, token);

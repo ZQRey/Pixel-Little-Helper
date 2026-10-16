@@ -3,7 +3,7 @@ WORKDIR /src
 COPY LitleHelperServer.csproj ./
 RUN dotnet restore
 COPY . ./
-RUN dotnet publish -c Release -o /app/publish --no-restore
+RUN DOTNET_PROCESSOR_COUNT=2 dotnet publish -c Release -o /app/publish --no-restore -m:1
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 RUN apt-get update && apt-get install -y --no-install-recommends curl libgssapi-krb5-2 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app

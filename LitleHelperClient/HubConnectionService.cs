@@ -4,6 +4,8 @@ using System.Net.Http.Json;
 
 namespace PixelHelper;
 
+public sealed record TicketAttachmentDto(string FileName, byte[] Content);
+
 public sealed class HubConnectionService : IAsyncDisposable
 {
     private readonly Settings settings;
@@ -14,6 +16,9 @@ public sealed class HubConnectionService : IAsyncDisposable
     private Task? loop;
     private volatile bool registered;
     private bool registrationSent;
+    public List<string> AllowedEmergencyCodes { get; private set; } = ["CODE_RED","CODE_YELLOW","CODE_BLACK","CODE_PINK","CODE_ORANGE","CODE_WHITE","CODE_BLUE","SPECIALIST_CALL"];
+    internal string? ConnectionId => connection.ConnectionId;
+    internal Task RefreshCodePermissionsAsync() => RefreshEmergencyCodesAsync();
     public bool IsOnline => registered && connection.State == HubConnectionState.Connected;
     public event Action<bool>? OnlineChanged;
     public event Action? Connecting;
@@ -22,8 +27,20 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Func<ClientNotice, Task<string>>? NoticeReceived;
     public event Action<CartridgeReadyNotice>? CartridgeReadyReceived;
     public event Action<TicketReplyNotice>? TicketReplyReceived;
+    public event Action<TicketSurveyNotice[]>? SurveysUpdated;
+    public event Action<string>? SurveyChanged;
+    public Func<Task>? VerifySurveyUser;
+    public Func<Task<bool>>? BeforeTicket;
+    public bool UrgentTicket { get; set; }
+    public Task<TicketSurveyNotice[]> GetSurveys() => connection.InvokeAsync<TicketSurveyNotice[]>("GetAllTicketSurveys",lifetime.Token);
+    public Task<bool> ClaimSurvey(string id) => connection.InvokeAsync<bool>("ClaimTicketSurvey",id,lifetime.Token);
+    public Task<TicketSurveyResult> AnswerSurvey(string id,int score,string comment,string requestId) => connection.InvokeAsync<TicketSurveyResult>("AnswerTicketSurvey",id,new {score,comment,requestId},lifetime.Token);
+    public Task SnoozeSurvey(string id,int minutes) => connection.InvokeAsync("SnoozeTicketSurvey",id,minutes,lifetime.Token);
+    public Task DismissSurvey(string id) => connection.InvokeAsync("DeferTicketSurvey",id,true,lifetime.Token);
+    public async Task PollSurveys() { try { if (VerifySurveyUser != null) await VerifySurveyUser(); SurveysUpdated?.Invoke(await GetSurveys()); } catch (Exception e) { Settings.Log(e); } }
     public event Action<EmergencyAlertNotice>? EmergencyAlertReceived;
     public event Action? EmergencyAlertCanceled;
+    public event Action<string>? EmergencyEventCanceled;
     public event Action<string>? RoomUpdated;
     public event Action? LiquidationReceived;
     public HubConnectionService(Settings settings)
@@ -60,8 +77,13 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On("Shutdown", () => RunTask(new(Guid.NewGuid().ToString("N"), "shutdown", "")));
         created.On<CartridgeReadyNotice>("CartridgeReadyNotice", notice => CartridgeReadyReceived?.Invoke(notice));
         created.On<TicketReplyNotice>("TicketReplyNotice", notice => TicketReplyReceived?.Invoke(notice));
+        created.On<TicketSurveyNotice>("TicketSurveyAvailable", _ => PollSurveys());
+        created.On<string>("TicketSurveyChanged", id => { SurveyChanged?.Invoke(id); _ = PollSurveys(); });
         created.On<EmergencyAlertNotice>("EmergencyAlertNotice", notice => EmergencyAlertReceived?.Invoke(notice));
         created.On("EmergencyAlertCanceled", () => EmergencyAlertCanceled?.Invoke());
+        created.On<string>("EmergencyEventCanceled", id => EmergencyEventCanceled?.Invoke(id));
+        created.On("EmergencySettingsUpdated", RefreshEmergencyCodesAsync);
+        created.On<List<MedicalStatusConfig>>("MedicalStatusesUpdated", ApplyMedicalStatuses);
         created.On<string>("ClientRoomUpdated", room => RoomUpdated?.Invoke(room));
         created.On("OnLiquidationProtocol", () => LiquidationReceived?.Invoke());
         created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
@@ -100,7 +122,7 @@ public sealed class HubConnectionService : IAsyncDisposable
                 }
                 else if (connection.State == HubConnectionState.Connected)
                 {
-                    if (!registered) await Register(attempt.Token); else { Stage("Проверка связи"); await connection.InvokeAsync("Heartbeat", attempt.Token); LastSuccess = DateTime.UtcNow; Stage("В сети"); }
+                    if (!registered) await Register(attempt.Token); else { Stage("Проверка связи"); await connection.InvokeAsync("Heartbeat", attempt.Token); await PollSurveys(); LastSuccess = DateTime.UtcNow; Stage("В сети"); }
                 }
                 await Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
             }
@@ -119,8 +141,27 @@ public sealed class HubConnectionService : IAsyncDisposable
         var machine = await Task.Run(SystemInspector.Machine, token).WaitAsync(TimeSpan.FromSeconds(5), token);
         var buttons = await connection.InvokeAsync<List<ActionButton>>("RegisterComputer", machine, token);
         LastSuccess = DateTime.UtcNow; Stage("В сети"); registered = true; OnlineChanged?.Invoke(true); ButtonsUpdated?.Invoke(buttons);
+        try { ApplyMedicalStatuses(await connection.InvokeAsync<List<MedicalStatusConfig>>("GetMedicalStatuses", token)); }
+        catch (Microsoft.AspNetCore.SignalR.HubException ex) when (ex.Message.Contains("Unknown hub method", StringComparison.OrdinalIgnoreCase)) { }
+        await RefreshEmergencyCodesAsync();
         // Inventory does not block button availability or the WPF dispatcher.
         _ = SendInventory();
+    }
+    private async Task RefreshEmergencyCodesAsync()
+    {
+        try { if(IsOnline) AllowedEmergencyCodes=await connection.InvokeAsync<List<string>>("GetEmergencyCodes",lifetime.Token); }
+        catch(Microsoft.AspNetCore.SignalR.HubException ex) when(ex.Message.Contains("Unknown hub method",StringComparison.OrdinalIgnoreCase)) { }
+    }
+    private void ApplyMedicalStatuses(List<MedicalStatusConfig> statuses)
+    {
+        var dispatcher=System.Windows.Application.Current?.Dispatcher;
+        if(dispatcher!=null && !dispatcher.CheckAccess()) {dispatcher.BeginInvoke(new Action(()=>ApplyMedicalStatuses(statuses)));return;}
+        var active = statuses.Where(s => s.IsActive).OrderBy(s => s.OrderIndex).ToList();
+        if (!active.Any(s => s.Key == "Available")) return;
+        settings.MedicalStatuses = active;
+        if (settings.MedicalWorkStatus == "OnBreak") settings.MedicalWorkStatus = "Break";
+        if (!active.Any(s => s.Key == settings.MedicalWorkStatus)) settings.MedicalWorkStatus = "Available";
+        settings.Save();
     }
     public async Task RefreshButtons()
     {
@@ -176,21 +217,59 @@ public sealed class HubConnectionService : IAsyncDisposable
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
         return await connection.InvokeAsync<int>("CreateTicket", title, description, token);
     }
+    public async Task<TicketContext> GetTicketContextAsync(CancellationToken token)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        try { return await connection.InvokeAsync<TicketContext>("GetTicketContext", token); }
+        catch (Microsoft.AspNetCore.SignalR.HubException ex) when (
+            ex.Message.Contains("Unknown hub method", StringComparison.OrdinalIgnoreCase) &&
+            ex.Message.Contains("GetTicketContext", StringComparison.Ordinal))
+        {
+            return new(await GetBranchesAsync(token));
+        }
+    }
     public async Task<List<TicketBranch>> GetBranchesAsync(CancellationToken token)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
         return await connection.InvokeAsync<List<TicketBranch>>("GetBranches", token);
     }
-    public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, string? userFullName, CancellationToken token)
+    public async Task<List<KnowledgeArticleDto>> GetKnowledgeArticlesAsync(string? category = null, string? search = null, CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        return await connection.InvokeAsync<List<KnowledgeArticleDto>>("GetKnowledgeArticles", category, search, timeout.Token);
+    }
+    public async Task<KnowledgeArticleDto?> GetKnowledgeArticleAsync(int id, CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        return await connection.InvokeAsync<KnowledgeArticleDto?>("GetKnowledgeArticle", id, timeout.Token);
+    }
+    public async Task<int> CreateTicketAtWithFilesAsync(string title, string description, int? branchId, string room, string? userFullName, List<TicketAttachmentDto>? attachments, CancellationToken token)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(token,lifetime.Token); timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        if (VerifySurveyUser != null) await VerifySurveyUser();
+        UrgentTicket = false;
+        if (BeforeTicket != null && !await BeforeTicket()) throw new InvalidOperationException("Сначала оцените выполненную заявку. Текст нового обращения сохранён в окне.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(60));
+        if (UrgentTicket) return await connection.InvokeAsync<int>("CreateUrgentTicketAtWithFiles",title,description,branchId,room,userFullName,attachments,timeout.Token);
+        if (attachments != null && attachments.Count > 0)
+        {
+            return await connection.InvokeAsync<int>("CreateTicketAtWithFiles", title, description, branchId, room, userFullName, attachments, timeout.Token);
+        }
         return await connection.InvokeAsync<int>("CreateTicketAt", title, description, branchId, room, userFullName, timeout.Token);
     }
+    public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, string? userFullName, CancellationToken token) =>
+        await CreateTicketAtWithFilesAsync(title, description, branchId, room, userFullName, null, token);
     public async Task<int> CreateTicketAtAsync(string title, string description, int? branchId, string room, CancellationToken token) =>
-        await CreateTicketAtAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), token);
+        await CreateTicketAtWithFilesAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), null, token);
+    public async Task<int> CreateTicketAtWithFilesAsync(string title, string description, int? branchId, string room, List<TicketAttachmentDto>? attachments, CancellationToken token) =>
+        await CreateTicketAtWithFilesAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), attachments, token);
     public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room) =>
-        await CreateTicketAtAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), CancellationToken.None);
+        await CreateTicketAtWithFilesAsync(title, description, branchId, room, SystemInspector.GetUserFullName(), null, CancellationToken.None);
 
     public async Task TriggerEmergencyAlertAsync(string code, string cabinet, string? notes, string? imageBase64 = null, string? department = null, CancellationToken token = default)
     {
@@ -224,10 +303,10 @@ public sealed class HubConnectionService : IAsyncDisposable
     public async Task AcknowledgeSpecialistCallAsync(int callId, bool accepted, CancellationToken token = default)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
-        await connection.InvokeAsync("AcknowledgeSpecialistCall", callId, accepted, token);
+        await connection.InvokeAsync("AcknowledgeSpecialistCall", callId, accepted, (string?)null, token);
     }
 
-    public async Task UpdateClientRoomAsync(string room, CancellationToken token = default)
+    public async Task UpdateClientRoomAsync(string room, CancellationToken token = default, bool throwOnFailure = false)
     {
         if (!IsOnline) return;
         try
@@ -237,6 +316,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         catch (Exception ex)
         {
             Settings.Log(ex);
+            if(throwOnFailure) throw;
         }
     }
 

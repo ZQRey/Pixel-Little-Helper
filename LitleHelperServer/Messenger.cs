@@ -87,6 +87,82 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
         bool isPsychologist = string.Equals(me.Role, Roles.Psychologist, StringComparison.OrdinalIgnoreCase) || me.FullName.Contains("психолог", StringComparison.OrdinalIgnoreCase) || me.Username.Contains("psychologist", StringComparison.OrdinalIgnoreCase) || me.Username.Contains("psiholog", StringComparison.OrdinalIgnoreCase);
         await Clients.Groups(users.Select(u=>"Chat:"+u)).SendAsync("Typing",new {peer=peer<0?peer:me.Id,userId=me.Id,me.FullName,isPsychologist,until=DateTime.UtcNow.AddSeconds(5)});
     }
+    // WebRTC Signaling
+    public async Task StartCall(int targetUserId, bool isVideo, string? callId = null)
+    {
+        callId = string.IsNullOrWhiteSpace(callId) ? Guid.NewGuid().ToString("N") : callId;
+        var me = await Messenger.UserAsync(db, Context.User!);
+        await Clients.Group("Chat:" + targetUserId).SendAsync("IncomingCall", new {
+            callId,
+            callerId = me.Id,
+            callerName = me.FullName,
+            callerUsername = me.Username,
+            isVideo
+        });
+    }
+
+    public async Task StartGroupCall(int groupId, bool isVideo, string? callId = null)
+    {
+        callId = string.IsNullOrWhiteSpace(callId) ? Guid.NewGuid().ToString("N") : callId;
+        var me = await Messenger.UserAsync(db, Context.User!);
+        var members = await db.ChatGroupMembers
+            .Where(m => m.GroupId == groupId && m.UserId != me.Id && db.Users.Any(u => u.Id == m.UserId && u.IsActive))
+            .Select(m => m.UserId)
+            .ToListAsync();
+        var group = await db.ChatGroups.SingleOrDefaultAsync(g => g.Id == groupId);
+        string groupName = group?.Name ?? "Групповой звонок";
+        foreach (var memberId in members)
+        {
+            await Clients.Group("Chat:" + memberId).SendAsync("IncomingCall", new {
+                callId,
+                callerId = me.Id,
+                callerName = me.FullName,
+                groupId,
+                groupName,
+                isVideo
+            });
+        }
+    }
+
+    public async Task AcceptCall(string callId, int callerId, object? sdp = null)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        await Clients.Group("Chat:" + callerId).SendAsync("CallAccepted", callId, me.Id, me.FullName, sdp);
+    }
+
+    public async Task RejectCall(string callId, int callerId, string reason = "busy")
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        await Clients.Group("Chat:" + callerId).SendAsync("CallRejected", callId, me.Id, me.FullName, reason);
+    }
+
+    public async Task SendIceCandidate(string callId, int targetUserId, object candidate, string sdpMid = "", int sdpMLineIndex = 0)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        await Clients.Group("Chat:" + targetUserId).SendAsync("IceCandidateReceived", callId, me.Id, candidate, sdpMid, sdpMLineIndex);
+    }
+
+    public async Task SendSdpOffer(string callId, int targetUserId, object sdp)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        await Clients.Group("Chat:" + targetUserId).SendAsync("SdpOfferReceived", callId, me.Id, sdp);
+    }
+
+    public async Task SendSdpAnswer(string callId, int targetUserId, object sdp)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        await Clients.Group("Chat:" + targetUserId).SendAsync("SdpAnswerReceived", callId, me.Id, sdp);
+    }
+
+    public async Task EndCall(string callId, int targetUserId = 0)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        if (targetUserId != 0)
+        {
+            await Clients.Group("Chat:" + targetUserId).SendAsync("CallEnded", callId, me.Id);
+        }
+    }
+
     public override async Task OnConnectedAsync()
     {
         if (!settings.Value.Enabled) throw new HubException("Мессенджер отключён администратором.");
@@ -134,7 +210,7 @@ public static class Messenger
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ChatMessages_SenderId_ClientId\" ON \"ChatMessages\" (\"SenderId\", \"ClientId\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatMessages_RecipientId_Id\" ON \"ChatMessages\" (\"RecipientId\", \"Id\")");
         await ChatFiles.EnsureSchemaAsync(db);
-        await ChatBroadcasts.EnsureSchemaAsync(db); await ChatExtras.EnsureSchemaAsync(db);
+        await ChatBroadcasts.EnsureSchemaAsync(db); await ChatExtras.EnsureSchemaAsync(db); await ChatPolls.EnsureSchemaAsync(db);
     }
     internal static string Token(PanelUser user, IConfiguration config)
     {
@@ -223,14 +299,25 @@ public static class Messenger
         ChatFiles.Map(api);
         ChatBroadcasts.Map(api);
         ChatExtras.Map(api);
+        ChatPolls.Map(api);
         api.AddEndpointFilter(async (context, next) => context.HttpContext.RequestServices.GetRequiredService<MessengerSettings>().Value.Enabled ? await next(context) : Results.Json(new { error = "Мессенджер отключён администратором." }, statusCode: 403));
         api.MapGet("/me", async (HelperDb db, ClaimsPrincipal p, MessengerSettings settings) => { var u = await UserAsync(db, p); return new { u.Id, u.FullName, unreadReminderMinutes = settings.Value.UnreadReminderMinutes }; });
         api.MapGet("/config", (MessengerSettings settings) => new { settings.Value.Enabled, settings.Value.RetentionDays, settings.Value.UnreadReminderMinutes });
         api.MapGet("/users", async (HelperDb db, ClaimsPrincipal p, ChatPresence presence) =>
         {
             var me = await UserAsync(db, p);
-            var users = await db.Users.AsNoTracking().Where(u => u.Id != me.Id && u.PasswordHash == "!AD" && (u.IsActive || db.ChatMessages.Any(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id)))
-                .OrderBy(u => u.FullName).Select(u => new { u.Id, u.FullName, u.Username, u.IsActive, branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(), unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null && m.Body != ""), lastId = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).Select(m => (long?)m.Id).Max(), lastAt = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => (DateTime?)m.SentAt).FirstOrDefault(), lastText = db.ChatMessages.Where(m => m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id).OrderByDescending(m => m.Id).Select(m => m.Body).FirstOrDefault() }).ToListAsync();
+            var users = await db.Users.AsNoTracking().Where(u => u.Id != me.Id && u.PasswordHash == "!AD" && (u.IsActive || db.ChatMessages.Any(m => (m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id) && (m.Body != "" || db.ChatFiles.Any(f => f.MessageId == m.Id)))))
+                .OrderBy(u => u.FullName).Select(u => new {
+                    u.Id,
+                    u.FullName,
+                    u.Username,
+                    u.IsActive,
+                    branch = db.Branches.Where(b => b.Id == u.BranchId).Select(b => b.Name).FirstOrDefault(),
+                    unread = db.ChatMessages.Count(m => m.SenderId == u.Id && m.RecipientId == me.Id && m.ReadAt == null && (m.Body != "" || db.ChatFiles.Any(f => f.MessageId == m.Id))),
+                    lastId = db.ChatMessages.Where(m => (m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id) && (m.Body != "" || db.ChatFiles.Any(f => f.MessageId == m.Id))).Select(m => (long?)m.Id).Max(),
+                    lastAt = db.ChatMessages.Where(m => (m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id) && (m.Body != "" || db.ChatFiles.Any(f => f.MessageId == m.Id))).OrderByDescending(m => m.Id).Select(m => (DateTime?)m.SentAt).FirstOrDefault(),
+                    lastText = db.ChatMessages.Where(m => (m.SenderId == me.Id && m.RecipientId == u.Id || m.SenderId == u.Id && m.RecipientId == me.Id) && (m.Body != "" || db.ChatFiles.Any(f => f.MessageId == m.Id))).OrderByDescending(m => m.Id).Select(m => m.Body).FirstOrDefault()
+                }).ToListAsync();
             return users.Select(u =>
             {
                 var status = presence.GetStatus(u.Id);
@@ -278,6 +365,24 @@ public static class Messenger
             if (peer < 0) return await ChatGroups.ReadAsync(ChatGroups.IdFromPeer(peer), through, db, me.Id, hub);
             await db.ChatMessages.Where(m => m.SenderId == peer && m.RecipientId == me.Id && m.Id <= through && m.ReadAt == null).ExecuteUpdateAsync(s => s.SetProperty(m => m.ReadAt, DateTime.UtcNow));
             await hub.Clients.Groups("Chat:" + peer, "Chat:" + me.Id).SendAsync("ChatChanged"); return Results.Ok();
+        });
+        api.MapGet("/webrtc/config", (IConfiguration config) =>
+        {
+            var stun = config["WebRTC:StunServer"] ?? "stun:stun.l.google.com:19302";
+            var iceServers = new List<object>
+            {
+                new { urls = new[] { stun, "stun:helper:3478" } }
+            };
+            string? turn = config["WebRTC:TurnServer"];
+            if (!string.IsNullOrWhiteSpace(turn))
+            {
+                iceServers.Add(new {
+                    urls = turn,
+                    username = config["WebRTC:TurnUser"] ?? "helper",
+                    credential = config["WebRTC:TurnPassword"] ?? "helperpass"
+                });
+            }
+            return Results.Ok(new { iceServers });
         });
     }
 }

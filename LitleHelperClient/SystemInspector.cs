@@ -10,30 +10,108 @@ public static class SystemInspector
     [System.Runtime.InteropServices.DllImport("secur32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto, SetLastError = true)]
     private static extern int GetUserNameEx(int nameFormat, System.Text.StringBuilder userName, ref uint userNameSize);
 
-    public static string GetUserFullName()
+    public static bool IsTemporaryUser(string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return true;
+        string clean = username.Trim().Split('\\').Last().Split('@')[0].ToLowerInvariant();
+        return clean is "temp" or "tmp" or "system" or "local service" or "network service" or "defaultuser0"
+            || clean.StartsWith("temp.") || clean.StartsWith("defaultuser");
+    }
+
+    public static bool IsTemporaryProfile()
+    {
+        if (IsTemporaryUser(Environment.UserName)) return true;
+        try
+        {
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (profile.EndsWith(@"\TEMP", StringComparison.OrdinalIgnoreCase) || profile.Contains(@"\TEMP.", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        catch { }
+        return false;
+    }
+
+    public static string GetLastLoggedOnUser()
     {
         try
         {
-            var sb = new System.Text.StringBuilder(260);
-            uint size = (uint)sb.Capacity;
-            if (GetUserNameEx(3, sb, ref size) != 0 && sb.Length > 0)
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI");
+            string? sam = key?.GetValue("LastLoggedOnSAMUser") as string;
+            if (!string.IsNullOrWhiteSpace(sam))
             {
-                string full = sb.ToString().Trim();
-                if (!string.IsNullOrEmpty(full)) return full;
+                string clean = sam.Trim().Split('\\').Last().Split('@')[0];
+                if (!IsTemporaryUser(clean)) return clean;
+            }
+            string? user = key?.GetValue("LastLoggedOnUser") as string;
+            if (!string.IsNullOrWhiteSpace(user))
+            {
+                string clean = user.Trim().Split('\\').Last().Split('@')[0];
+                if (!IsTemporaryUser(clean)) return clean;
             }
         }
         catch { }
+        return "";
+    }
 
+    public static string GetLastLoggedOnDisplayName()
+    {
         try
         {
-            using var searcher = new ManagementObjectSearcher($"SELECT FullName FROM Win32_UserAccount WHERE Name = '{Environment.UserName}'");
-            foreach (ManagementObject user in searcher.Get())
-            {
-                string? fn = user["FullName"]?.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(fn)) return fn;
-            }
+            using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI");
+            string? display = key?.GetValue("LastLoggedOnDisplayName") as string;
+            if (!string.IsNullOrWhiteSpace(display) && !IsTemporaryUser(display))
+                return display.Trim();
         }
         catch { }
+        return "";
+    }
+
+    public static string GetUserFullName()
+    {
+        if (!IsTemporaryUser(Environment.UserName))
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder(260);
+                uint size = (uint)sb.Capacity;
+                if (GetUserNameEx(3, sb, ref size) != 0 && sb.Length > 0)
+                {
+                    string full = sb.ToString().Trim();
+                    if (!string.IsNullOrEmpty(full) && !IsTemporaryUser(full)) return full;
+                }
+            }
+            catch { }
+
+            try
+            {
+                using var searcher = new ManagementObjectSearcher($"SELECT FullName FROM Win32_UserAccount WHERE Name = '{Environment.UserName}'");
+                foreach (ManagementObject user in searcher.Get())
+                {
+                    string? fn = user["FullName"]?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(fn) && !IsTemporaryUser(fn)) return fn;
+                }
+            }
+            catch { }
+        }
+
+        string logonDisplay = GetLastLoggedOnDisplayName();
+        if (!string.IsNullOrEmpty(logonDisplay)) return logonDisplay;
+
+        string lastUser = GetLastLoggedOnUser();
+        if (!string.IsNullOrEmpty(lastUser))
+        {
+            try
+            {
+                using var searcher = new ManagementObjectSearcher($"SELECT FullName FROM Win32_UserAccount WHERE Name = '{lastUser}'");
+                foreach (ManagementObject user in searcher.Get())
+                {
+                    string? fn = user["FullName"]?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(fn) && !IsTemporaryUser(fn)) return fn;
+                }
+            }
+            catch { }
+            return lastUser;
+        }
 
         return Environment.UserName;
     }
@@ -43,7 +121,15 @@ public static class SystemInspector
         string ip = "";
         try { ip = Dns.GetHostAddresses(Environment.MachineName).FirstOrDefault(x => x.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(x))?.ToString() ?? ""; }
         catch (SocketException) { }
-        return new(Environment.MachineName, Environment.UserName, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName());
+
+        string user = Environment.UserName;
+        if (IsTemporaryUser(user))
+        {
+            string recovered = GetLastLoggedOnUser();
+            if (!string.IsNullOrEmpty(recovered)) user = recovered;
+        }
+
+        return new(Environment.MachineName, user, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName());
     }
     public static InventorySnapshot Collect()
     {
@@ -84,7 +170,9 @@ public static class SystemInspector
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException) { errors.Add("Registry: " + ex.Message); }
         }
-        return new(new(cpu, ram.Aggregate(0UL, (sum, slot) => sum + slot.CapacityBytes), ram.ToArray(), logical.ToArray(), physical.ToArray(), errors.ToArray()),
+        List<PrinterStatusInfo> printers = [];
+        try { printers = PrinterWatchdog.GetPrinters(); } catch { }
+        return new(new(cpu, ram.Aggregate(0UL, (sum, slot) => sum + slot.CapacityBytes), ram.ToArray(), logical.ToArray(), physical.ToArray(), errors.ToArray(), printers.ToArray()),
             software.DistinctBy(x => (x.Name, x.Version)).OrderBy(x => x.Name).Take(5000).ToArray());
     }
 }

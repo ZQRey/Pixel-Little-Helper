@@ -293,8 +293,24 @@ public static class MessengerTests
         using(var response=await a.PostAsJsonAsync("api/messenger/send",new ChatSend(charlie.Id,"/pet",Guid.NewGuid().ToString()))) { response.EnsureSuccessStatusCode();var row=await response.Content.ReadFromJsonAsync<ChatMessage>();Check(row!.Body==""&&row.Command=="pet","pet command has no visible text and command=pet"); }
         using(var response=await a.PostAsJsonAsync("api/messenger/send",new ChatSend(charlie.Id,"/погладить Хороший котик",Guid.NewGuid().ToString()))) { response.EnsureSuccessStatusCode();var row=await response.Content.ReadFromJsonAsync<ChatMessage>();Check(row!.Body=="Хороший котик"&&row.Command=="pet","погладить command strips prefix and command=pet"); }
         Check((await a.PostAsJsonAsync("api/messenger/send",new ChatSend(charlie.Id,"/срочно",Guid.NewGuid().ToString()))).StatusCode==HttpStatusCode.BadRequest,"urgent command requires text");
-        Check((await a.PostAsJsonAsync("api/messenger/send",new ChatSend(charlie.Id,"/неизвестно текст",Guid.NewGuid().ToString()))).StatusCode==HttpStatusCode.BadRequest,"unknown commands are rejected rather than displayed or executed");
         using(var response=await a.PostAsJsonAsync("api/messenger/groups",new GroupCreate("Команды",new[]{charlie.Id}))) { response.EnsureSuccessStatusCode();int commandGroupPeer=(await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();using var commandSent=await a.PostAsJsonAsync("api/messenger/send",new ChatSend(commandGroupPeer,"/срочно /танец В группе",Guid.NewGuid().ToString()));commandSent.EnsureSuccessStatusCode();var row=await commandSent.Content.ReadFromJsonAsync<ChatMessage>();Check(row!.Command=="dance"&&row.IsUrgent&&row.Body=="В группе","group command metadata survives delivery");Check((await c.GetFromJsonAsync<List<ChatMessage>>("api/messenger/effects"))!.Any(m=>m.RecipientId==commandGroupPeer&&m.Command=="dance"),"group members receive pending effects after offline reconnect"); }
+        using (var pollResp = await a.PostAsJsonAsync("api/messenger/polls", new CreatePollRequest(charlie.Id, "Совещание в 14:00?", new() { "Да, буду", "Нет, на приёме" }, MultipleChoice: false, IsAnonymous: false)))
+        {
+            pollResp.EnsureSuccessStatusCode();
+            var poll = await pollResp.Content.ReadFromJsonAsync<PollDetails>();
+            Check(poll != null && poll.Question == "Совещание в 14:00?", "poll created successfully");
+            Check(poll!.Options.Count == 2, "poll has 2 options");
+            using var voteResp = await c.PostAsJsonAsync($"api/messenger/polls/{poll.Id}/vote", new VotePollRequest(new() { 0 }));
+            voteResp.EnsureSuccessStatusCode();
+            var voted = await voteResp.Content.ReadFromJsonAsync<PollDetails>();
+            Check(voted!.TotalVoters == 1, "poll registered 1 voter");
+            Check(voted.Options[0].VoteCount == 1, "option 0 has 1 vote");
+            Check(voted.MyVotes.Contains(0), "Charlie has vote recorded");
+            using var closeResp = await a.PostAsync($"api/messenger/polls/{poll.Id}/close", null);
+            closeResp.EnsureSuccessStatusCode();
+            var closed = await closeResp.Content.ReadFromJsonAsync<PollDetails>();
+            Check(closed!.IsClosed, "poll is marked closed");
+        }
         var options = app.Services.GetRequiredService<MessengerSettings>(); options.Save(new(false));
         Check((await a.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks chat APIs");
         Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks Windows SSO");

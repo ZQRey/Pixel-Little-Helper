@@ -8,6 +8,7 @@ public sealed record GlpiSettingsUpdate(string BaseUrl, string? AppToken, string
 
 public sealed class GlpiSettingsStore(IConfiguration config, IDataProtectionProvider protection)
 {
+    public string ReportingTimeZone => config["GlpiReports:ApiFallbackTimeZone"] ?? "UTC";
     private readonly object gate = new();
     private readonly IDataProtector protector = protection.CreateProtector("LitleHelper.GLPI.Settings.v1");
     private string FilePath => config["Glpi:SettingsFile"] ?? Path.Combine("data", "glpi-settings.json");

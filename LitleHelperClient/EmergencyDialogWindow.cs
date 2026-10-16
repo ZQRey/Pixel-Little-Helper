@@ -25,8 +25,7 @@ public sealed class EmergencyDialogWindow : Window
         this.settings = settings;
 
         currentCabinet = settings.TicketRoom?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(currentCabinet))
-            currentCabinet = Environment.MachineName;
+
 
         Title = Loc.T("ActionEmergency");
         Width = 580;
@@ -212,6 +211,7 @@ public sealed class EmergencyDialogWindow : Window
         var cabInput = new TextBox
         {
             Text = currentCabinet,
+            MaxLength=50,
             Height = 32,
             FontSize = 13,
             FontWeight = FontWeights.Bold,
@@ -220,9 +220,12 @@ public sealed class EmergencyDialogWindow : Window
             BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
             BorderThickness = new Thickness(1),
             Padding = new Thickness(8, 4, 8, 4),
-            VerticalContentAlignment = VerticalAlignment.Center
+            VerticalContentAlignment = VerticalAlignment.Center,
+            IsReadOnly = true,
+            Focusable = false,
+            Cursor = Cursors.Arrow,
+            ToolTip = "Номер кабинета зафиксирован в настройках клиента"
         };
-        cabInput.TextChanged += (_, _) => currentCabinet = cabInput.Text.Trim();
         Grid.SetColumn(cabInput, 1);
 
         cabGrid.Children.Add(cabLabel);
@@ -241,33 +244,47 @@ public sealed class EmergencyDialogWindow : Window
 
         // Row 1: -КОД КРАСНЫЙ- -КОД ЧЁРНЫЙ- -КОД ОРАНЖЕВЫЙ-
         var btnRed = CreateStyledButton("-КОД КРАСНЫЙ-", "🔴 Пожар / Эвакуация", Color.FromRgb(220, 38, 38), () => ShowConfirm("CODE_RED", "КОД КРАСНЫЙ: Пожар / Задымление", Color.FromRgb(220, 38, 38)));
+        btnRed.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_RED");
+        btnRed.Opacity=btnRed.IsEnabled?1:0.35;
         Grid.SetRow(btnRed, 0); Grid.SetColumn(btnRed, 0);
         codesGrid.Children.Add(btnRed);
 
         var btnBlack = CreateStyledButton("-КОД ЧЁРНЫЙ-", "⚫ Теракт / Угроза", Color.FromRgb(24, 24, 27), () => ShowConfirm("CODE_BLACK", "КОД ЧЁРНЫЙ: Угроза взрыва / Теракт", Color.FromRgb(24, 24, 27)));
+        btnBlack.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_BLACK");
+        btnBlack.Opacity=btnBlack.IsEnabled?1:0.35;
         Grid.SetRow(btnBlack, 0); Grid.SetColumn(btnBlack, 1);
         codesGrid.Children.Add(btnBlack);
 
         var btnOrange = CreateStyledButton("-КОД ОРАНЖЕВЫЙ-", "🟠 Опасные вещества", Color.FromRgb(234, 88, 12), () => ShowConfirm("CODE_ORANGE", "КОД ОРАНЖЕВЫЙ: Опасные вещества / ЧС", Color.FromRgb(234, 88, 12)));
+        btnOrange.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_ORANGE");
+        btnOrange.Opacity=btnOrange.IsEnabled?1:0.35;
         Grid.SetRow(btnOrange, 0); Grid.SetColumn(btnOrange, 2);
         codesGrid.Children.Add(btnOrange);
 
         // Row 2: -КОД ЖЁЛТЫЙ- -КОД СИНИЙ- -КОД БЕЛЫЙ-
         var btnYellow = CreateStyledButton("-КОД ЖЁЛТЫЙ-", "🟡 Чрезвычайная ситуация", Color.FromRgb(217, 119, 6), () => ShowConfirm("CODE_YELLOW", "КОД ЖЁЛТЫЙ: Чрезвычайная ситуация", Color.FromRgb(217, 119, 6)));
+        btnYellow.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_YELLOW");
+        btnYellow.Opacity=btnYellow.IsEnabled?1:0.35;
         Grid.SetRow(btnYellow, 1); Grid.SetColumn(btnYellow, 0);
         codesGrid.Children.Add(btnYellow);
 
         var btnBlue = CreateStyledButton("-КОД СИНИЙ-", "🔵 Остановка сердца / СЛР", Color.FromRgb(37, 99, 235), () => ShowConfirm("CODE_BLUE", "КОД СИНИЙ: Реанимация / Остановка сердца", Color.FromRgb(37, 99, 235)));
+        btnBlue.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_BLUE");
+        btnBlue.Opacity=btnBlue.IsEnabled?1:0.35;
         Grid.SetRow(btnBlue, 1); Grid.SetColumn(btnBlue, 1);
         codesGrid.Children.Add(btnBlue);
 
         var btnWhite = CreateStyledButton("-КОД БЕЛЫЙ-", "⚪ Агрессия / Охрана", Color.FromRgb(71, 85, 105), () => ShowConfirm("CODE_WHITE", "КОД БЕЛЫЙ: Агрессия / Нападение", Color.FromRgb(71, 85, 105)));
+        btnWhite.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_WHITE");
+        btnWhite.Opacity=btnWhite.IsEnabled?1:0.35;
         Grid.SetRow(btnWhite, 1); Grid.SetColumn(btnWhite, 2);
         codesGrid.Children.Add(btnWhite);
 
         // Row 3: -КОД РОЗОВЫЙ- (Span all 3 columns)
         string pinkSub = string.IsNullOrEmpty(pinkPhotoBase64) ? "🌸 Потеря / Похищение ребёнка (возможно с фото)" : $"🌸 Прикреплено фото: {pinkPhotoFileName}";
         var btnPink = CreateStyledButton("-КОД РОЗОВЫЙ-", pinkSub, Color.FromRgb(219, 39, 119), () => ShowPinkCodeView(), 52);
+        btnPink.IsEnabled=hub.AllowedEmergencyCodes.Contains("CODE_PINK");
+        btnPink.Opacity=btnPink.IsEnabled?1:0.35;
         Grid.SetRow(btnPink, 2); Grid.SetColumn(btnPink, 0); Grid.SetColumnSpan(btnPink, 3);
         codesGrid.Children.Add(btnPink);
 
@@ -275,6 +292,8 @@ public sealed class EmergencyDialogWindow : Window
 
         // Row 4: ВЫЗОВ СПЕЦИАЛИСТА (Wide button)
         var btnSpecialist = CreateStyledButton("🩺  -ВЫЗОВ СПЕЦИАЛИСТА-", "Срочный вызов дежурного врача / реаниматолога / хирурга", Color.FromRgb(5, 150, 105), () => ShowSpecialistView(), 52);
+        btnSpecialist.IsEnabled=hub.AllowedEmergencyCodes.Contains("SPECIALIST_CALL");
+        btnSpecialist.Opacity=btnSpecialist.IsEnabled?1:0.35;
         btnSpecialist.Margin = new Thickness(4, 4, 4, 4);
         rootStack.Children.Add(btnSpecialist);
 
@@ -326,9 +345,12 @@ public sealed class EmergencyDialogWindow : Window
             Foreground = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
             Padding = new Thickness(8, 4, 8, 4),
-            Margin = new Thickness(0, 0, 0, 14)
+            Margin = new Thickness(0, 0, 0, 14),
+            IsReadOnly = true,
+            Focusable = false,
+            Cursor = Cursors.Arrow,
+            ToolTip = "Номер кабинета зафиксирован в настройках клиента"
         };
-        cabBox.TextChanged += (_, _) => currentCabinet = cabBox.Text.Trim();
         panel.Children.Add(cabBox);
 
         panel.Children.Add(new TextBlock
@@ -359,7 +381,8 @@ public sealed class EmergencyDialogWindow : Window
             try
             {
                 if (triggerBtn != null) triggerBtn.IsEnabled = false;
-                await hub.TriggerEmergencyAlertAsync(code, cabBox.Text.Trim(), notesBox.Text.Trim(), null, null);
+                if (!CabinetValidation.Valid(currentCabinet, Environment.MachineName)) throw new InvalidOperationException("Номер кабинета не указан или некорректен.");
+                await hub.TriggerEmergencyAlertAsync(code, currentCabinet, notesBox.Text.Trim(), null, null);
                 MessageBox.Show(this, "Сигнал экстренного оповещения успешно отправлен!", "Оповещение", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }
@@ -418,9 +441,12 @@ public sealed class EmergencyDialogWindow : Window
             Foreground = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
             Padding = new Thickness(8, 4, 8, 4),
-            Margin = new Thickness(0, 0, 0, 10)
+            Margin = new Thickness(0, 0, 0, 10),
+            IsReadOnly = true,
+            Focusable = false,
+            Cursor = Cursors.Arrow,
+            ToolTip = "Номер кабинета зафиксирован в настройках клиента"
         };
-        cabBox.TextChanged += (_, _) => currentCabinet = cabBox.Text.Trim();
         panel.Children.Add(cabBox);
 
         panel.Children.Add(new TextBlock
@@ -558,7 +584,8 @@ public sealed class EmergencyDialogWindow : Window
             try
             {
                 if (triggerBtn != null) triggerBtn.IsEnabled = false;
-                await hub.TriggerEmergencyAlertAsync("CODE_PINK", cabBox.Text.Trim(), notesBox.Text.Trim(), pinkPhotoBase64, null);
+                if (!CabinetValidation.Valid(currentCabinet, Environment.MachineName)) throw new InvalidOperationException("Номер кабинета не указан или некорректен.");
+                await hub.TriggerEmergencyAlertAsync("CODE_PINK", currentCabinet, notesBox.Text.Trim(), pinkPhotoBase64, null);
                 MessageBox.Show(this, "Сигнал «КОД РОЗОВЫЙ» успешно передан на все ПК!", "Оповещение", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }
@@ -617,9 +644,12 @@ public sealed class EmergencyDialogWindow : Window
             Foreground = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
             Padding = new Thickness(8, 4, 8, 4),
-            Margin = new Thickness(0, 0, 0, 10)
+            Margin = new Thickness(0, 0, 0, 10),
+            IsReadOnly = true,
+            Focusable = false,
+            Cursor = Cursors.Arrow,
+            ToolTip = "Номер кабинета зафиксирован в настройках клиента"
         };
-        cabBox.TextChanged += (_, _) => currentCabinet = cabBox.Text.Trim();
         panel.Children.Add(cabBox);
 
         panel.Children.Add(new TextBlock
@@ -672,7 +702,9 @@ public sealed class EmergencyDialogWindow : Window
             {
                 if (triggerBtn != null) triggerBtn.IsEnabled = false;
                 string selectedDept = deptCombo.SelectedItem?.ToString() ?? "Дежурный специалист";
-                await hub.TriggerEmergencyAlertAsync("SPECIALIST_CALL", cabBox.Text.Trim(), notesBox.Text.Trim(), null, selectedDept);
+                if (!hub.AllowedEmergencyCodes.Contains("SPECIALIST_CALL")) throw new InvalidOperationException("Вызов специалистов отключён администратором.");
+                if (!CabinetValidation.Valid(currentCabinet, Environment.MachineName)) throw new InvalidOperationException("Номер кабинета не указан или некорректен.");
+                await hub.TriggerEmergencyAlertAsync("SPECIALIST_CALL", currentCabinet, notesBox.Text.Trim(), null, selectedDept);
                 MessageBox.Show(this, $"Вызов отправлен специалисту ({selectedDept})!", "Оповещение", MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }

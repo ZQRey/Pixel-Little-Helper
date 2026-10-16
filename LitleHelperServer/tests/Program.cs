@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using System.Net;
 using System.Net.Http.Headers;
@@ -6,6 +8,18 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 
 static void Check(bool result, string text) { if (!result) throw new Exception(text); Console.WriteLine("PASS " + text); }
+if(args.FirstOrDefault()=="--schema-pg") {
+    using var db=new LitleHelperServer.HelperDb(new DbContextOptionsBuilder<LitleHelperServer.HelperDb>().UseNpgsql(args[1]).Options);
+    await db.Database.EnsureCreatedAsync();
+    await db.Database.ExecuteSqlRawAsync(@"DROP TABLE ""EmergencyEvents""");
+    await db.Database.ExecuteSqlRawAsync(@"DROP TABLE ""KnowledgeArticles""");
+    await LitleHelperServer.EmergencyEvents.EnsureAsync(db);
+    await LitleHelperServer.KnowledgeBase.EnsureSchemaAsync(db);
+    db.EmergencyEvents.Add(new(){NoticeJson="{}",LocalDelivered=true});
+    await db.SaveChangesAsync();
+    Check(await db.EmergencyEvents.CountAsync()==1 && await db.KnowledgeArticles.AnyAsync(),"PostgreSQL additive emergency and knowledge migration preserves valid data types");
+    return;
+}
 if (args.FirstOrDefault() == "--permissions-schema")
 {
     using var db = new LitleHelperServer.HelperDb(new DbContextOptionsBuilder<LitleHelperServer.HelperDb>().UseSqlite("Data Source=:memory:").Options);
@@ -67,6 +81,7 @@ mockBuilder.Logging.ClearProviders(); mockBuilder.WebHost.UseUrls(mockUrl);
 var mock = mockBuilder.Build();
 int initCount = 0, killCount = 0, requester = 0;
 int ticketCount = 0;
+var mockUsers=new Dictionary<string,int> {["alice"]=42,["operator"]=43};
 string mockMode = "token";
 string content = "";
 int telegramMessages = 0;
@@ -98,8 +113,13 @@ mock.MapGet("/apirest.php/initSession", (HttpRequest request) =>
 mock.MapGet("/apirest.php/search/User", (HttpRequest request) =>
 {
     Check(request.Headers["Session-Token"] == "mock-session" && request.Query["criteria[0][field]"] == "1" && request.Query["forcedisplay[0]"] == "2", "GLPI exact login search and requester ID field");
-    return Results.Json(new { data = new[] { new Dictionary<string, object> { ["1"] = "alice", ["2"] = 42 } } });
+    string criterion=request.Query["criteria[0][value]"].ToString();
+    Check(request.Query["criteria[0][searchtype]"]=="contains" && criterion.StartsWith('^') && criterion.EndsWith('$'), "GLPI requester compares the full login as text");
+    string login=criterion[1..^1];
+    if(!mockUsers.TryGetValue(login,out int userId)){userId=mockUsers.Values.Max()+1;mockUsers[login]=userId;}
+    return Results.Json(new { totalcount=1,data=new[] {new Dictionary<string,object> {["1"]=login,["2"]=userId}}});
 });
+mock.MapGet("/apirest.php/User/{id:int}",(int id)=>Results.Ok(new {id,name=mockUsers.Single(pair=>pair.Value==id).Key,is_active=1,is_deleted=0}));
 mock.MapPost("/apirest.php/Ticket", async (HttpRequest request) =>
 {
     ticketCount++;
@@ -171,8 +191,55 @@ try
         await agent.InvokeAsync("SendExecutionResult", taskId, "test-stream\ntest-completed", 0);
     });
     await agent.StartAsync();
-    var buttons = await agent.InvokeAsync<JsonElement>("RegisterComputer", new { machineName = "TEST-PC", userName = "alice", domainName = "TEST", ipAddress = "127.0.0.1", osVersion = "Test OS" });
-    Check(buttons.GetArrayLength() == 4, "authenticated agent registration and server menu");
+    var buttons = await agent.InvokeAsync<JsonElement>("RegisterComputer", new { machineName = "TEST-PC", userName = "alice", domainName = "TEST", ipAddress = "127.0.0.1", osVersion = "Test OS", supportsSystemButtons = true });
+    using(var deniedAck=await Call("/guard/white-ack",null,new{}))Check(deniedAck.StatusCode==HttpStatusCode.Unauthorized,"anonymous white acknowledgement rejected");
+    using(var deniedReset=await Call("/guard/white-reset",null,new{}))Check(deniedReset.StatusCode==HttpStatusCode.Unauthorized,"anonymous white reset rejected");
+    using(var wrongGuard=await Call("/guard/white-ack",staffTokens["alice"],new{}))Check(wrongGuard.StatusCode==HttpStatusCode.Forbidden,"ordinary user cannot acknowledge guard alarm");
+    using(var missingCartridgeKey=await Call("/integrations/cartridges/ready",null,new{targetUser="alice"}))Check(missingCartridgeKey.StatusCode==HttpStatusCode.ServiceUnavailable,"empty configured cartridge key fails closed");
+    await Json("/messenger/bind-agent",staffTokens["alice"],new {machineName="TEST-PC",clientKey=key,connectionId=agent.ConnectionId});
+    using(var wrongMachineKey=await Call("/messenger/bind-agent",staffTokens["alice"],new {machineName="TEST-PC",clientKey="wrong-key",connectionId=agent.ConnectionId}))Check(wrongMachineKey.StatusCode==HttpStatusCode.Unauthorized,"binding requires both user session and machine key");
+    bool resetDenied=false;
+    try {await agent.InvokeAsync("CancelEmergencyAlert");}catch(HubException){resetDenied=true;}
+    Check(resetDenied,"actual SignalR agent cannot declare server cancellation");
+    bool binderMatched=false;
+    try {await agent.InvokeAsync("AcknowledgeSpecialistCall",-999,false,(string?)null);}catch(HubException){binderMatched=true;}
+    Check(binderMatched,"three-argument specialist acknowledgement reaches server authorization");
+    await agent.InvokeAsync("UpdateClientRoom", "12");
+    Check(buttons.EnumerateArray().Count(b => !b.GetProperty("isSystem").GetBoolean()) == 4, "authenticated agent registration and server menu");
+    var statusList = await Json("/settings/medical-statuses", admin);
+    Check(statusList.GetArrayLength() == 4, "medical statuses seeded");
+    var defaultStatus = statusList.EnumerateArray().Single(s => s.GetProperty("key").GetString() == "Available");
+    using (var deniedStatus = await Call("/settings/medical-statuses/" + defaultStatus.GetProperty("id").GetInt32(), admin, method: HttpMethod.Delete))
+        Check(deniedStatus.StatusCode == HttpStatusCode.Conflict, "Available status deletion rejected");
+    var medicalPush = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+    using (agent.On<JsonElement>("MedicalStatusesUpdated", value => medicalPush.TrySetResult(value)))
+    {
+        var createdStatus = await Json("/settings/medical-statuses", admin, new { key = "CustomQuiet", title = "Тестовый статус", emoji = "🟡", colorHex = "#123456", muteSounds = true, muteTts = true, orderIndex = 5, isActive = true, description = "" });
+        int statusId = createdStatus.GetProperty("id").GetInt32();
+        Check((await medicalPush.Task.WaitAsync(TimeSpan.FromSeconds(5))).GetArrayLength() == 5, "medical status update pushed to agent");
+        using (var duplicate = await Call("/settings/medical-statuses", admin, new { key = "CustomQuiet", title = "Дубликат", emoji = "", colorHex = "#123456" }))
+            Check(duplicate.StatusCode == HttpStatusCode.Conflict, "duplicate medical status key rejected");
+        await Json("/settings/medical-statuses/" + statusId, admin, new { key = "CustomQuiet", title = "Изменён", emoji = "", colorHex = "#123456", muteSounds = false, muteTts = true, orderIndex = 5, isActive = true, description = "" }, HttpMethod.Put);
+        var hubStatuses = await agent.InvokeAsync<JsonElement>("GetMedicalStatuses");
+        Check(hubStatuses.EnumerateArray().Any(s=>s.GetProperty("title").GetString()=="Изменён"), "agent loads edited medical status");
+        using var deletedStatus = await Call("/settings/medical-statuses/" + statusId, admin, method: HttpMethod.Delete);
+        Check(deletedStatus.StatusCode == HttpStatusCode.NoContent, "custom medical status deleted");
+    }
+    var systemList = await Json("/buttons", admin);
+    var messengerButton = systemList.EnumerateArray().Single(b => b.GetProperty("systemKey").GetString() == "messenger");
+    int systemId = messengerButton.GetProperty("id").GetInt32();
+    using (var deniedDelete = await Call("/buttons/" + systemId, admin, method: HttpMethod.Delete))
+        Check(deniedDelete.StatusCode == HttpStatusCode.Conflict, "system button deletion rejected");
+    using (var deniedEdit = await Call("/buttons/" + systemId, admin, new { title = "Changed", actionType = "open_url", payload = "https://example.org" }, HttpMethod.Put))
+        Check(deniedEdit.StatusCode == HttpStatusCode.Conflict, "system button edit rejected");
+    var systemPush = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+    using (agent.On<JsonElement>("OnButtonsUpdated", value => systemPush.TrySetResult(value)))
+    {
+        await Json("/buttons/" + systemId + "/active", admin, new { isActive = false }, HttpMethod.Patch);
+        var update = await systemPush.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Check(update.EnumerateArray().Any(b => b.GetProperty("systemKey").GetString() == "messenger" && !b.GetProperty("isActive").GetBoolean()), "disabled system button state pushed to agent");
+    }
+    await Json("/buttons/" + systemId + "/active", admin, new { isActive = true }, HttpMethod.Patch);
     await agent.InvokeAsync("UpdateHardwareAndSoftware", new { cpuModel = "Test CPU", totalRamBytes = 8589934592L }, new[] { new { name = "Test Software", version = "1.0" } });
     var list = await Json("/computers", admin); int computerId = list[0].GetProperty("id").GetInt32();
     Check(list[0].GetProperty("isOnline").GetBoolean(), "computer online immediately");
@@ -241,7 +308,7 @@ try
     var added = await Json("/buttons", staffTokens["manager"], new { title = "New URL", actionType = "open_url", payload = "https://example.org", targetGroup = "All", isActive = true, orderIndex = 10 });
     pushed = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
     await Json("/buttons/apply", admin, new { });
-    Check((await pushed.Task.WaitAsync(TimeSpan.FromSeconds(10))).GetArrayLength() == 5, "button changes broadcast to agent");
+    Check((await pushed.Task.WaitAsync(TimeSpan.FromSeconds(10))).EnumerateArray().Count(b => !b.GetProperty("isSystem").GetBoolean()) == 5, "button changes broadcast to agent");
     int ticketId = await agent.InvokeAsync<int>("CreateTicket", "Test issue", "Integration test description");
     Check(ticketId == 7001 && requester == 42 && content.Contains("TEST-PC") && content.Contains("alice"), "GLPI ticket requester and PC identity");
     Check(initCount == killCount && initCount == 1, "GLPI session always released");
@@ -315,7 +382,10 @@ try
     await Json("/settings/glpi", admin, new { baseUrl = mockUrl, appToken = "mock-app", userToken = "mock-user", serviceUserId = 99, authMode = "token", login = "" }, HttpMethod.Put);
     mockMode = "token"; telegramFail = true;
     await Json("/tickets", admin, new { title = "Notification test", description = "Telegram failure must not cancel ticket" });
-    await agent.StartAsync(); await agent.InvokeAsync<int>("CreateTicket", "Agent notification", "Created from pet"); await agent.StopAsync();
+    await agent.StartAsync();
+    await agent.InvokeAsync("RegisterComputer",new {machineName="TEST-PC",userName="alice",domainName="TEST",ipAddress="127.0.0.1",osVersion="Test OS",supportsSystemButtons=true});
+    await Json("/messenger/bind-agent",staffTokens["alice"],new {machineName="TEST-PC",clientKey=key,connectionId=agent.ConnectionId});
+    await agent.InvokeAsync<int>("CreateTicket", "Agent notification", "Created from pet"); await agent.StopAsync();
     var notificationState = await Json("/settings/telegram", admin);
     Check(notificationState.GetProperty("pending").GetInt32() == 2, "panel and agent tickets persist notifications in outbox");
     for (int i = 0; i < 50; i++) { notificationState = await Json("/settings/telegram", admin); if (notificationState.GetProperty("lastError").ValueKind == JsonValueKind.String) break; await Task.Delay(100); }

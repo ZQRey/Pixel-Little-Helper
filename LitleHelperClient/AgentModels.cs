@@ -1,6 +1,6 @@
 namespace PixelHelper;
 
-public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "");
+public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = true);
 public sealed record ActionButton(
     int Id,
     string Title,
@@ -12,7 +12,9 @@ public sealed record ActionButton(
     string TargetGroup = "All",
     Dictionary<string, string>? TitleTranslations = null,
     Dictionary<string, string>? DescriptionTranslations = null,
-    string Description = "")
+    string Description = "",
+    string? SystemKey = null,
+    bool IsSystem = false)
 {
     public string GetLocalizedTitle(string? langCode = null)
     {
@@ -35,8 +37,18 @@ public sealed record MemorySlot(ulong CapacityBytes, string Manufacturer, uint S
 public sealed record LogicalDisk(string Name, ulong TotalBytes, ulong FreeBytes, string FileSystem);
 public sealed record PhysicalDisk(string Model, ulong SizeBytes, string InterfaceType);
 public sealed record SoftwareInfo(string Name, string Version);
-public sealed record HardwareInfo(string CpuModel, ulong TotalRamBytes, MemorySlot[] MemorySlots, LogicalDisk[] LogicalDisks, PhysicalDisk[] PhysicalDisks, string[] Errors);
+public sealed record HardwareInfo(string CpuModel, ulong TotalRamBytes, MemorySlot[] MemorySlots, LogicalDisk[] LogicalDisks, PhysicalDisk[] PhysicalDisks, string[] Errors, PrinterStatusInfo[]? Printers = null);
 public sealed record InventorySnapshot(HardwareInfo Hardware, SoftwareInfo[] Software);
 public sealed record CartridgeReadyNotice(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
 public sealed record TicketReplyNotice(int GlpiId, string Title, string Author, string Text);
-public sealed record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department);
+public sealed record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department, List<string>? Languages = null, string? EventId = null);
+
+public sealed record TicketSurveyNotice(string Id, int TicketId, string Title, string Specialist, DateTime ExpiresAt,
+    bool Mandatory = false, DateTime? DueAt = null, DateTime? NextNoticeAt = null, int DeferralsLeft = 0, string State = "Pending", string Error = "", bool Required = false);
+public sealed record TicketSurveyResult(bool Saved, bool Queued, string? Error);
+
+internal static class SystemButtonVisibility
+{
+    internal static bool Enabled(IEnumerable<ActionButton> buttons, string key) =>
+        buttons.FirstOrDefault(b => b.SystemKey == key)?.IsActive ?? true;
+}

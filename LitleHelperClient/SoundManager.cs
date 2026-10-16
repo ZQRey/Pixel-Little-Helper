@@ -23,6 +23,7 @@ internal static class SoundManager
         {
             "VoiceAdult" => "VoiceAdult",
             "VoiceChild" => "VoiceChild",
+            "Mute" or "Silent" => "Mute",
             _ => "Sound"
         };
     }
@@ -131,6 +132,7 @@ internal static class SoundManager
         {
             if (!settings.ChatSound) return;
             if (settings.ChatDoNotDisturb && ev != SoundEvent.Urgent && !settings.ChatUrgentOverridesQuiet) return;
+            if (settings.MedicalSoundsMuted) return;
 
             if (ev == SoundEvent.MessageReceived)
             {
@@ -141,16 +143,19 @@ internal static class SoundManager
         }
 
         string profile = settings?.SoundProfile ?? "Sound";
+        if (NormalizeProfile(profile) == "Mute") return;
         PlayProfile(profile, ev);
     }
 
     public static void PlayPreview(string profile, SoundEvent ev)
     {
+        if (NormalizeProfile(profile) == "Mute") return;
         PlayProfile(profile, ev);
     }
 
     private static void PlayProfile(string profile, SoundEvent ev)
     {
+        if (NormalizeProfile(profile) == "Mute") return;
         Task.Run(() =>
         {
             try

@@ -111,8 +111,8 @@ public static class ChatGroups
             if (group.IsDeleted) continue;
             var visible = Visible(db, member);
             var suspendedUntil = await db.ChatGroupRestrictions.Where(r => r.GroupId == group.Id && r.UserId == user && r.EndsAt > DateTime.UtcNow).Select(r => (DateTime?)r.EndsAt).MaxAsync(); bool suspended = suspendedUntil != null;
-            var last = await visible.OrderByDescending(m => m.Id).FirstOrDefaultAsync();
-            int unread = await visible.CountAsync(m => m.Id > member.ReadThroughId && m.SenderId != user && m.Body != "");
+            var last = await visible.Where(m => m.Body != "" || db.ChatFiles.Any(f => f.PeerId == -group.Id && f.MessageId == m.Id)).OrderByDescending(m => m.Id).FirstOrDefaultAsync();
+            int unread = await visible.CountAsync(m => m.Id > member.ReadThroughId && m.SenderId != user && (m.Body != "" || db.ChatFiles.Any(f => f.PeerId == -group.Id && f.MessageId == m.Id)));
             list.Add(new(-group.Id, group.Name, "", !group.IsClosed && !suspended, null, suspended ? 0 : unread, last?.Id, false, last?.SentAt, last?.Body, true, group.OwnerId, suspendedUntil, member.IsAdmin, "group"));
         }
         return list;

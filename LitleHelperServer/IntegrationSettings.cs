@@ -20,6 +20,7 @@ public class SpecialistDepartmentConfig
     public string SpecialistTitle { get; set; } = "";
     public string Color { get; set; } = "#2563eb";
     public List<string> ResponsibleUsers { get; set; } = new();
+    public List<string> ResponsibleGroups { get; set; } = new();
 }
 public record EmergencyOptions(
     bool Enabled = false,
@@ -32,7 +33,12 @@ public record EmergencyOptions(
     List<string>? CodeBlueResponsibleUsers = null,
     bool TelegramAlertsEnabled = true,
     string TelegramChatId = "",
-    int TelegramThreadId = 0
+    int TelegramThreadId = 0,
+    List<string>? CodeBlueResponsibleGroups = null,
+    bool BroadcastAllBranches = false,
+    Dictionary<string, List<string>>? EmergencyCodeLanguages = null,
+    List<string>? AllowedCodes = null,
+    Dictionary<string,List<string>>? CodeLaunchRoles = null
 );
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
@@ -40,7 +46,7 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
     private readonly object gate = new();
     private readonly IDataProtector protector = protection.CreateProtector("LitleHelper.Integrations.v1");
     private string PathName => configuration["Integrations:SettingsFile"] ?? Path.Combine("data", "integrations.json");
-    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null);
+    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null);
     public GlpiImportOptions GlpiImport() { lock(gate) return ReadStored().GlpiImport ?? new(); }
     public void SaveGlpiImport(GlpiImportOptions options)
     {
@@ -48,9 +54,15 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
         lock(gate) Write(ReadStored() with { GlpiImport=options });
     }
     public CartridgeOptions Cartridge() { lock(gate) return ReadStored().Cartridge ?? new(); }
-    public void SaveCartridge(CartridgeOptions options) { lock(gate) Write(ReadStored() with { Cartridge = options }); }
+    public void SaveCartridge(CartridgeOptions options) { if(options.Enabled && string.IsNullOrWhiteSpace(options.ApiKey))throw new ArgumentException("Для включения интеграции задайте API-ключ."); lock(gate) Write(ReadStored() with { Cartridge = options }); }
     public EmergencyOptions Emergency() { lock(gate) return ReadStored().Emergency ?? new(); }
-    public void SaveEmergency(EmergencyOptions options) { lock(gate) Write(ReadStored() with { Emergency = options }); }
+    public void SaveEmergency(EmergencyOptions options) { EmergencyLanguages.Validate(options); lock(gate) Write(ReadStored() with { Emergency = options }); EmergencyDirectorySync.Request(); }
+    public void SaveDepartmentMap(Dictionary<int,int> map) {lock(gate) Write(ReadStored() with {DepartmentMap=map});}
+    public int? ExternalDepartmentId(int local) {lock(gate) return ReadStored().DepartmentMap is { } map && map.TryGetValue(local,out int value)?value:null;}
+    public int? LocalDepartmentId(int external) {lock(gate) {
+        var matches=(ReadStored().DepartmentMap??[]).Where(p=>p.Value==external).ToArray();
+        return matches.Length==1?matches[0].Key:null;
+    }}
     private Stored ReadStored() => File.Exists(PathName) ? JsonSerializer.Deserialize<Stored>(File.ReadAllText(PathName))! : new(new(), new());
     public TelegramOptions Telegram() { lock (gate) { var value = ReadStored().Telegram; return value with { BotToken = value.BotToken.Length == 0 ? "" : protector.Unprotect(value.BotToken), DirectoryPassword = value.DirectoryPassword.Length == 0 ? "" : protector.Unprotect(value.DirectoryPassword) }; } }
     public object TelegramView() { var v = Telegram(); return new { v.Enabled, v.ChatId, v.ThreadId, v.ManagementEnabled, v.DirectoryLogin, v.IdAttribute, hasBotToken = v.BotToken.Length > 0, hasDirectoryPassword = v.DirectoryPassword.Length > 0 }; }

@@ -15,6 +15,7 @@ public class Computer
     public string DomainName { get; set; } = "";
     public string CurrentUser { get; set; } = "";
     public string CurrentUserFullName { get; set; } = "";
+    public bool SupportsSystemButtons { get; set; }
     public string IpAddress { get; set; } = "";
     public string OsVersion { get; set; } = "";
     public bool IsOnline { get; set; }
@@ -29,6 +30,8 @@ public class Computer
 }
 public class ActionButton
 {
+    public string? SystemKey { get; set; }
+    public bool IsSystem { get; set; }
     public int Id { get; set; }
     public string Title { get; set; } = "";
     public string IconName { get; set; } = "";
@@ -83,6 +86,31 @@ public class PanelUser
     public string Role { get; set; } = Roles.User;
     public string AssistantMachine { get; set; } = "";
     public int? BranchId { get; set; }
+    [JsonIgnore] public string BranchIdsJson { get; set; } = "[]";
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    [System.Text.Json.Serialization.JsonPropertyName("branchIds")]
+    public int[] BranchIds
+    {
+        get
+        {
+            try
+            {
+                var list = System.Text.Json.JsonSerializer.Deserialize<List<int>>(string.IsNullOrWhiteSpace(BranchIdsJson) ? "[]" : BranchIdsJson) ?? new();
+                if (list.Count == 0 && BranchId.HasValue) list.Add(BranchId.Value);
+                return list.Distinct().ToArray();
+            }
+            catch
+            {
+                return BranchId.HasValue ? new[] { BranchId.Value } : Array.Empty<int>();
+            }
+        }
+        set
+        {
+            var list = (value ?? Array.Empty<int>()).Distinct().ToList();
+            BranchIdsJson = System.Text.Json.JsonSerializer.Serialize(list);
+            BranchId = list.Count > 0 ? list[0] : null;
+        }
+    }
     public string Room { get; set; } = "";
     [JsonIgnore] public string PermissionOverrides { get; set; } = "{}";
     [System.ComponentModel.DataAnnotations.Schema.NotMapped]
@@ -128,6 +156,40 @@ public class TicketRecord
     public DateTime? SyncedAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+public class KnowledgeArticle
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public string Category { get; set; } = "General";
+    public string ContentMarkdown { get; set; } = "";
+    public string Keywords { get; set; } = "";
+    public int? BranchId { get; set; }
+    public string TargetRole { get; set; } = "All";
+    public int ViewCount { get; set; }
+    public bool IsPinned { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+public class ChatPoll
+{
+    public int Id { get; set; }
+    public int Peer { get; set; }
+    public int CreatorId { get; set; }
+    public string Question { get; set; } = "";
+    public string OptionsJson { get; set; } = "[]";
+    public bool MultipleChoice { get; set; }
+    public bool IsAnonymous { get; set; }
+    public bool IsClosed { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+public class ChatPollVote
+{
+    public int Id { get; set; }
+    public int PollId { get; set; }
+    public int UserId { get; set; }
+    public int OptionIndex { get; set; }
+    public DateTime VotedAt { get; set; } = DateTime.UtcNow;
+}
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
@@ -136,6 +198,8 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<ChatBroadcast> ChatBroadcasts => Set<ChatBroadcast>();
     public DbSet<ChatPreference> ChatPreferences => Set<ChatPreference>();
     public DbSet<ChatReaction> ChatReactions => Set<ChatReaction>();
+    public DbSet<ChatPoll> ChatPolls => Set<ChatPoll>();
+    public DbSet<ChatPollVote> ChatPollVotes => Set<ChatPollVote>();
     public DbSet<ChatGroup> ChatGroups => Set<ChatGroup>();
     public DbSet<ChatGroupEvent> ChatGroupEvents => Set<ChatGroupEvent>();
     public DbSet<ChatGroupDeparture> ChatGroupDepartures => Set<ChatGroupDeparture>();
@@ -145,13 +209,20 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<TelegramReplySession> TelegramReplySessions => Set<TelegramReplySession>();
     public DbSet<TelegramHandledUpdate> TelegramHandledUpdates => Set<TelegramHandledUpdate>();
     public DbSet<TelegramDelivery> TelegramDeliveries => Set<TelegramDelivery>();
+    public DbSet<EmergencyEvent> EmergencyEvents => Set<EmergencyEvent>();
     public DbSet<Computer> Computers => Set<Computer>();
+    public DbSet<MedicalStatusConfig> MedicalStatuses => Set<MedicalStatusConfig>();
     public DbSet<ActionButton> Buttons => Set<ActionButton>();
     public DbSet<PanelUser> Users => Set<PanelUser>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<TicketRecord> Tickets => Set<TicketRecord>();
+    public DbSet<TicketAttachment> TicketAttachments => Set<TicketAttachment>();
     public DbSet<SuperAdminButton> SuperAdminButtons => Set<SuperAdminButton>();
     public DbSet<Branch> Branches => Set<Branch>();
+    public DbSet<KnowledgeArticle> KnowledgeArticles => Set<KnowledgeArticle>();
+    public DbSet<GlpiReportState> GlpiReportStates => Set<GlpiReportState>();
+    public DbSet<TicketSurveyInvitation> TicketSurveyInvitations => Set<TicketSurveyInvitation>();
+    public DbSet<SurveyAdminAlert> SurveyAdminAlerts => Set<SurveyAdminAlert>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<ChatGroupMember>().HasKey(m => new { m.GroupId, m.UserId });
@@ -168,26 +239,35 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
         b.Entity<ChatMessage>().HasIndex(m => new { m.RecipientId, m.Id });
         b.Entity<TelegramDelivery>().HasKey(x => x.TicketId);
         b.Entity<TelegramDelivery>().HasOne(x => x.Ticket).WithOne().HasForeignKey<TelegramDelivery>(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+        b.Entity<MedicalStatusConfig>().HasIndex(x => x.Key).IsUnique();
+        b.Entity<ActionButton>().HasIndex(x => x.SystemKey).IsUnique();
         b.Entity<Computer>().HasIndex(x => x.MachineName).IsUnique();
         b.Entity<PanelUser>().HasIndex(x => x.Username).IsUnique();
         b.Entity<PanelUser>().HasIndex(x => x.AdObjectId).IsUnique().HasFilter("\"AdObjectId\" <> ''");
+        b.Entity<PanelUser>().Property(x => x.BranchIdsJson).HasColumnName("BranchIds").HasDefaultValue("[]");
         b.Entity<AuditLog>().HasIndex(x => x.TaskId).IsUnique();
         b.Entity<TicketRecord>().HasIndex(x => x.Username);
+        b.Entity<TicketAttachment>().HasIndex(x => x.TicketId);
+        b.Entity<KnowledgeArticle>().HasIndex(x => x.Category);
     }
 }
-public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "");
+public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false);
 public record CommandEnvelope(string TaskId, string Type, string Payload);
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
-public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null, string? Room = null);
+public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null, string? Room = null, int[]? BranchIds = null);
 public record CommandRequest(string[] Machines, string Type, string Payload);
 public record EnrollmentRequest(string MachineName);
 public record AgentRegistrationRequest(string MachineName, string ClientKey);
 public record TicketRequest(string Title, string Description, int? BranchId = null, string Room = "", string UserFullName = "");
 public record CartridgeReadyNotice(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
 public record TicketReplyNotice(int GlpiId, string Title, string Author, string Text);
-public record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department);
+public record EmergencyAlertNotice(string Code, string Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int DurationSeconds, int? CallId, string? Department, List<string>? Languages = null, string? EventId = null);
 public record CartridgeReadyRequest(string Username, string Marker, string Model, string Cabinet, string ItOffice, string Message);
-public record EmergencyAlertRequest(string Code, string? Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int? DurationSeconds, int? CallId, string? Department);
+public record EmergencyAlertRequest(string Code, string? Title, string? Cabinet, string? Notes, string? Subcode, string? ImageBase64, string? ImageUrl, int? DurationSeconds, int? CallId, string? Department, List<string>? Languages = null, int? BranchId = null, string? BranchName = null);
 public record EmergencyPingRequest(string? ServerUrl, string? ApiKey);
+public record KnowledgeArticleRequest(string Title, string Category, string ContentMarkdown, string Keywords = "", int? BranchId = null, string TargetRole = "All", bool IsPinned = false);
+public record HelperWhiteTriggerRequest(string? Cabinet = null, string? BranchName = null, string? Time = null, string? EventId = null);
+public record BranchSyncRequest(string? Action = null, string? Name = null, string? ComputerPrefixes = null, string? IpSubnets = null, bool? IsActive = null, Branch? Branch = null);
+
 

@@ -8,6 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -85,6 +86,8 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = 429;
+    options.AddPolicy("glpi-portal", context => RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 600, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     options.AddPolicy("registration", context => RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     options.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -122,9 +125,19 @@ builder.Services.AddScoped<GlpiTicketImport>();
 builder.Services.AddHostedService<GlpiImportWorker>();
 builder.Services.AddHostedService<TaskExpiryService>();
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("EmergencyBridge").ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler {AllowAutoRedirect=false});
 builder.Services.AddHostedService<EmergencySyncWorker>();
 builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.FromSeconds(20); http.MaxResponseContentBufferSize = 2_097_152; });
+builder.Services.AddSingleton<ReportGate>();
+builder.Services.AddSingleton<ReportHealth>();
+builder.Services.AddScoped<GlpiReports>();
+builder.Services.AddScoped<TicketSurveys>();
+builder.Services.AddScoped<SurveyAlerts>();
+builder.Services.AddHostedService<GlpiReportWorker>();
 var app = builder.Build();
+app.MapGlpiReports();
+app.MapGlpiReportPortal();
+app.MapAgentUserSessions();
 
 if (builder.Configuration.GetValue<bool>("ReverseProxy:Enabled")) app.UseForwardedHeaders();
 using (var scope = app.Services.CreateScope())
@@ -132,15 +145,23 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
     await Access.EnsureSchema(db);
+    await GlpiReports.EnsureSchema(db);
+    await SurveyAlerts.EnsureSchema(db);
+    await EmergencyEvents.EnsureAsync(db);
     await ChatBroadcasts.Column(db,"Computers","AdMachineObjectId","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","Description","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","TitleTranslationsJson","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","DescriptionTranslationsJson","TEXT NOT NULL DEFAULT ''");
+    await SystemButtons.EnsureAsync(db);
+    await MedicalStatuses.EnsureAsync(db);
     await Messenger.EnsureSchemaAsync(db);
     await ChatGroups.EnsureSchemaAsync(db);
     await AnnouncementService.EnsureSchemaAsync(db);
     await TicketManagement.EnsureSchemaAsync(db);
+    await TicketAttachments.EnsureSchemaAsync(db);
     await Branches.EnsureSchemaAsync(db);
+    await KnowledgeBase.EnsureSchemaAsync(db);
+    await ChatPolls.EnsureSchemaAsync(db);
     // Existing deployments use EnsureCreated; add the outbox without changing existing tables.
     string timestamp = db.Database.IsNpgsql() ? "timestamp with time zone" : "TEXT";
     string outboxSql = "CREATE TABLE IF NOT EXISTS \"TelegramDeliveries\" (\"TicketId\" INTEGER PRIMARY KEY REFERENCES \"Tickets\"(\"Id\") ON DELETE CASCADE, \"Attempts\" INTEGER NOT NULL, \"State\" TEXT NOT NULL, \"NextAttemptAt\" " + timestamp + " NOT NULL, \"SentAt\" " + timestamp + " NULL, \"LastError\" TEXT NOT NULL)";
@@ -149,7 +170,7 @@ using (var scope = app.Services.CreateScope())
     if (!await db.Users.AnyAsync())
         db.Users.Add(new PanelUser { Username = "admin", FullName = "Супер администратор", Role = Roles.SuperAdmin,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword("admin123", 12), MustChangePassword = true });
-    if (!await db.Buttons.AnyAsync()) db.Buttons.AddRange(
+    if (!await db.Buttons.AnyAsync(b => !b.IsSystem)) db.Buttons.AddRange(
         new ActionButton { Title = "Поиск файлов и папок", ActionType = "open_url", Payload = "search-ms:", OrderIndex = 0 },
         new ActionButton { Title = "Открыть DMED", Payload = "https://krg.dmed.kz", OrderIndex = 1 },
         new ActionButton { Title = "Открыть EISZ", Payload = "https://www.eisz.kz", OrderIndex = 2 },
@@ -161,12 +182,12 @@ app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["Referrer-Policy"] = "same-origin";
-    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss: http://127.0.0.1:* http://localhost:*; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
     try { await next(); }
-    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or InvalidOperationException or HttpRequestException)
+    catch (Exception ex) when (ex is ArgumentException or UnauthorizedAccessException or InvalidOperationException or HttpRequestException or JsonException)
     {
         if (context.Response.HasStarted) throw;
-        context.Response.StatusCode = ex is UnauthorizedAccessException ? 403 : ex is ArgumentException ? 400 : 502;
+        context.Response.StatusCode = ex is UnauthorizedAccessException ? 403 : ex is ArgumentException or JsonException ? 400 : 502;
         await context.Response.WriteAsJsonAsync(new { error = ex is HttpRequestException ? "Внешний сервис недоступен" : ex.Message });
     }
 });
@@ -186,12 +207,17 @@ app.Use(async (context, next) =>
     await next();
 });
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
+app.MapMedicalStatuses();
+app.MapEmergencyRecipients();
+app.MapEmergencyDirectorySync();
 AgentMachineEnrollment.Map(app);
 app.MapIntegrationApi();
 app.MapAnnouncementApi();
 app.MapBranchApi();
+app.MapKnowledgeBaseApi();
 app.MapMessenger();
 await app.RunAsync();
 public partial class Program { }

@@ -13,6 +13,13 @@ namespace LitleHelperServer;
 public static class Security
 {
     public static string NormalizeAccount(string? value) => string.IsNullOrWhiteSpace(value) ? "" : value.Trim().Split('\\').Last().Split('@')[0].ToLowerInvariant();
+    public static bool IsTemporaryUser(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        string norm = NormalizeAccount(value);
+        return norm is "temp" or "tmp" or "system" or "local service" or "network service" or "defaultuser0"
+            || norm.StartsWith("temp.") || norm.StartsWith("defaultuser");
+    }
     public static string TicketUser(string value) => NormalizeAccount(value);
     public static string TicketOwner(ClaimsPrincipal user) => user.FindFirst("ticket_owner")?.Value ?? user.Identity!.Name!;
     public static string KeyHash(string key) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));

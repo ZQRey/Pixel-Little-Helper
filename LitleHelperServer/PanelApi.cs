@@ -96,12 +96,13 @@ public static class PanelApi
             if (c == null) return Results.NotFound();
 
             string newRoom = (request.Room ?? "").Trim();
-            if (newRoom.Length > 100 || newRoom.Any(char.IsControl))
-                return Results.BadRequest(new { error = "Кабинет: до 100 символов без управляющих символов." });
+            if (newRoom.Length > 50 || newRoom.Any(char.IsControl))
+                return Results.BadRequest(new { error = "Кабинет: до 50 символов без управляющих символов." });
 
-            if (request.BranchId.HasValue && !await db.Branches.AnyAsync(b => b.Id == request.BranchId.Value))
+            if (request.BranchId.HasValue && !await db.Branches.AnyAsync(b => b.Id == request.BranchId.Value && b.IsActive))
                 return Results.BadRequest(new { error = "Выбранный филиал не существует." });
 
+            int? previousBranch = c.BranchId;
             c.Room = newRoom;
             c.BranchId = request.BranchId;
 
@@ -118,8 +119,11 @@ public static class PanelApi
 
             await db.SaveChangesAsync();
 
-            if (c.IsOnline)
+            EmergencyDirectorySync.Request();
+            if (c.IsOnline && c.ConnectionId != null)
             {
+                if (previousBranch.HasValue) await hub.Groups.RemoveFromGroupAsync(c.ConnectionId, "BranchAgents:" + previousBranch);
+                if (c.BranchId.HasValue) await hub.Groups.AddToGroupAsync(c.ConnectionId, "BranchAgents:" + c.BranchId);
                 await hub.Clients.Group("AgentMachine:" + c.MachineName.ToLowerInvariant()).SendAsync("ClientRoomUpdated", c.Room);
             }
             await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
@@ -137,6 +141,7 @@ public static class PanelApi
         app.MapGet("/api/buttons", async (HelperDb db) => Results.Ok(await db.Buttons.AsNoTracking().OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).ToListAsync())).RequireAuthorization("buttons.manage");
         app.MapPost("/api/buttons", async (ActionButton button, ClaimsPrincipal p, HelperDb db) =>
         {
+            if (button.IsSystem || button.SystemKey != null) return Results.BadRequest("Системные кнопки создаются сервером");
             ValidateButton(button, p);
             var (tTrans, dTrans) = ButtonTranslationService.Translate(button.Title, button.Description, button.TitleTranslations, button.DescriptionTranslations);
             button.TitleTranslations = tTrans;
@@ -145,7 +150,10 @@ public static class PanelApi
         }).RequireAuthorization("buttons.manage");
         app.MapPut("/api/buttons/{id:int}", async (int id, ActionButton button, ClaimsPrincipal p, HelperDb db) =>
         {
-            ValidateButton(button, p); var old = await db.Buttons.FindAsync(id); if (old == null) return Results.NotFound();
+            if (button.IsSystem || button.SystemKey != null) return Results.BadRequest("Системные кнопки создаются сервером");
+            var old = await db.Buttons.FindAsync(id); if (old == null) return Results.NotFound();
+            if (old.IsSystem) return Results.Conflict("Системную кнопку можно только включить или выключить");
+            ValidateButton(button, p);
             var (tTrans, dTrans) = ButtonTranslationService.Translate(button.Title, button.Description, button.TitleTranslations, button.DescriptionTranslations);
             old.Title = button.Title; old.ActionType = button.ActionType; old.Payload = button.Payload; old.OrderIndex = button.OrderIndex;
             old.IsActive = button.IsActive; old.IconName = button.IconName; old.TargetGroup = button.TargetGroup;
@@ -153,7 +161,15 @@ public static class PanelApi
             await db.SaveChangesAsync(); return Results.Ok(old);
         }).RequireAuthorization("buttons.manage");
         app.MapDelete("/api/buttons/{id:int}", async (int id, HelperDb db) =>
-        { var b = await db.Buttons.FindAsync(id); if (b == null) return Results.NotFound(); db.Remove(b); await db.SaveChangesAsync(); return Results.NoContent(); }).RequireAuthorization("buttons.manage");
+        { var b = await db.Buttons.FindAsync(id); if (b == null) return Results.NotFound(); if (b.IsSystem) return Results.Conflict("Системную кнопку можно только включить или выключить"); db.Remove(b); await db.SaveChangesAsync(); return Results.NoContent(); }).RequireAuthorization("buttons.manage");
+        app.MapPatch("/api/buttons/{id:int}/active", async (int id, ButtonActive request, HelperDb db, IHubContext<HelperHub> hub) =>
+        {
+            var button = await db.Buttons.FindAsync(id);
+            if (button == null) return Results.NotFound();
+            button.IsActive = request.IsActive; await db.SaveChangesAsync();
+            int notified = await SystemButtons.NotifyAsync(db, hub);
+            return Results.Ok(new { id, isActive = button.IsActive, notified });
+        }).RequireAuthorization("buttons.manage");
         app.MapPost("/api/buttons/{id:int}/toggle", async (int id, HelperDb db, IHubContext<HelperHub> hub) =>
         {
             var b = await db.Buttons.FindAsync(id);
@@ -180,7 +196,17 @@ public static class PanelApi
             var user = new PanelUser { Username = name, FullName = request.FullName.Trim(), Role = request.Role, IsActive = request.IsActive,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password!, 12), MustChangePassword = true, Permissions = request.Permissions ?? new(), Room = (request.Room ?? "").Trim() };
             user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
-            await Branches.ValidateUserAsync(db, request.BranchId); user.BranchId = request.BranchId;
+            if (request.BranchIds != null)
+            {
+                await Branches.ValidateUserBranchesAsync(db, request.BranchIds);
+                user.BranchIds = request.BranchIds;
+            }
+            else
+            {
+                await Branches.ValidateUserAsync(db, request.BranchId);
+                user.BranchId = request.BranchId;
+                user.BranchIds = request.BranchId.HasValue ? new[] { request.BranchId.Value } : Array.Empty<int>();
+            }
             db.Users.Add(user); await db.SaveChangesAsync(); return Results.Ok(user);
         }).RequireAuthorization("users.manage");
         app.MapPut("/api/users/{id:int}", async (int id, UserRequest request, ClaimsPrincipal p, HelperDb db, PanelSessions sessions, AnnouncementService announcements, IHubContext<HelperHub> hub, CancellationToken token) =>
@@ -196,7 +222,17 @@ public static class PanelApi
                 if (p.IsInRole(Roles.SuperAdmin)) user.AssistantMachine = await announcements.BindingAsync(request.AssistantMachine, request.Role, p, token);
             }
             if (request.Role != Roles.SuperAdmin) user.AssistantMachine = "";
-            await Branches.ValidateUserAsync(db, request.BranchId); user.BranchId = request.BranchId;
+            if (request.BranchIds != null)
+            {
+                await Branches.ValidateUserBranchesAsync(db, request.BranchIds);
+                user.BranchIds = request.BranchIds;
+            }
+            else
+            {
+                await Branches.ValidateUserAsync(db, request.BranchId);
+                user.BranchId = request.BranchId;
+                user.BranchIds = request.BranchId.HasValue ? new[] { request.BranchId.Value } : Array.Empty<int>();
+            }
             string newRoom = (request.Room ?? "").Trim();
             bool roomChanged = user.Room != newRoom;
             user.Room = newRoom;
@@ -239,9 +275,18 @@ public static class PanelApi
             else if (!p.IsInRole(Roles.SuperAdmin))
             {
                 var staff = await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name);
-                if (staff.Role != Roles.Admin || staff.BranchId != null)
+                var staffBranches = staff.BranchIds;
+                if (staffBranches.Length > 0)
+                {
+                    query = query.Where(t => t.BranchId == null || (t.BranchId.HasValue && staffBranches.Contains(t.BranchId.Value)));
+                }
+                else if (staff.BranchId != null)
                 {
                     query = query.Where(t => t.BranchId == null || t.BranchId == staff.BranchId);
+                }
+                else if (staff.Role != Roles.Admin)
+                {
+                    query = query.Where(t => t.BranchId == null);
                 }
             }
             if (branchId != null) query = branchId == 0 ? query.Where(t => t.BranchId == null) : query.Where(t => t.BranchId == branchId);
@@ -271,7 +316,27 @@ public static class PanelApi
             if (!Access.Can(p, "tickets.all") && !ticket.Username.Equals(Security.TicketOwner(p), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
             if (Access.Can(p, "tickets.all")) Branches.Require(await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name), ticket);
             await management.SyncAsync(ticket, token);
-            return Results.Ok(new { local = ticket, glpi = await glpi.GetTicketAsync(ticket.GlpiId, token) });
+            var attachments = await db.TicketAttachments.AsNoTracking().Where(a => a.TicketId == id).OrderBy(a => a.CreatedAt).Select(a => new TicketAttachmentInfo(a.Id, a.TicketId, a.FileName, a.FileSize, a.CreatedAt)).ToListAsync(token);
+            return Results.Ok(new { local = ticket, glpi = await glpi.GetTicketAsync(ticket.GlpiId, token), attachments });
+        }).RequireAuthorization("Panel");
+        app.MapGet("/api/tickets/{id:int}/attachments", async (int id, ClaimsPrincipal p, HelperDb db) =>
+        {
+            var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
+            if (!Access.Can(p, "tickets.all") && !ticket.Username.Equals(Security.TicketOwner(p), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            var list = await db.TicketAttachments.AsNoTracking().Where(a => a.TicketId == id).OrderBy(a => a.CreatedAt).Select(a => new TicketAttachmentInfo(a.Id, a.TicketId, a.FileName, a.FileSize, a.CreatedAt)).ToListAsync();
+            return Results.Ok(list);
+        }).RequireAuthorization("Panel");
+        app.MapGet("/api/tickets/{id:int}/attachments/{attId}", async (int id, string attId, ClaimsPrincipal p, HelperDb db, IConfiguration config, HttpResponse response) =>
+        {
+            var ticket = await db.Tickets.FindAsync(id); if (ticket == null) return Results.NotFound();
+            if (!Access.Can(p, "tickets.all") && !ticket.Username.Equals(Security.TicketOwner(p), StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+            var att = await db.TicketAttachments.AsNoTracking().SingleOrDefaultAsync(a => a.TicketId == id && a.Id == attId);
+            if (att == null) return Results.NotFound();
+            string path = Path.Combine(TicketAttachments.Folder(config), att.StorageKey);
+            if (!File.Exists(path)) return Results.NotFound();
+            response.Headers.CacheControl = "no-store";
+            response.Headers["X-Content-Type-Options"] = "nosniff";
+            return Results.File(path, att.ContentType, att.FileName, enableRangeProcessing: true);
         }).RequireAuthorization("Panel");
         app.MapPut("/api/tickets/{id:int}/status", async (int id, TicketStatus request, ClaimsPrincipal p, HelperDb db, TicketManagement management, CancellationToken token) =>
         {
@@ -296,7 +361,7 @@ public static class PanelApi
     {
         Access.Validate(request.Permissions);
         if (request.Room != null && (request.Room.Length > 100 || request.Room.Any(char.IsControl)))
-            throw new ArgumentException("Кабинет: до 100 символов без управляющих символов.");
+            throw new ArgumentException("Кабинет: до 50 символов без управляющих символов.");
         if (string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 100 || request.Username.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '-' or '_' or '@' or '\\')) ||
             request.FullName.Length > 150 || !Roles.All.Contains(request.Role) || ((requirePassword || !string.IsNullOrEmpty(request.Password)) && !Security.PasswordValid(request.Password)))
             throw new ArgumentException("Проверьте логин, роль и пароль (8–72 символа)");
@@ -311,6 +376,7 @@ public static class PanelApi
         if (b.ActionType == "open_url" && (!Uri.TryCreate(b.Payload, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http" or "search-ms")))
             throw new ArgumentException("Разрешены HTTP(S) и search-ms");
     }
+    public record ButtonActive(bool IsActive);
     public record TicketStatus(int Status);
     public record UpdateComputerLocationRequest(string? Room, int? BranchId);
     public record LiquidationRequest(string Code);

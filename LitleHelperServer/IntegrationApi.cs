@@ -80,18 +80,22 @@ public static class IntegrationApi
             try { await ad.TestConnectionAsync(token); return Results.Ok(new { success = true, message = "LDAPS и сертификат проверены. Вход пользователя проверяется на странице авторизации." }); }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException) { return Results.Ok(new { success = false, message = ex.Message }); }
         }).RequireAuthorization("settings.manage");
-        app.MapPost("/api/ad/change-password", async (ChangeAdPasswordRequest request, AdPasswordService adPasswordService) =>
+        app.MapPost("/api/ad/change-password", async (ChangeAdPasswordRequest request, AdPasswordService adPasswordService, HelperDb db, System.Security.Claims.ClaimsPrincipal actor, CancellationToken token) =>
         {
             if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.NewPassword))
                 return Results.BadRequest(new { success = false, message = "Не указан логин или пароль." });
 
-            var result = await adPasswordService.ChangePasswordAsync(request.Username, request.NewPassword);
+            if(request.Username.Length>256 || request.NewPassword.Length>256 || request.CurrentPassword.Length>256)
+                return Results.BadRequest(new {success=false,message="Слишком длинный логин или пароль."});
+            var result = await adPasswordService.ChangePasswordAsync(request.Username, request.NewPassword, request.CurrentPassword,token);
+            db.AuditLogs.Add(new() {AdminUsername=actor.Identity?.Name??"",CommandType="ad_self_password_change",CommandPayload=Security.Login(request.Username),Status=result.Success?"Completed":"Failed",Result=result.Message});
+            await db.SaveChangesAsync(token);
             if (!result.Success)
             {
                 return Results.BadRequest(new { success = false, message = result.Message });
             }
             return Results.Ok(new { success = true, message = result.Message });
-        }).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { AuthenticationSchemes = "Bearer,Agent" });
+        }).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { AuthenticationSchemes = "Bearer,Agent" }).RequireRateLimiting("login");
 
         app.MapGet("/api/settings/cartridge", (IntegrationSettings settings) => Results.Ok(settings.Cartridge())).RequireAuthorization("settings.manage");
         app.MapPut("/api/settings/cartridge", (CartridgeOptions update, IntegrationSettings settings) =>
@@ -104,16 +108,17 @@ public static class IntegrationApi
         {
             var opts = settings.Cartridge();
             if (!opts.Enabled) return Results.Conflict(new { error = "Интеграция с сервисом картриджей отключена" });
-            if (!string.IsNullOrWhiteSpace(opts.ApiKey))
+            if (string.IsNullOrWhiteSpace(opts.ApiKey))
+                return Results.Problem("Не настроен ключ интеграции.", statusCode: 503);
             {
                 string? providedKey = request.Headers["X-Api-Key"].FirstOrDefault()
                     ?? (request.Headers.Authorization.ToString().StartsWith("Bearer ") ? request.Headers.Authorization.ToString()["Bearer ".Length..] : null);
-                if (providedKey != opts.ApiKey) return Results.Unauthorized();
+                if (providedKey == null || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(providedKey), System.Text.Encoding.UTF8.GetBytes(opts.ApiKey))) return Results.Unauthorized();
             }
 
             using var reader = new StreamReader(request.Body);
             string bodyText = await reader.ReadToEndAsync();
-            var jsonDoc = System.Text.Json.JsonDocument.Parse(bodyText);
+            using var jsonDoc = System.Text.Json.JsonDocument.Parse(bodyText);
             var rawItems = new List<System.Text.Json.JsonElement>();
 
             if (jsonDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -132,6 +137,8 @@ public static class IntegrationApi
                 }
             }
 
+            if(rawItems.Count>1000 || rawItems.Any(el=>el.ValueKind!=JsonValueKind.Object))
+                return Results.BadRequest(new {error="Допустимо не более 1000 уведомлений-объектов."});
             int count = 0;
             foreach (var el in rawItems)
             {
@@ -160,12 +167,13 @@ public static class IntegrationApi
                 count++;
             }
             return Results.Ok(new { success = true, notified = count });
-        }).AllowAnonymous();
+        }).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(131072)).AllowAnonymous();
 
         app.MapGet("/api/settings/emergency", (IntegrationSettings settings) => Results.Ok(settings.Emergency())).RequireAuthorization("settings.manage");
-        app.MapPut("/api/settings/emergency", (EmergencyOptions update, IntegrationSettings settings) =>
+        app.MapPut("/api/settings/emergency", async (EmergencyOptions update, IntegrationSettings settings, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
         {
             settings.SaveEmergency(update);
+            await hub.Clients.Group("AllAgents").SendAsync("EmergencySettingsUpdated");
             return Results.Ok(settings.Emergency());
         }).RequireAuthorization("settings.manage");
 
@@ -173,58 +181,27 @@ public static class IntegrationApi
         {
             var notice = new EmergencyAlertNotice("CODE_YELLOW", "ТЕСТ: КОД ЖЁЛТЫЙ (Проверка оповещения)", "Кабинет IT", "Тестовая проверка системы экстренного оповещения Pixel Little Helper.", null, null, null, 15, null, null);
             await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
-            _ = telegram.SendEmergencyAlertAsync("ТЕСТ: КОД ЖЁЛТЫЙ (Проверка оповещения)", "CODE_YELLOW", "Кабинет IT", null, user.Identity?.Name ?? "Admin", "Тестовая проверка системы экстренного оповещения", null);
+            await telegram.SendEmergencyAlertAsync("ТЕСТ: КОД ЖЁЛТЫЙ (Проверка оповещения)", "CODE_YELLOW", "Кабинет IT", null, user.Identity?.Name ?? "Admin", "Тестовая проверка системы экстренного оповещения", null);
             return Results.Ok(new { success = true, message = "Тестовое оповещение отправлено на все подключённые компьютеры и в Telegram" });
         }).RequireAuthorization("settings.manage");
 
-        app.MapPost("/api/settings/emergency/cancel", async (Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, IntegrationSettings settings, TelegramClient telegram, System.Security.Claims.ClaimsPrincipal user, IHttpClientFactory httpFactory) =>
-        {
-            await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertCanceled");
-            await hub.Clients.Group("PanelStaff").SendAsync("EmergencyAlertCanceled");
-
-            var em = settings.Emergency();
-            var tg = settings.Telegram();
-            if (tg.Enabled && em.TelegramAlertsEnabled)
-            {
-                string targetChat = !string.IsNullOrWhiteSpace(em.TelegramChatId) ? em.TelegramChatId.Trim() : tg.ChatId;
-                int targetThread = em.TelegramThreadId > 0 ? em.TelegramThreadId : tg.ThreadId;
-                if (!string.IsNullOrWhiteSpace(targetChat))
-                {
-                    string operatorName = user.Identity?.Name ?? "Администратор";
-                    _ = telegram.SendToAsync(targetChat, $"🟢 ОТБОЙ ТРЕВОГИ: Экстренное оповещение сброшено администратором ({operatorName}). Сигналы на всех ПК отключены.", null, CancellationToken.None, targetThread);
-                }
-            }
-
-            if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl))
-            {
-                string effectiveKey = !string.IsNullOrWhiteSpace(em.ApiKey) ? em.ApiKey : "art_helper_bridge_secret";
-                var http = httpFactory.CreateClient();
-                http.Timeout = TimeSpan.FromSeconds(3);
-                foreach (var path in new[] { "/api/broadcast/cancel", "/api/broadcast/abort" })
-                {
-                    try
-                    {
-                        var endpoint = em.ServerUrl.TrimEnd('/') + path;
-                        using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
-                        req.Headers.Add("X-Client-Key", effectiveKey);
-                        req.Headers.Add("X-Auth-Token", effectiveKey);
-                        req.Content = JsonContent.Create(new { client_id = "little-helper-bridge", auth_token = effectiveKey });
-                        await http.SendAsync(req, CancellationToken.None);
-                    }
-                    catch { }
-                }
-            }
-
-            return Results.Ok(new { success = true, message = "Оповещение успешно сброшено (Отбой тревоги отправлен на все ПК)" });
-        }).RequireAuthorization("settings.manage");
+        app.MapPost("/api/settings/emergency/cancel", async (IHubContext<HelperHub> hub,IntegrationSettings settings,HelperDb db,System.Security.Claims.ClaimsPrincipal user,IHttpClientFactory factory,CancellationToken token) => {
+            await EmergencyEvents.CancelAsync(user,db,settings,hub.Clients,factory,token);
+            return Results.Ok(new {success=true,message="Локальный отбой выполнен в доступных филиалах. Внешняя отмена поставлена в очередь; статус доступен в журнале доставки."});
+        }).RequireAuthorization("emergency.manage");
+        app.MapGet("/api/emergency/deliveries",async(HelperDb db,System.Security.Claims.ClaimsPrincipal principal) => {
+            var user=await db.Users.SingleAsync(u=>u.Username==principal.Identity!.Name);
+            return Results.Ok(await db.EmergencyEvents.AsNoTracking().Where(e=>user.Role==Roles.SuperAdmin || e.BranchId==user.BranchId)
+                .OrderByDescending(e=>e.Id).Take(100).Select(e=>new {e.EventId,e.CreatedAt,e.BranchName,e.LocalDelivered,e.ExternalState,e.ExternalCallId,e.Attempts,e.LastError,e.Canceled,e.TelegramState,e.TelegramError}).ToListAsync());
+        }).RequireAuthorization("emergency.manage");
 
         app.MapPost("/api/settings/emergency/ping", async (EmergencyPingRequest? pingReq, IntegrationSettings settings, IHttpClientFactory httpFactory) =>
         {
             var em = settings.Emergency();
             string targetUrl = (!string.IsNullOrWhiteSpace(pingReq?.ServerUrl) ? pingReq.ServerUrl : em.ServerUrl)?.Trim().TrimEnd('/') ?? "http://172.16.16.63:8085";
-            string key = !string.IsNullOrWhiteSpace(pingReq?.ApiKey) ? pingReq.ApiKey.Trim() : (!string.IsNullOrWhiteSpace(em.ApiKey) ? em.ApiKey.Trim() : "art_helper_bridge_secret");
+            string key = !string.IsNullOrWhiteSpace(pingReq?.ApiKey) ? pingReq.ApiKey.Trim() : em.ApiKey.Trim();
 
-            var http = httpFactory.CreateClient();
+            var http = httpFactory.CreateClient("EmergencyBridge");
             http.Timeout = TimeSpan.FromSeconds(5);
 
             try
@@ -282,66 +259,118 @@ public static class IntegrationApi
                 _ => "ЭКСТРЕННОЕ ОПОВЕЩЕНИЕ"
             };
             int duration = req.DurationSeconds ?? (upperCode is "CODE_BLUE" or "CODE_WHITE" ? 180 : 300);
-            var notice = new EmergencyAlertNotice(upperCode, title, req.Cabinet, req.Notes, req.Subcode, req.ImageBase64, req.ImageUrl, duration, req.CallId, req.Department);
+            var notice = new EmergencyAlertNotice(upperCode, title, req.Cabinet, req.Notes, req.Subcode, req.ImageBase64, req.ImageUrl, duration, req.CallId, req.Department, EmergencyLanguages.ForCode(em,upperCode));
 
-            if (req.CallId != null && !string.IsNullOrWhiteSpace(req.Department))
-            {
-                var dept = em.Departments?.FirstOrDefault(d => d.Name.Equals(req.Department, StringComparison.OrdinalIgnoreCase) || d.Id.ToString() == req.Department);
-                if (dept != null && dept.ResponsibleUsers.Count > 0)
-                {
-                    foreach (var u in dept.ResponsibleUsers)
-                        await hub.Clients.Group("AgentUser:" + u.Trim().ToLowerInvariant()).SendAsync("EmergencyAlertNotice", notice);
-                }
-                else
-                {
-                    await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
-                }
-            }
-            else if (upperCode == "CODE_WHITE")
-            {
-                GuardWhiteService.TriggerAlert(req.Cabinet ?? "Не указан", "Главный корпус", DateTime.Now.ToString("HH:mm:ss"));
-                await hub.Clients.Group("GuardWhite").SendAsync("CodeWhiteAlert", new
-                {
-                    cabinet = req.Cabinet ?? "Не указан",
-                    branchName = "Главный корпус",
-                    time = DateTime.Now.ToString("HH:mm:ss")
-                });
-            }
-            else
-            {
-                await hub.Clients.Group("AllAgents").SendAsync("EmergencyAlertNotice", notice);
-            }
-
+            if (!EmergencyLanguages.AllowedForRole(em,user.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value??Roles.User).Contains(upperCode)) return Results.BadRequest(new {error="Код отключён администратором"});
+            var actor=await db.Users.AsNoTracking().SingleAsync(u=>u.Username==user.Identity!.Name);
+            if(actor.Role!=Roles.SuperAdmin && req.BranchId.HasValue && actor.BranchId!=req.BranchId)return Results.Forbid();
+            int? targetBranch=req.BranchId;
+            if(targetBranch==null && !em.BroadcastAllBranches)
+                targetBranch=(await db.Users.AsNoTracking().FirstOrDefaultAsync(u=>u.Username==user.Identity!.Name))?.BranchId;
+            var branch=targetBranch.HasValue?await db.Branches.AsNoTracking().FirstOrDefaultAsync(b=>b.Id==targetBranch && b.IsActive):null;
+            if(branch==null && !em.BroadcastAllBranches && upperCode is not ("CODE_WHITE" or "CODE_BLUE" or "SPECIALIST_CALL"))
+                return Results.BadRequest(new {error="Выберите филиал для массового оповещения"});
+            if(req.BranchId.HasValue && branch==null) return Results.BadRequest(new {error="Филиал не найден"});
+            var delivery=await EmergencyEvents.DispatchAsync(notice,branch?.Id,branch?.Name,user.Identity?.Name??"","Server",db,settings,hub.Clients,CancellationToken.None);
             string operatorName = user.Identity?.Name ?? "External API";
-            _ = telegram.SendEmergencyAlertAsync(title, upperCode, req.Cabinet ?? "Не указан", null, operatorName, req.Notes?.Trim(), req.Department);
+            
 
-            db.AuditLogs.Add(new() { AdminUsername = operatorName, MachineName = req.Cabinet ?? "Server", CommandType = "emergency_broadcast", CommandPayload = upperCode + " / " + req.Cabinet, Status = "Completed", Result = "Оповещение запущено" });
+            db.AuditLogs.Add(new() { AdminUsername = operatorName, MachineName = req.Cabinet ?? "Server", CommandType = "emergency_broadcast", CommandPayload = upperCode + " / " + req.Cabinet, Status = "Completed", Result = "Рассылка передана SignalR; внешний канал: "+delivery.ExternalState });
             await db.SaveChangesAsync();
 
-            if (em.Enabled && !string.IsNullOrWhiteSpace(em.ServerUrl))
-            {
-                try
-                {
-                    var http = httpFactory.CreateClient();
-                    http.Timeout = TimeSpan.FromSeconds(3);
-                    var endpoint = em.ServerUrl.TrimEnd('/') + "/api/broadcast/client/alert";
-                    var body = new { code = upperCode, cabinet = req.Cabinet, notes = req.Notes, client_name = operatorName, image_base64 = req.ImageBase64, image_url = req.ImageUrl };
-                    using var alertReq = new HttpRequestMessage(HttpMethod.Post, endpoint);
-                    if (!string.IsNullOrWhiteSpace(em.ApiKey)) alertReq.Headers.Add("X-Client-Key", em.ApiKey);
-                    alertReq.Content = System.Net.Http.Json.JsonContent.Create(body);
-                    _ = http.SendAsync(alertReq);
-                }
-                catch { }
-            }
-
-            return Results.Ok(new { success = true });
+            return Results.Ok(new {success=true,delivery.EventId,delivery.LocalDelivered,delivery.ExternalState});
         }).RequireAuthorization("commands.execute");
 
         app.MapGet("/api/guard/white-state", () => Results.Ok(GuardWhiteService.GetState()));
 
-        app.MapPost("/api/guard/white-reset", async (Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        app.MapPost("/api/guard/white-trigger", async (HttpContext ctx, HelperWhiteTriggerRequest req, IntegrationSettings settings, HelperDb db, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
         {
-            GuardWhiteService.ResetAlert();
+            var em = settings.Emergency();
+            string? token = ctx.Request.Headers["X-Client-Key"].FirstOrDefault()
+                ?? ctx.Request.Headers["X-Auth-Token"].FirstOrDefault()
+                ?? (ctx.Request.Headers.TryGetValue("Authorization", out var authVal) && authVal.ToString().StartsWith("Bearer ") ? authVal.ToString()[7..] : null);
+
+            bool authorized = false;
+            if (!string.IsNullOrWhiteSpace(em.ApiKey) && !string.IsNullOrWhiteSpace(token) &&
+                System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(token.Trim()),
+                    System.Text.Encoding.UTF8.GetBytes(em.ApiKey.Trim())))
+            {
+                authorized = true;
+            }
+            else if (ctx.User.Identity?.IsAuthenticated == true && (Access.Can(ctx.User, "emergency.manage") || Access.Can(ctx.User, "commands.execute")))
+            {
+                authorized = true;
+            }
+
+            if (!authorized)
+                return Results.Unauthorized();
+
+            string eventId = string.IsNullOrWhiteSpace(req.EventId) ? $"emergency-white:{Guid.NewGuid():N}" : req.EventId.Trim();
+            string cabinet = string.IsNullOrWhiteSpace(req.Cabinet) ? "Не указан" : req.Cabinet.Trim();
+            string branchName = string.IsNullOrWhiteSpace(req.BranchName) ? "Главный корпус" : req.BranchName.Trim();
+            string time = string.IsNullOrWhiteSpace(req.Time) ? DateTime.Now.ToString("HH:mm:ss") : req.Time.Trim();
+
+            GuardWhiteService.TriggerAlert(cabinet, branchName, time, eventId);
+            await hub.Clients.Group("GuardWhite").SendAsync("CodeWhiteTriggered", new { cabinet, branchName, time, eventId });
+
+            db.AuditLogs.Add(new() {
+                AdminUsername = ctx.User.Identity?.Name ?? "EmergencySystem (Bridge)",
+                CommandType = "external_white_trigger",
+                CommandPayload = $"{cabinet} / {branchName}",
+                Status = "Completed",
+                Result = "Внешний триггер Код Белый принят и выведен на экран охраны"
+            });
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new { success = true, eventId, cabinet, branchName });
+        });
+
+        app.MapPost("/api/guard/white-ack", async (System.Security.Claims.ClaimsPrincipal user, HelperDb db) => {
+            GuardWhiteService.AcknowledgeAlert();
+            db.AuditLogs.Add(new() {AdminUsername=user.Identity?.Name??"", CommandType="white_ack", Status="Completed"});
+            await db.SaveChangesAsync(); return Results.Ok(new {success=true});
+        }).RequireAuthorization("emergency.manage");
+
+        app.MapPost("/api/guard/white-reset", async (HttpContext ctx, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub, HelperDb db, IntegrationSettings settings) =>
+        {
+            var em = settings.Emergency();
+            string? token = ctx.Request.Headers["X-Client-Key"].FirstOrDefault()
+                ?? ctx.Request.Headers["X-Auth-Token"].FirstOrDefault()
+                ?? (ctx.Request.Headers.TryGetValue("Authorization", out var authVal) && authVal.ToString().StartsWith("Bearer ") ? authVal.ToString()[7..] : null);
+
+            bool authorized = false;
+            string actorName = "External Bridge";
+            if (!string.IsNullOrWhiteSpace(em.ApiKey) && !string.IsNullOrWhiteSpace(token) &&
+                System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(token.Trim()),
+                    System.Text.Encoding.UTF8.GetBytes(em.ApiKey.Trim())))
+            {
+                authorized = true;
+                actorName = "EmergencySystem (Bridge)";
+            }
+            else if (ctx.User.Identity?.IsAuthenticated == true && Access.Can(ctx.User, "emergency.manage"))
+            {
+                authorized = true;
+                actorName = ctx.User.Identity.Name ?? "Operator";
+            }
+
+            if (!authorized)
+                return Results.Unauthorized();
+
+            string? id = GuardWhiteService.GetState().EventId;
+            if (id != null) {
+                var entry = await db.EmergencyEvents.SingleOrDefaultAsync(e => e.EventId == id);
+                if (entry != null) {
+                    entry.Canceled = true;
+                    entry.ExternalState = entry.ExternalState == "Disabled" || entry.Attempts == 0 && entry.ExternalState == "Pending" ? "Canceled" : "CancelPending";
+                    entry.Attempts = 0;
+                    entry.NextAttemptAt = DateTime.UtcNow;
+                }
+            }
+            db.AuditLogs.Add(new() { AdminUsername = actorName, CommandType = "white_reset", Status = "Completed", CommandPayload = id ?? "" });
+            await db.SaveChangesAsync();
+            GuardWhiteService.ResetAlert(id);
             await hub.Clients.Group("GuardWhite").SendAsync("CodeWhiteReset");
             return Results.Ok(new { success = true });
         });
@@ -356,51 +385,32 @@ public static class IntegrationApi
             await ctx.Response.WriteAsync($"event: state\ndata: {System.Text.Json.JsonSerializer.Serialize(initial)}\n\n", token);
             await ctx.Response.Body.FlushAsync(token);
 
-            var tcs = new TaskCompletionSource();
-            using var reg = token.Register(() => tcs.TrySetResult());
-
-            Action<CodeWhiteAlertData> onAlert = async data =>
-            {
-                try
-                {
-                    await ctx.Response.WriteAsync($"event: alert\ndata: {System.Text.Json.JsonSerializer.Serialize(data)}\n\n", CancellationToken.None);
-                    await ctx.Response.Body.FlushAsync(CancellationToken.None);
-                }
-                catch { }
-            };
-
-            Action onReset = async () =>
-            {
-                try
-                {
-                    await ctx.Response.WriteAsync("event: reset\ndata: {}\n\n", CancellationToken.None);
-                    await ctx.Response.Body.FlushAsync(CancellationToken.None);
-                }
-                catch { }
-            };
-
-            GuardWhiteService.OnAlert += onAlert;
-            GuardWhiteService.OnReset += onReset;
-
-            try
-            {
-                while (!token.IsCancellationRequested)
-                {
-                    await Task.Delay(15000, token);
-                    await ctx.Response.WriteAsync(": keepalive\n\n", token);
+            var queue=System.Threading.Channels.Channel.CreateBounded<string>(new System.Threading.Channels.BoundedChannelOptions(16) {
+                SingleReader=true, FullMode=System.Threading.Channels.BoundedChannelFullMode.DropOldest });
+            Action<CodeWhiteAlertData> onAlert=data=>queue.Writer.TryWrite("event: alert\ndata: "+JsonSerializer.Serialize(data)+"\n\n");
+            Action onReset=()=>queue.Writer.TryWrite("event: reset\ndata: {}\n\n");
+            GuardWhiteService.OnAlert+=onAlert;GuardWhiteService.OnReset+=onReset;
+            using var heartbeatStop=CancellationTokenSource.CreateLinkedTokenSource(token);
+            var heartbeat=Task.Run(async()=> {
+                try {using var timer=new PeriodicTimer(TimeSpan.FromSeconds(15));
+                    while(await timer.WaitForNextTickAsync(heartbeatStop.Token))
+                        queue.Writer.TryWrite("event: state\ndata: "+JsonSerializer.Serialize(GuardWhiteService.GetState())+"\n\n");
+                }catch(OperationCanceledException){}
+            });
+            try {
+                await foreach(var message in queue.Reader.ReadAllAsync(token)) {
+                    await ctx.Response.WriteAsync(message,token);
                     await ctx.Response.Body.FlushAsync(token);
                 }
-            }
-            catch (OperationCanceledException) { }
-            finally
-            {
-                GuardWhiteService.OnAlert -= onAlert;
-                GuardWhiteService.OnReset -= onReset;
+            }catch(OperationCanceledException){}
+            finally {
+                GuardWhiteService.OnAlert-=onAlert;GuardWhiteService.OnReset-=onReset;
+                heartbeatStop.Cancel();await heartbeat;
             }
         });
     }
     public record UpdateSwitch(bool Enabled);
     public record TelegramDirectoryProbe(long TelegramId);
-    public record ChangeAdPasswordRequest(string Username, string NewPassword);
+    public record ChangeAdPasswordRequest(string Username, string NewPassword, string CurrentPassword = "");
 }
 

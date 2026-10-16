@@ -6,7 +6,9 @@ public sealed record CodeWhiteAlertData(
     string BranchName,
     string Time,
     DateTime? ActivatedAtUtc = null,
-    int RemainingSeconds = 0
+    int RemainingSeconds = 0,
+    bool Accepted = false,
+    string? EventId = null
 );
 
 public static class GuardWhiteService
@@ -42,8 +44,9 @@ public static class GuardWhiteService
         }
     }
 
-    public static void TriggerAlert(string cabinet, string branchName, string time)
+    public static void TriggerAlert(string cabinet, string branchName, string time, string? eventId = null)
     {
+        eventId ??= Guid.NewGuid().ToString("N");
         CodeWhiteAlertData data;
         lock (sync)
         {
@@ -55,18 +58,27 @@ public static class GuardWhiteService
                 branchName ?? "Главный корпус",
                 time ?? DateTime.Now.ToString("HH:mm:ss"),
                 now,
-                (int)AutoResetDuration.TotalSeconds
+                (int)AutoResetDuration.TotalSeconds,
+                false,eventId
             );
             data = currentState;
-            autoResetTimer = new Timer(_ => ResetAlert(), null, AutoResetDuration, Timeout.InfiniteTimeSpan);
+            autoResetTimer = new Timer(_ => ResetAlert(eventId), null, AutoResetDuration, Timeout.InfiniteTimeSpan);
         }
         OnAlert?.Invoke(data);
     }
 
-    public static void ResetAlert()
+    public static void AcknowledgeAlert()
+    {
+        CodeWhiteAlertData data;
+        lock(sync) { if(!currentState.Active)return; currentState=currentState with {Accepted=true};data=currentState; }
+        OnAlert?.Invoke(data);
+    }
+
+    public static void ResetAlert(string? expectedEventId = null)
     {
         lock (sync)
         {
+            if(expectedEventId!=null && currentState.EventId!=expectedEventId)return;
             autoResetTimer?.Dispose();
             autoResetTimer = null;
             currentState = new CodeWhiteAlertData(false, "", "", "", null, 0);

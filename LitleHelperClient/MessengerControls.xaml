@@ -102,4 +102,27 @@
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
+
+  <!-- Prevent WPF Aero default style from flashing white when TextBox is disabled or busy -->
+  <Style TargetType="{x:Type TextBox}">
+    <Setter Property="SnapsToDevicePixels" Value="True"/>
+    <Setter Property="OverridesDefaultStyle" Value="False"/>
+    <Style.Triggers>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Opacity" Value="0.65"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
+
+  <!-- Prevent ListBox from changing background to system control brush when disabled -->
+  <Style TargetType="{x:Type ListBox}">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Style.Triggers>
+      <Trigger Property="IsEnabled" Value="False">
+        <Setter Property="Background" Value="Transparent"/>
+      </Trigger>
+    </Style.Triggers>
+  </Style>
 </ResourceDictionary>

@@ -16,9 +16,13 @@ public class ChatFile
     public long Size { get; set; }
     public string Sha256 { get; set; } = "";
     public int Order { get; set; }
+    public bool IsVoice { get; set; }
+    public int DurationSeconds { get; set; }
+    public string Waveform { get; set; } = "";
+    public bool IsVideoNote { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
-public record ChatFileInfo(string Id, string Name, long Size);
+public record ChatFileInfo(string Id, string Name, long Size, bool IsVoice = false, int DurationSeconds = 0, string? Waveform = null, bool IsVideoNote = false);
 public static class ChatFiles
 {
     public const long MaxFile = 50 * 1024 * 1024, MaxTotal = 100 * 1024 * 1024;
@@ -29,13 +33,36 @@ public static class ChatFiles
         string sql = $"CREATE TABLE IF NOT EXISTS \"ChatFiles\" (\"Id\" TEXT PRIMARY KEY, \"SenderId\" INTEGER NOT NULL, \"PeerId\" INTEGER NOT NULL, \"MessageId\" BIGINT NOT NULL, \"Name\" TEXT NOT NULL, \"Size\" BIGINT NOT NULL, \"Sha256\" TEXT NOT NULL, \"Order\" INTEGER NOT NULL, \"CreatedAt\" {date} NOT NULL)";
         await db.Database.ExecuteSqlRawAsync(sql); // Provider-specific type is a fixed literal.
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatFiles_PeerId_MessageId\" ON \"ChatFiles\" (\"PeerId\", \"MessageId\")");
+
+        bool pg = db.Database.IsNpgsql();
+        foreach (var (column, type) in new[] {
+            ("IsVoice", pg ? "BOOLEAN NOT NULL DEFAULT FALSE" : "INTEGER NOT NULL DEFAULT 0"),
+            ("DurationSeconds", "INTEGER NOT NULL DEFAULT 0"),
+            ("Waveform", "TEXT NOT NULL DEFAULT ''"),
+            ("IsVideoNote", pg ? "BOOLEAN NOT NULL DEFAULT FALSE" : "INTEGER NOT NULL DEFAULT 0"),
+        })
+        {
+            if (pg) await db.Database.ExecuteSqlRawAsync($"ALTER TABLE \"ChatFiles\" ADD COLUMN IF NOT EXISTS \"{column}\" {type}");
+            else
+            {
+                await db.Database.OpenConnectionAsync();
+                using var cmd = db.Database.GetDbConnection().CreateCommand();
+                cmd.CommandText = "PRAGMA table_info('ChatFiles')";
+                bool found = false;
+                using (var reader = await cmd.ExecuteReaderAsync())
+                    while (await reader.ReadAsync()) if (reader.GetString(1) == column) found = true;
+                if (!found) await db.Database.ExecuteSqlRawAsync($"ALTER TABLE \"ChatFiles\" ADD COLUMN \"{column}\" {type}");
+                await db.Database.CloseConnectionAsync();
+            }
+        }
     }
     public static async Task PopulateAsync(HelperDb db, IEnumerable<ChatMessage> messages)
     {
         var rows = messages.ToArray(); if (rows.Length == 0) return;
         var ids = rows.Select(m => m.Id).Distinct().ToArray();
         var files = await db.ChatFiles.AsNoTracking().Where(f => ids.Contains(f.MessageId)).OrderBy(f => f.Order).ToListAsync();
-        foreach (var message in rows) message.Attachments = files.Where(f => f.MessageId == message.Id && f.SenderId == message.SenderId && f.PeerId == message.RecipientId).Select(f => new ChatFileInfo(f.Id, f.Name, f.Size)).ToList();
+        foreach (var message in rows) message.Attachments = files.Where(f => f.MessageId == message.Id && f.SenderId == message.SenderId && f.PeerId == message.RecipientId)
+            .Select(f => new ChatFileInfo(f.Id, f.Name, f.Size, f.IsVoice, f.DurationSeconds, string.IsNullOrEmpty(f.Waveform) ? null : f.Waveform, f.IsVideoNote)).ToList();
     }
     public static string Name(string name)
     {
@@ -56,7 +83,23 @@ public static class ChatFiles
             if (!allowed) return Results.NotFound();
             string fullPath = Path.GetFullPath(Path.Combine(Folder(config), file.PathKey)); if (!File.Exists(fullPath)) return Results.NotFound();
             response.Headers.CacheControl = "no-store"; response.Headers["X-Content-Type-Options"] = "nosniff";
-            return Results.File(fullPath, "application/octet-stream", file.Name, enableRangeProcessing: true);
+            string contentType = Path.GetExtension(file.Name).ToLowerInvariant() switch
+            {
+                ".webm" => file.IsVoice ? "audio/webm" : "video/webm",
+                ".ogg" or ".oga" => "audio/ogg",
+                ".wav" => "audio/wav",
+                ".mp3" => "audio/mpeg",
+                ".m4a" or ".aac" => "audio/mp4",
+                ".mp4" => "video/mp4",
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".pdf" => "application/pdf",
+                ".txt" or ".log" => "text/plain; charset=utf-8",
+                _ => "application/octet-stream"
+            };
+            return Results.File(fullPath, contentType, file.Name, enableRangeProcessing: true);
         });
         api.MapPost("/files/send", async (HttpRequest request, HelperDb db, ClaimsPrincipal principal, IConfiguration config, IHubContext<MessengerHub> hub, ChatGroupGate gate, CancellationToken cancellation) =>
         {
@@ -69,11 +112,20 @@ public static class ChatFiles
             catch (InvalidDataException) { return Results.BadRequest(new { error = "Неверные данные или превышен размер вложений." }); }
             catch (BadHttpRequestException) { return Results.Json(new { error = "Превышен размер сообщения с вложениями." }, statusCode: 413); }
             if (!int.TryParse(form["peer"], out int peer) || peer == 0 || peer == me.Id || peer == int.MinValue || !Guid.TryParse(form["clientId"], out var key)) throw new ArgumentException("Выберите чат.");
+            bool isVoice = bool.TryParse(form["isVoice"], out bool v) && v;
+            int duration = int.TryParse(form["duration"], out int d) ? d : 0;
+            string waveform = form["waveform"].ToString();
+            bool isVideoNote = bool.TryParse(form["isVideoNote"], out bool vn) && vn;
             string body = form["body"].ToString().Trim();
             if (body.Length > 4000 || body.Any(c => char.IsControl(c) && c is not '\n' and not '\r' and not '\t')) throw new ArgumentException("Некорректный текст сообщения.");
             var uploads = form.Files.ToArray();
             if (uploads.Length is < 1 or > 10 || uploads.Any(f => f.Length > MaxFile) || uploads.Sum(f => f.Length) > MaxTotal) throw new ArgumentException("Не более 10 файлов: до 50 МБ каждый и до 100 МБ на сообщение.");
-            if (body.Length == 0) body = "Вложения: " + string.Join(", ", uploads.Select(f => Name(f.FileName)));
+            if (body.Length == 0)
+            {
+                if (isVoice) body = "🎤 Голосовое сообщение" + (duration > 0 ? $" ({duration} сек)" : "");
+                else if (isVideoNote) body = "📹 Видеосообщение" + (duration > 0 ? $" ({duration} сек)" : "");
+                else body = "Вложения: " + string.Join(", ", uploads.Select(f => Name(f.FileName)));
+            }
             var content = ChatCommands.Parse(body); body = content.Body;
             string directory = Folder(config); Directory.CreateDirectory(directory); var saved = new List<ChatFile>(); bool committed = false;
             await gate.Semaphore.WaitAsync(cancellation);
@@ -87,7 +139,20 @@ public static class ChatFiles
                 else if (!await db.Users.AnyAsync(u => u.Id == peer && u.IsActive && u.PasswordHash == "!AD", cancellation)) throw new ArgumentException("Получатель недоступен.");
                 foreach (var upload in uploads)
                 {
-                    var file = new ChatFile { Id = Guid.NewGuid().ToString("N"), SenderId = me.Id, PeerId = peer, Name = Name(upload.FileName), Size = upload.Length, Order = saved.Count }; saved.Add(file);
+                    var file = new ChatFile
+                    {
+                        Id = Guid.NewGuid().ToString("N"),
+                        SenderId = me.Id,
+                        PeerId = peer,
+                        Name = Name(upload.FileName),
+                        Size = upload.Length,
+                        Order = saved.Count,
+                        IsVoice = isVoice,
+                        DurationSeconds = duration,
+                        Waveform = waveform,
+                        IsVideoNote = isVideoNote
+                    };
+                    saved.Add(file);
                     await using (var output = new FileStream(Path.Combine(directory, file.Id), FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true)) await upload.CopyToAsync(output, cancellation);
                     await using var data = File.OpenRead(Path.Combine(directory, file.Id)); file.Sha256 = Convert.ToHexString(await SHA256.HashDataAsync(data, cancellation));
                 }
@@ -110,7 +175,7 @@ public static class ChatFiles
                 else { result = new() { SenderId = me.Id, RecipientId = peer, Body = body, IsUrgent = content.Urgent, Command = content.Command, ClientId = clientId }; db.ChatMessages.Add(result); await db.SaveChangesAsync(cancellation); }
                 foreach (var file in saved) file.MessageId = result.Id;
                 db.ChatFiles.AddRange(saved); await db.SaveChangesAsync(cancellation); await transaction.CommitAsync(cancellation); committed = true;
-                result.Attachments = saved.Select(f => new ChatFileInfo(f.Id, f.Name, f.Size)).ToList();
+                result.Attachments = saved.Select(f => new ChatFileInfo(f.Id, f.Name, f.Size, f.IsVoice, f.DurationSeconds, string.IsNullOrEmpty(f.Waveform) ? null : f.Waveform, f.IsVideoNote)).ToList();
                 var targets = peer < 0 ? await db.ChatGroupMembers.Where(m => m.GroupId == -peer && db.Users.Any(u => u.Id == m.UserId && u.IsActive) && !db.ChatGroupRestrictions.Any(r => r.GroupId == -peer && r.UserId == m.UserId && r.EndsAt > DateTime.UtcNow)).Select(m => "Chat:" + m.UserId).ToArrayAsync(cancellation) : ["Chat:" + me.Id, "Chat:" + peer];
                 await hub.Clients.Groups(targets).SendAsync("ChatMessage", result, cancellation); return Results.Ok(result);
             }

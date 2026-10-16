@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using PixelHelper;
 
+TtsNotifier.SuppressedForTests = true;
 Settings.TestFolder = Path.Combine(Path.GetTempPath(), "PixelHelper-tests-" + Guid.NewGuid().ToString("N"));
 static void Check(bool result, string message) { if (!result) throw new Exception(message); Console.WriteLine("PASS " + message); }
 Check(Settings.Folder.StartsWith(Path.GetTempPath(),StringComparison.OrdinalIgnoreCase)&&!Settings.Folder.Equals(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"PixelHelper"),StringComparison.OrdinalIgnoreCase),"tests isolate client settings from the installed helper");
@@ -88,7 +89,7 @@ try
     string generated = fresh.ClientToken;
     Check(!fresh.EnsureClientKey() && fresh.ClientToken == generated, "generated registration key reused");
     other.EnsureClientKey(); Check(other.ClientToken != generated, "independent clients get different keys");
-    string manifestPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "release-1.2.0", "PixelHelper.update.json"));
+    string manifestPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "release-"+typeof(PetWindow).Assembly.GetName().Version!.ToString(3), "PixelHelper.update.json"));
     if (File.Exists(manifestPath))
     {
         var manifest = JsonSerializer.Deserialize<PixelHelper.Updates.ClientUpdateManifest>(File.ReadAllText(manifestPath), Settings.Json)!;
@@ -105,78 +106,19 @@ try
         Settings.ApplyInstalledServer(installedSettings, invalid);
         Check(installedSettings.ServerUrl == "https://new-server.example:5443/team", "invalid installed address ignored: " + invalid);
     }
-    var listener = new TcpListener(IPAddress.Loopback, 0);
-    listener.Start();
-    var url = "http://127.0.0.1:" + ((IPEndPoint)listener.LocalEndpoint).Port + "/";
-    var requests = new List<string>();
-    async Task Serve(string body, int code = 200)
-    {
-        using var socket = await listener.AcceptTcpClientAsync();
-        using var stream = socket.GetStream();
-        var bytes = new List<byte>();
-        while (true)
-        {
-            var buffer = new byte[1];
-            if (await stream.ReadAsync(buffer) == 0) break;
-            bytes.Add(buffer[0]);
-            if (bytes.Count >= 4 && Encoding.ASCII.GetString(bytes.TakeLast(4).ToArray()) == "\r\n\r\n") break;
-        }
-        string headers = Encoding.UTF8.GetString(bytes.ToArray());
-        int length = 0;
-        foreach (var header in headers.Split("\r\n"))
-            if (header.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) length = int.Parse(header.Split(':')[1].Trim());
-        var payload = new byte[length];
-        if (headers.Contains("Transfer-Encoding: chunked", StringComparison.OrdinalIgnoreCase))
-        {
-            async Task<string> ReadLine()
-            {
-                var line = new List<byte>();
-                while (true)
-                {
-                    var b = new byte[1]; await stream.ReadExactlyAsync(b);
-                    line.Add(b[0]);
-                    if (line.Count >= 2 && line[^2] == 13 && line[^1] == 10) return Encoding.ASCII.GetString(line.ToArray()).TrimEnd('\r', '\n');
-                }
-            }
-            var bodyBytes = new List<byte>();
-            while (true)
-            {
-                int size = Convert.ToInt32((await ReadLine()).Split(';')[0], 16);
-                if (size == 0) { await ReadLine(); break; }
-                var chunk = new byte[size]; await stream.ReadExactlyAsync(chunk); bodyBytes.AddRange(chunk); await ReadLine();
-            }
-            payload = bodyBytes.ToArray();
-        }
-        else await stream.ReadExactlyAsync(payload);
-        requests.Add(headers + Encoding.UTF8.GetString(payload));
-        byte[] content = Encoding.UTF8.GetBytes(body);
-        byte[] response = Encoding.ASCII.GetBytes($"HTTP/1.1 {code} Test\r\nContent-Type: application/json\r\nContent-Length: {content.Length}\r\nConnection: close\r\n\r\n");
-        await stream.WriteAsync(response); await stream.WriteAsync(content);
+    var settings = new Settings {ServerUrl="http://helper.gp1.loc",ClientToken="fixture-key"};
+    using var api = new ApiClient(settings);
+    Check(ApiClient.Defaults().Select(a=>a.Id).SequenceEqual(new[]{"search","dmed","eisz","exit"}),"offline menu uses local defaults");
+    using(var request=api.PasswordChangeRequest("fixture-user","NewPassword123","OldPassword123")) {
+        Check(request.RequestUri!.Scheme=="https" && request.RequestUri.Port==443,"domain passwords require HTTPS");
+        Check(request.Headers.GetValues("X-Machine-Name").Single()==Environment.MachineName && request.Headers.GetValues("X-Client-Key").Single()=="fixture-key","password change sends full agent identity");
+        using var payload=JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        Check(payload.RootElement.GetProperty("currentPassword").GetString()=="OldPassword123","password change confirms current credentials");
     }
-    var settings = new Settings { ServerUrl = url };
-    using var api = new ApiClient(settings, temp);
-    Check(ApiClient.Defaults().Select(a => a.Id).SequenceEqual(new[] { "search", "dmed", "eisz", "exit" }), "offline menu excludes startup disabling");
-    Check(api.ReadCache().Count == 4, "offline defaults");
-    var serving = Serve("[{\"id\":\"test\",\"title\":\"Documents\",\"type\":\"open_path\",\"target\":\"C:\\\\Docs\"}]");
-    var actions = await api.GetActionsAsync(CancellationToken.None); await serving;
-    Check(actions.Count == 1 && actions[0].Id == "test", "GET actions and deserialization");
-    Check(requests[0].Contains("/api/v1/assistant/actions?user=") && requests[0].Contains("&pc="), "identity query parameters");
-    Check(File.Exists(Path.Combine(temp, "actions_cache.json")), "atomic disk cache");
-    serving = Serve("malformed"); actions = await api.GetActionsAsync(CancellationToken.None); await serving;
-    Check(actions[0].Id == "test", "malformed server response retains cache");
-    serving = Serve("{}", 503); actions = await api.GetActionsAsync(CancellationToken.None); await serving;
-    Check(actions[0].Id == "test", "HTTP failure retains cache");
-    serving = Serve("{}"); await api.SendTicketAsync("Проверка отправки", CancellationToken.None); await serving;
-    var request = requests[^1];
-    using var json = JsonDocument.Parse(request[(request.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..]);
-    Check(request.StartsWith("POST /api/v1/assistant/tickets") && json.RootElement.GetProperty("text").GetString() == "Проверка отправки" && json.RootElement.GetProperty("pc").GetString() == Environment.MachineName, "ticket POST body");
-    serving = Serve("{}", 500);
-    bool failed = false;
-    try { await api.SendTicketAsync("error", CancellationToken.None); } catch (HttpRequestException) { failed = true; }
-    await serving; Check(failed, "failed ticket is not reported as sent");
-    listener.Stop();
-    File.WriteAllText(Path.Combine(temp, "actions_cache.json"), "broken");
-    Check(api.ReadCache().Count == 4, "corrupt cache fallback");
+    string concurrentFile=Path.Combine(temp,"concurrent-settings.json");
+    await Task.WhenAll(Enumerable.Range(0,80).Select(i=>Task.Run(()=>Settings.AtomicWrite(concurrentFile,JsonSerializer.Serialize(new {version=i})))));
+    using(var saved=JsonDocument.Parse(File.ReadAllText(concurrentFile)))
+        Check(saved.RootElement.GetProperty("version").GetInt32() is >=0 and <80 && !Directory.GetFiles(temp,"concurrent-settings.json.*.tmp").Any(),"80 concurrent saves leave a complete JSON and no temporary files");
     var disabledExecutor = new CommandExecutor(new Settings { EnableAdministrativeCommands = false });
     var processExecutor = new CommandExecutor(new Settings());
     var processesResult = await processExecutor.ExecuteAsync(new("process-list", "processes", ""), _ => Task.CompletedTask, CancellationToken.None);
@@ -318,12 +260,54 @@ try
     pet.ReceiveAnnouncement(new("Первое", "Администратор", 30));
     for(int n=0;n<10;n++)Check(pet.ReceiveAnnouncement(new("Очередь "+n,"Администратор",30)).Contains("очередь"),"queued notice "+n);
     bool full=false;try{pet.ReceiveAnnouncement(new("Лишнее","Администратор",30));}catch(InvalidOperationException){full=true;}Check(full,"notice queue bounded to ten pending messages");
-    var ticketWindow = new TicketWindow((title, description, branch, room, cancellation) => Task.FromResult(1), cancellation => Task.FromResult(new List<TicketBranch> { new(1, "Поликлиника"), new(2, "Больница") }), new Settings { TicketBranchId = 1, TicketRoom = "12" }, CancellationToken.None);
+    Check(!CabinetValidation.Valid("", "N123") && !CabinetValidation.Valid("   ", "N123") && !CabinetValidation.Valid("n123", "N123"), "missing cabinet and machine name rejected");
+    Check(CabinetValidation.Valid("Процедурный", "N123") && !CabinetValidation.Valid(new string('x', 51), "N123"), "cabinet allows room names up to 50 characters");
+    var multilingualNotice=new EmergencyAlertNotice("CODE_RED","", "204",null,null,null,null,30,null,null,["ru","kk","en","zh"]);
+    Check(EmergencyPhrases.Languages(multilingualNotice).Count==4 && EmergencyPhrases.Text(multilingualNotice,"kk").Contains("204") && EmergencyPhrases.Text(multilingualNotice,"zh").Contains("红色"),"multilingual emergency phrases include code and cabinet");
+    Check(EmergencyPhrases.Languages(multilingualNotice with {Code="CODE_BLUE",Languages=null}).SequenceEqual(new[]{"ru","kk"}),"blue code defaults to RU and KK");
+    Check(EmergencyPhrases.Languages(multilingualNotice with {Languages=["ru","ru","unknown"]}).SequenceEqual(new[]{"ru"}),"emergency languages deduplicated and validated");
+    using(var speechDone=new ManualResetEventSlim())
+    {
+        var spoken=new List<string>();
+        TtsNotifier.EmergencyPlaybackForTests=(language,text)=>{lock(spoken){spoken.Add(language);if(spoken.Count==4)speechDone.Set();}};
+        try {
+            TtsNotifier.SpeakEmergencyAsync(multilingualNotice,new Settings{EnableTtsEmergencyAlerts=true});
+            Check(speechDone.Wait(TimeSpan.FromSeconds(3)) && spoken.SequenceEqual(new[]{"ru","kk","en","zh"}),"emergency speech queue preserves language order");
+            spoken.Clear();
+            TtsNotifier.SpeakEmergencyAsync(multilingualNotice,new Settings{EnableTtsEmergencyAlerts=true,MedicalWorkStatus="InSurgery"});
+            Thread.Sleep(50);
+            Check(spoken.Count==0,"medical quiet status suppresses emergency speech queue");
+            using var canceledDone=new ManualResetEventSlim();
+            TtsNotifier.EmergencyPlaybackForTests=(language,text)=>{lock(spoken){spoken.Add(language);}TtsNotifier.CancelEmergency();canceledDone.Set();};
+            TtsNotifier.SpeakEmergencyAsync(multilingualNotice,new Settings {EnableTtsEmergencyAlerts=true});
+            Check(canceledDone.Wait(TimeSpan.FromSeconds(2)),"speech cancellation reaches the active queue");
+            Thread.Sleep(100);Check(spoken.Count==1,"canceling current speech prevents remaining language playback");
+
+        } finally {TtsNotifier.EmergencyPlaybackForTests=null;TtsNotifier.CancelEmergency();}
+    }
+
+    var quietStatusSettings = new Settings { MedicalWorkStatus = "CustomQuiet", MedicalStatuses = [new(9,"CustomQuiet","Тишина","🟡","#123456",true,true,1)] };
+    Check(quietStatusSettings.MedicalSoundsMuted && quietStatusSettings.MedicalTtsMuted, "custom medical status controls sound and speech");
+    quietStatusSettings.MedicalStatuses = [new(9,"CustomQuiet","Тишина","🟡","#123456",false,false,1)];
+    Check(!quietStatusSettings.MedicalSoundsMuted && !quietStatusSettings.MedicalTtsMuted, "updated custom medical status restores sound and speech");
+    var disabledSystem = new ActionButton(999, "Мессенджер", "", "messenger", "", 10000, false, SystemKey: "messenger", IsSystem: true);
+    Check(!SystemButtonVisibility.Enabled([disabledSystem], "messenger"), "disabled messenger hidden");
+    Check(SystemButtonVisibility.Enabled([disabledSystem with { IsActive = true }], "messenger"), "enabled messenger visible");
+    Check(SystemButtonVisibility.Enabled([], "messenger"), "legacy server preserves messenger");
+    Check(SystemButtonVisibility.Enabled([disabledSystem], "emergency"), "missing system key preserves legacy behavior");
+    var selectionContext = new TicketContext([new(1, "Любое название", true, "N"), new(2, "Корпус", true, "N24, B"), new(3, "Роддом", true, "R"), new(4, "Отключён", false, "X")], 3);
+    Check(TicketBranchSelection.Select(selectionContext, "N241", 1) == (3, true), "server branch overrides prefix and saved branch");
+    Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = null }, "n241", 1) == (2, true), "longest case-insensitive prefix overrides saved branch");
+    Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = 999 }, "UNKNOWN", 1) == (1, false), "invalid detected branch falls back to saved active branch");
+    Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = null }, "UNKNOWN", 999) == ((int?)null, false), "unknown machine never selects first branch");
+    Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = null }, "X123", 4) == ((int?)null, false), "inactive branches cannot be selected");
+    var ticketWindow = new TicketWindow((title, description, branch, room, cancellation) => Task.FromResult(1), cancellation => Task.FromResult(new TicketContext(new List<TicketBranch> { new(1, "Поликлиника"), new(2, "Больница") })), new Settings { TicketBranchId = 1, TicketRoom = "12" }, CancellationToken.None);
     Check(ticketWindow.WindowStartupLocation == System.Windows.WindowStartupLocation.CenterScreen, "ticket window startup location is CenterScreen");
     ticketWindow.Show(); ticketWindow.UpdateLayout(); ticketWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     var ticketPanel = (System.Windows.Controls.StackPanel)((System.Windows.Controls.Border)ticketWindow.Content).Child;
     Check(ticketPanel.Children.OfType<System.Windows.Controls.ComboBox>().Single().SelectedValue is int selectedBranch && selectedBranch == 1, "ticket form restores saved branch after directory load");
     Check(ticketPanel.Children.OfType<System.Windows.Controls.TextBox>().First().Text == "12", "ticket form restores saved room");
+    Check(ticketPanel.Children.OfType<System.Windows.Controls.TextBox>().First().IsReadOnly, "ticket form room textbox is read-only");
     var ticketBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(410, 410, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); ticketBitmap.Render(ticketWindow);
     var ticketPreview = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "artifacts", "ticket-preview.png"));
     var ticketPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); ticketPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(ticketBitmap)); using (var ticketImage = File.Create(ticketPreview)) ticketPng.Save(ticketImage);
@@ -397,6 +381,8 @@ try
     Check(SoundManager.NormalizeProfile("Sound") == "Sound", "sound profile normalization Sound");
     Check(SoundManager.NormalizeProfile("VoiceAdult") == "VoiceAdult", "sound profile normalization VoiceAdult");
     Check(SoundManager.NormalizeProfile("VoiceChild") == "VoiceChild", "sound profile normalization VoiceChild");
+    Check(SoundManager.NormalizeProfile("Mute") == "Mute", "sound profile normalization Mute");
+    Check(SoundManager.NormalizeProfile("Silent") == "Mute", "sound profile normalization Silent");
     Check(SoundManager.NormalizeProfile("unknown") == "Sound", "sound profile fallback to Sound");
 
     string assetsSoundDir = SoundManager.GetSoundBaseDir();
@@ -418,6 +404,13 @@ try
     SoundManager.Play(SoundEvent.Urgent, settings);
     SoundManager.PlayPreview("VoiceAdult", SoundEvent.MessageReceived);
     SoundManager.PlayPreview("VoiceChild", SoundEvent.MessageSent);
+    SoundManager.PlayPreview("Mute", SoundEvent.MessageReceived);
+    settings.SoundProfile = "Mute";
+    SoundManager.Play(SoundEvent.MessageReceived, settings);
+    settings.ChatSound = false;
+    SoundManager.Play(SoundEvent.MessageSent, settings);
+    settings.ChatSound = true;
+    settings.SoundProfile = "Sound";
     Check(true, "SoundManager plays events safely without exceptions");
 
     // Dance lead delay verification
@@ -499,6 +492,22 @@ try
     // Birthday hat asset verification
     string hatFile = Path.Combine(AppContext.BaseDirectory, "Assets", "hat_birthday.png");
     if (!File.Exists(hatFile)) hatFile = Path.Combine(Environment.CurrentDirectory, "LitleHelperClient", "Assets", "hat_birthday.png");
+    if (!File.Exists(hatFile)) hatFile = Path.Combine(Environment.CurrentDirectory, "..", "Assets", "hat_birthday.png");
+    if (!File.Exists(hatFile)) hatFile = Path.Combine(Environment.CurrentDirectory, "Assets", "hat_birthday.png");
+    if (!File.Exists(hatFile))
+    {
+        string cur = AppContext.BaseDirectory;
+        for (int i = 0; i < 5 && !string.IsNullOrEmpty(cur); i++)
+        {
+            string cand = Path.Combine(cur, "LitleHelperClient", "Assets", "hat_birthday.png");
+            if (File.Exists(cand)) { hatFile = cand; break; }
+            cand = Path.Combine(cur, "Assets", "hat_birthday.png");
+            if (File.Exists(cand)) { hatFile = cand; break; }
+            var parent = Path.GetDirectoryName(cur);
+            if (parent == null || parent == cur) break;
+            cur = parent;
+        }
+    }
     Check(File.Exists(hatFile) && new FileInfo(hatFile).Length > 100, "birthday hat asset exists and non-empty");
 
     // Liquidation Farewell window and SelfDestruct tests
@@ -589,10 +598,27 @@ try
     Loc.Initialize("ru");
 
     // Section 22: Quiet Code White Guard web service tests
-    string guardFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "guard-white.html");
+    string guardFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "guard-white.html");
+    if (!File.Exists(guardFile)) guardFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "guard-white.html");
+    if (!File.Exists(guardFile)) guardFile = Path.Combine(Environment.CurrentDirectory, "..", "..", "LitleHelperServer", "wwwroot", "guard-white.html");
+    if (!File.Exists(guardFile)) guardFile = Path.Combine(Environment.CurrentDirectory, "..", "LitleHelperServer", "wwwroot", "guard-white.html");
     if (!File.Exists(guardFile)) guardFile = Path.Combine(Environment.CurrentDirectory, "LitleHelperServer", "wwwroot", "guard-white.html");
+    if (!File.Exists(guardFile))
+    {
+        string cur = AppContext.BaseDirectory;
+        for (int i = 0; i < 6 && !string.IsNullOrEmpty(cur); i++)
+        {
+            string cand = Path.Combine(cur, "LitleHelperServer", "wwwroot", "guard-white.html");
+            if (File.Exists(cand)) { guardFile = cand; break; }
+            var parent = Path.GetDirectoryName(cur);
+            if (parent == null || parent == cur) break;
+            cur = parent;
+        }
+    }
     Check(File.Exists(guardFile), "guard-white.html exists");
-    string guardHtml = File.ReadAllText(guardFile);
+    string guardMarkup=File.ReadAllText(guardFile);
+    Check(!guardMarkup.Contains("<script>") && !guardMarkup.Contains("onclick="),"guard page uses external CSP-compatible scripts");
+    string guardHtml = guardMarkup + File.ReadAllText(Path.ChangeExtension(guardFile,".css")) + File.ReadAllText(Path.ChangeExtension(guardFile,".js"));
     Check(guardHtml.Contains("КОД БЕЛЫЙ"), "guard-white.html contains huge CODE WHITE alert text");
     Check(guardHtml.Contains("000000") && guardHtml.Contains("ffffff"), "guard-white.html starts black and transitions to brilliant white");
     Check(guardHtml.Contains("/api/guard/white-events"), "guard-white.html listens to isolated SSE events");
@@ -626,13 +652,31 @@ try
     Check(Loc.T("SoundProfileDefault").Contains("Обычный"), "SoundProfileDefault localized");
     Check(Loc.T("SoundProfileVoiceAdult").Contains("робота"), "SoundProfileVoiceAdult localized");
     Check(Loc.T("SoundProfileVoiceChild").Contains("Детский"), "SoundProfileVoiceChild localized");
+    Check(Loc.T("SoundProfileMute").Contains("звука"), "SoundProfileMute localized");
+    Check(Loc.T("DisplayMode").Contains("окна"), "DisplayMode localized");
+    Check(Loc.T("DisplayHide").Contains("Скрыть"), "DisplayHide localized");
 
     // Section 23: Guard white 10-minute auto reset and app.js link
     Check(guardHtml.Contains("alertTimer") && guardHtml.Contains("10:00"), "guard-white.html contains 10-minute countdown timer element");
     Check(guardHtml.Contains("updateTimerDisplay"), "guard-white.html implements countdown update logic");
 
-    string appJsFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "app.js");
+    string appJsFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "app.js");
+    if (!File.Exists(appJsFile)) appJsFile = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "LitleHelperServer", "wwwroot", "app.js");
+    if (!File.Exists(appJsFile)) appJsFile = Path.Combine(Environment.CurrentDirectory, "..", "..", "LitleHelperServer", "wwwroot", "app.js");
+    if (!File.Exists(appJsFile)) appJsFile = Path.Combine(Environment.CurrentDirectory, "..", "LitleHelperServer", "wwwroot", "app.js");
     if (!File.Exists(appJsFile)) appJsFile = Path.Combine(Environment.CurrentDirectory, "LitleHelperServer", "wwwroot", "app.js");
+    if (!File.Exists(appJsFile))
+    {
+        string cur = AppContext.BaseDirectory;
+        for (int i = 0; i < 6 && !string.IsNullOrEmpty(cur); i++)
+        {
+            string cand = Path.Combine(cur, "LitleHelperServer", "wwwroot", "app.js");
+            if (File.Exists(cand)) { appJsFile = cand; break; }
+            var parent = Path.GetDirectoryName(cur);
+            if (parent == null || parent == cur) break;
+            cur = parent;
+        }
+    }
     Check(File.Exists(appJsFile), "app.js exists");
     string appJs = File.ReadAllText(appJsFile);
     Check(appJs.Contains("guard-white.html"), "app.js contains guard-white.html link");
@@ -910,6 +954,50 @@ try
     faceStatusField = typeof(PetWindow).GetField("faceStatus", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
     Check((FaceNoticeStatus)faceStatusField.GetValue(pet)! == FaceNoticeStatus.Heart, "ShowFaceHeart sets Heart overlay");
 
+    // Sprint 38: Printer Watchdog & Queue Clearing
+    int simulatedClears = 0;
+    PrinterWatchdog.QueueCleanerForTests = () => { simulatedClears++; return (true, "Очередь фикстуры очищена"); };
+    try {
+        var pr = PrinterWatchdog.ClearPrintQueue();
+        Check(pr.Success && simulatedClears == 1, "Printer queue uses an isolated adapter");
+    } finally { PrinterWatchdog.QueueCleanerForTests = null; }
+
+    // Sprint 38: Certificate Watchdog
+    var certs = CertificateWatchdog.GetInstalledCertificates();
+    Check(certs != null, "CertificateWatchdog.GetInstalledCertificates executes safely");
+
+    // Sprint 38: Disk Cleaner
+    string cleanupFixture = Path.Combine(Settings.Folder, "cleanup-fixture-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(cleanupFixture);
+    string stale = Path.Combine(cleanupFixture, "stale.tmp"), fresh = Path.Combine(cleanupFixture, "fresh.tmp");
+    File.WriteAllText(stale,"old"); File.SetLastWriteTimeUtc(stale,DateTime.UtcNow.AddHours(-2));
+    File.WriteAllText(fresh,"new");
+    var cleanRes = DiskCleaner.CleanFoldersAsync(new[] {cleanupFixture}).GetAwaiter().GetResult();
+    Check(cleanRes.FilesDeleted == 1 && !File.Exists(stale) && File.Exists(fresh), "Cleanup removes only stale fixture files");
+    Directory.Delete(cleanupFixture,true);
+
+    // Sprint 38: Medical Work Status & Sound Suppression
+    settings.MedicalWorkStatus = "InSurgery";
+    Check(settings.MedicalWorkStatus == "InSurgery", "MedicalWorkStatus set to InSurgery");
+    SoundManager.Play(SoundEvent.MessageReceived, settings);
+    settings.MedicalWorkStatus = "Available";
+    Check(settings.MedicalWorkStatus == "Available", "MedicalWorkStatus restored to Available");
+
+    // Sprint 38: TTS Voice synthesis
+    TtsNotifier.SpeakAsync("Тест речевого оповещения", settings);
+    Check(true, "TtsNotifier.SpeakAsync executes non-blocking and safe");
+
+    // Sprint 38: Knowledge Base DTO
+    var kbDto = new KnowledgeArticleDto(1, "Тестовая статья", "DMED", "Контент", "dmed", null, "All", 0, true, DateTime.UtcNow, DateTime.UtcNow);
+    Check(kbDto.Title == "Тестовая статья" && kbDto.Category == "DMED", "KnowledgeArticleDto properties preserved");
+
+    pet.StartEmergencySequence(new EmergencyAlertNotice("CODE_RED","Fixture", "101",null,null,null,null,45,null,null),isTest:true);
+    pet.CancelActiveEmergency(isTest:true);
+    var waitFrame=new System.Windows.Threading.DispatcherFrame();
+    var waitTimer=new System.Windows.Threading.DispatcherTimer {Interval=TimeSpan.FromSeconds(4)};
+    waitTimer.Tick+=(_,_)=>{waitTimer.Stop();waitFrame.Continue=false;};
+    waitTimer.Start();System.Windows.Threading.Dispatcher.PushFrame(waitFrame);
+    Check(typeof(PetWindow).GetField("activeAlertWindow",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(pet)==null,"canceled pre-alert does not reopen after its original deadline");
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

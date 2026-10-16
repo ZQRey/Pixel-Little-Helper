@@ -21,7 +21,7 @@ public sealed class AdPasswordService(IntegrationSettings settings, ILogger<AdPa
         return (true, "Пароль соответствует политике безопасности.");
     }
 
-    public async Task<(bool Success, string Message)> ChangePasswordAsync(string rawUsername, string newPassword, CancellationToken token = default)
+    public async Task<(bool Success, string Message)> ChangePasswordAsync(string rawUsername, string newPassword, string currentPassword, CancellationToken token = default)
     {
         var (valid, policyMsg) = ValidatePasswordPolicy(newPassword);
         if (!valid)
@@ -29,16 +29,15 @@ public sealed class AdPasswordService(IntegrationSettings settings, ILogger<AdPa
             return (false, policyMsg);
         }
 
+        if(string.IsNullOrWhiteSpace(currentPassword))return (false,"Введите текущий пароль.");
         var options = settings.Ad();
         if (!options.Enabled || string.IsNullOrWhiteSpace(options.Host))
         {
             return (false, "Интеграция с Active Directory не настроена или отключена на сервере.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.AdminUser) || string.IsNullOrWhiteSpace(options.AdminPassword))
-        {
-            return (false, "В настройках сервера не указаны логин или пароль администратора домена для смены паролей пользователей.");
-        }
+        if (string.IsNullOrWhiteSpace(currentPassword))
+            return (false, "Введите текущий пароль.");
 
         string account = AdAuthentication.Account(rawUsername, options);
 
@@ -50,11 +49,9 @@ public sealed class AdPasswordService(IntegrationSettings settings, ILogger<AdPa
         {
             await connection.ConnectAsync(options.Host, options.Port, timeout.Token);
 
-            string adminBind = options.AdminUser.Contains('@') || options.AdminUser.Contains('\\')
-                ? options.AdminUser
-                : options.AdminUser + "@" + options.Domain;
-
-            await connection.BindAsync(adminBind, options.AdminPassword, timeout.Token);
+            // Bind as the account whose password is being changed; a machine key
+            // alone never grants a domain password reset.
+            await connection.BindAsync(account + "@" + options.Domain, currentPassword, timeout.Token);
 
             var constraints = connection.SearchConstraints;
             constraints.ReferralFollowing = false;
@@ -83,17 +80,17 @@ public sealed class AdPasswordService(IntegrationSettings settings, ILogger<AdPa
 
             // In Active Directory, password must be quoted UTF-16LE bytes
             byte[] encodedPassword = Encoding.Unicode.GetBytes($"\"{newPassword}\"");
-            var attribute = new LdapAttribute("unicodePwd", encodedPassword);
-            var mod = new LdapModification(LdapModification.Replace, attribute);
-
-            await connection.ModifyAsync(entry.Dn, mod, timeout.Token);
-
-            logger.LogInformation("Password successfully changed for AD user {Account} under admin {Admin}", account, options.AdminUser);
+            var changes = new[] {
+                new LdapModification(LdapModification.Delete, new LdapAttribute("unicodePwd", Encoding.Unicode.GetBytes($"\"{currentPassword}\""))),
+                new LdapModification(LdapModification.Add, new LdapAttribute("unicodePwd", encodedPassword))
+            };
+            await connection.ModifyAsync(entry.Dn, changes, timeout.Token);
+            logger.LogInformation("AD self-service password change completed for {Account}", account);
             return (true, "Пароль успешно изменён!");
         }
         catch (LdapException ex)
         {
-            logger.LogWarning(ex, "LDAP password modification failed for user {Account}: {Error}", account, ex.LdapErrorMessage);
+            logger.LogWarning("LDAP password modification failed for user {Account}, code {Code}", account, ex.ResultCode);
 
             string err = ex.LdapErrorMessage ?? "";
             if (err.Contains("0000052D", StringComparison.OrdinalIgnoreCase))
@@ -105,12 +102,12 @@ public sealed class AdPasswordService(IntegrationSettings settings, ILogger<AdPa
                 return (false, "Отказано в доступе. У учётной записи администратора домена недостаточно прав для сброса пароля.");
             }
 
-            return (false, "Не удалось изменить пароль в домене: " + (string.IsNullOrWhiteSpace(ex.Message) ? "ошибка контроллера AD" : ex.Message));
+            return (false, "Не удалось изменить пароль: проверьте текущий пароль и требования домена.");
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Unexpected error changing AD password for {Account}", account);
-            return (false, "Ошибка сервера при обращении к Active Directory: " + ex.Message);
+            logger.LogError("AD password change failed for {Account}: {Error}", account,ex.GetType().Name);
+            return (false, "Не удалось связаться с контроллером домена.");
         }
     }
 }

@@ -392,6 +392,13 @@ internal sealed class CompanionChatWindow : Window
         string text = inputTextBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text)) return;
 
+        var passwordIntent=CompanionBotEngine.GenerateResponse(text,settings.FirstStartupDate,isAwaitingPassword);
+        if(passwordIntent.IsPromptingPassword || passwordIntent.Action==CompanionBotAction.ChangePassword) {
+            inputTextBox.Text="";isAwaitingPassword=false;
+            var dialog=new DomainPasswordWindow {Owner=this};
+            if(dialog.ShowDialog()==true)await ExecutePasswordChangeAsync(dialog.NewPassword,dialog.CurrentPassword);
+            return;
+        }
         inputTextBox.Text = "";
         userTypingIndicator.Visibility = Visibility.Collapsed;
         AddUserBubble(text, DateTime.UtcNow);
@@ -430,13 +437,16 @@ internal sealed class CompanionChatWindow : Window
 
         ScrollToBottom();
 
-        if (response.Action == CompanionBotAction.ChangePassword && !string.IsNullOrWhiteSpace(response.TargetPassword))
+        if (response.IsPromptingPassword || response.Action == CompanionBotAction.ChangePassword)
         {
-            await ExecutePasswordChangeAsync(response.TargetPassword);
+            isAwaitingPassword = false;
+            var dialog = new DomainPasswordWindow { Owner = this };
+            if (dialog.ShowDialog() == true)
+                await ExecutePasswordChangeAsync(dialog.NewPassword, dialog.CurrentPassword);
         }
     }
 
-    private async Task ExecutePasswordChangeAsync(string targetPassword)
+    private async Task ExecutePasswordChangeAsync(string targetPassword, string currentPassword)
     {
         isBotTyping = true;
         typingIndicator.Visibility = Visibility.Visible;
@@ -450,7 +460,7 @@ internal sealed class CompanionChatWindow : Window
         try
         {
             using var api = new ApiClient(settings);
-            (ok, error) = await api.ChangeAdPasswordAsync(Environment.UserName, targetPassword);
+            (ok, error) = await api.ChangeAdPasswordAsync(Environment.UserName, targetPassword, currentPassword);
         }
         catch (Exception ex)
         {

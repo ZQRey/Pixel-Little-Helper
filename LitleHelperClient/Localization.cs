@@ -173,6 +173,13 @@ public static class Loc
             [AppLanguage.English] = "Window Mode",
             [AppLanguage.Chinese] = "窗口模式"
         },
+        ["DisplayMode"] = new()
+        {
+            [AppLanguage.Russian] = "Положение окна",
+            [AppLanguage.Kazakh] = "Терезе орны",
+            [AppLanguage.English] = "Window Mode",
+            [AppLanguage.Chinese] = "窗口模式"
+        },
         ["DisplayTopmost"] = new()
         {
             [AppLanguage.Russian] = "Поверх всех окон",
@@ -193,6 +200,20 @@ public static class Loc
             [AppLanguage.Kazakh] = "Артқы фонда",
             [AppLanguage.English] = "Background",
             [AppLanguage.Chinese] = "置于底层"
+        },
+        ["DisplayHide"] = new()
+        {
+            [AppLanguage.Russian] = "Скрыть помощника",
+            [AppLanguage.Kazakh] = "Көмекшіні жасыру",
+            [AppLanguage.English] = "Hide Assistant",
+            [AppLanguage.Chinese] = "隐藏助手"
+        },
+        ["DisplayShow"] = new()
+        {
+            [AppLanguage.Russian] = "Показать помощника",
+            [AppLanguage.Kazakh] = "Көмекшіні көрсету",
+            [AppLanguage.English] = "Show Assistant",
+            [AppLanguage.Chinese] = "显示助手"
         },
 
         // Действия робота
@@ -532,6 +553,13 @@ public static class Loc
             [AppLanguage.Kazakh] = "👶 Бала дауысы",
             [AppLanguage.English] = "👶 Child Voice",
             [AppLanguage.Chinese] = "👶 儿童语音"
+        },
+        ["SoundProfileMute"] = new()
+        {
+            [AppLanguage.Russian] = "🔇 Без звука",
+            [AppLanguage.Kazakh] = "🔇 Дыбыссыз",
+            [AppLanguage.English] = "🔇 Silent",
+            [AppLanguage.Chinese] = "🔇 静音"
         },
         ["NoticePapaSaidSmart"] = new()
         {

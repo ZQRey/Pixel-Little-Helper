@@ -23,6 +23,9 @@ public static class TelegramManagementTests
         public readonly Dictionary<int, int> Assigned = new();
         public readonly Dictionary<int, int> Status = new();
         public readonly List<(string Chat, string Text)> Messages = new();
+        public readonly List<string> Keyboards = new();
+        public readonly List<(string Id, string Text, bool ShowAlert)> AnsweredCallbacks = new();
+        public readonly List<(string Text, string CallbackData)> EditedMarkups = new();
         public int Comments, Solutions, Assignments;
         public bool FailAssignment;
         public string LastContent = "";
@@ -37,7 +40,27 @@ public static class TelegramManagementTests
                 if (path.EndsWith("sendMessage"))
                 {
                     Messages.Add((body.GetProperty("chat_id").GetString()!, body.GetProperty("text").GetString()!));
+                    Keyboards.Add(body.TryGetProperty("reply_markup", out var markup) ? markup.ToString() : "");
                     HasClaimButton |= body.TryGetProperty("reply_markup", out var keyboard) && keyboard.ToString().Contains("claim:");
+                }
+                else if (path.EndsWith("answerCallbackQuery"))
+                {
+                    string id = body.GetProperty("callback_query_id").GetString()!;
+                    string text = body.TryGetProperty("text", out var t) ? t.GetString()! : "";
+                    bool showAlert = body.TryGetProperty("show_alert", out var sa) && sa.GetBoolean();
+                    AnsweredCallbacks.Add((id, text, showAlert));
+                }
+                else if (path.EndsWith("editMessageReplyMarkup"))
+                {
+                    if (body.TryGetProperty("reply_markup", out var markup) &&
+                        markup.TryGetProperty("inline_keyboard", out var kb) &&
+                        kb.GetArrayLength() > 0 && kb[0].GetArrayLength() > 0)
+                    {
+                        var btn = kb[0][0];
+                        string text = btn.GetProperty("text").GetString()!;
+                        string data = btn.GetProperty("callback_data").GetString()!;
+                        EditedMarkups.Add((text, data));
+                    }
                 }
                 return new(HttpStatusCode.OK) { Content = JsonContent.Create(new { ok = true, result }) };
             }
@@ -63,7 +86,8 @@ public static class TelegramManagementTests
             {
                 int id = int.Parse(path.Split('/')[3]);
                 if (path.EndsWith("/Ticket_User")) result = Assigned.GetValueOrDefault(id) == 0 ? Array.Empty<object>() : new object[] { new { type = 2, users_id = Assigned[id] } };
-                else if (path.EndsWith("/ITILFollowup")) result = new[] { new { content = "<p>Комментарий из GLPI</p>" } };
+                else if (path.EndsWith("/ITILFollowup")) result = new[] { new { content = "<p>Комментарий из GLPI</p>", date_creation = "2026-10-10 12:00:00" } };
+                else if (path.Contains("/ITILSolution")) result = new[] { new { content = "<p>Решение из GLPI</p>", date_creation = "2026-10-10 12:30:00" } };
                 else if (request.Method == HttpMethod.Get) result = new { id, status = Status.GetValueOrDefault(id, 1), is_deleted = 0 };
                 else
                 {
@@ -148,11 +172,23 @@ public static class TelegramManagementTests
             Check(transport.Assignments == 0, "administrator without matching branch cannot claim ticket");
             alice.BranchId = branch.Id; await db.SaveChangesAsync(); actor = await handler.ActorAsync(123, default);
             Check(Branches.CanHandle(new PanelUser { Role = Roles.SuperAdmin }, ticket), "super administrator can handle every branch");
+            await handler.HandleAsync(Message(123, "/open"), default);
+            Check(transport.Messages.Last().Chat == "123" && transport.Keyboards.Last().Contains("open:" + ticket.Id), "open tickets listed in private chat");
+            await handler.HandleAsync(Callback(123, ticket.Id, "open"), default);
+            Check(transport.Keyboards.Last().Contains("claim:" + ticket.Id) && !transport.Keyboards.Last().Contains("reply:"), "unassigned ticket card offers claim without reply controls");
+            alice.BranchId = otherBranch.Id; await db.SaveChangesAsync();
+            await handler.HandleAsync(Message(123, "Открытые заявки"), default);
+            Check(transport.Messages.Last().Text.Contains("Открытых заявок в доступных филиалах нет"), "open list respects branch access");
+            alice.BranchId = branch.Id; await db.SaveChangesAsync();
             await telegram.SendTicketAsync(ticket, default); Check(transport.HasClaimButton, "new group notification contains accept button");
             await handler.HandleAsync(Callback(123, ticket.Id, "claim", "supergroup", -999), default);
             Check(transport.Assignments == 0, "accept button from another group is rejected");
             await handler.HandleAsync(Callback(123, ticket.Id, "claim", "supergroup", -100888), default);
             Check(transport.Assigned[100] == 42 && ticket.AssignedUsername == alice.Username && ticket.Status == "2", "accept assigns technician and status in GLPI");
+            Check(transport.EditedMarkups.Any(m => m.Text == "Взял: " + alice.Username && m.CallbackData == "claimed:" + ticket.Id), "claiming ticket edits group button to show technician name");
+            transport.AnsweredCallbacks.Clear();
+            await handler.HandleAsync(Callback(124, ticket.Id, "claimed", "supergroup", -100888), default);
+            Check(transport.AnsweredCallbacks.Any(c => !c.ShowAlert && c.Text.Contains("Заявка уже принята")), "clicking claimed button confirms already claimed");
             await handler.HandleAsync(Callback(124, ticket.Id, "claim", "supergroup", -100888), default);
             Check(transport.Assigned[100] == 42 && transport.Assignments == 1, "second technician cannot take an assigned ticket");
             await handler.HandleAsync(Callback(124, ticket.Id, "reply"), default); Check(!await db.TelegramReplySessions.AnyAsync(s => s.Id == 124), "other technician cannot start a private reply");
@@ -170,6 +206,22 @@ public static class TelegramManagementTests
             var close = Callback(123, ticket.Id, "status").ToString().Replace("status:" + ticket.Id + "\"", "status:" + ticket.Id + ":6\"");
             await handler.HandleAsync(JsonDocument.Parse(close).RootElement, default); Check(ticket.Status == "6", "resolved ticket can be closed through bot");
             await handler.HandleAsync(Callback(123, ticket.Id, "reply"), default); Check(!await db.TelegramReplySessions.AnyAsync(), "closed ticket rejects new replies");
+            Check(TelegramClient.TicketButtonText(new TicketRecord { Status = "1" }) == "Принять", "unassigned open ticket button text is Принять");
+            Check(TelegramClient.TicketButtonCallbackData(new TicketRecord { Id = 77, Status = "1" }) == "claim:77", "unassigned open ticket callback data is claim:77");
+            Check(TelegramClient.TicketButtonText(new TicketRecord { Status = "2", AssignedGlpiUserId = 42, AssignedUsername = "Alice Cooper" }) == "Взял: Alice Cooper", "assigned ticket button text shows technician name");
+            Check(TelegramClient.TicketButtonCallbackData(new TicketRecord { Id = 77, Status = "2", AssignedGlpiUserId = 42 }) == "claimed:77", "assigned ticket callback data is claimed:77");
+            Check(TelegramClient.TicketButtonText(ticket) == "Заявка закрыта", "closed ticket button text is Заявка закрыта");
+            Check(TelegramClient.TicketButtonCallbackData(ticket) == "closed:" + ticket.Id, "closed ticket callback data is closed:id");
+            transport.AnsweredCallbacks.Clear();
+            await handler.HandleAsync(Callback(124, ticket.Id, "closed", "supergroup", -100888), default);
+            Check(transport.AnsweredCallbacks.Any(c => c.ShowAlert && c.Text == "Заявка уже закрыта и принять её нельзя."), "regular admin clicking closed ticket receives alert modal");
+            alice.Role = Roles.SuperAdmin; await db.SaveChangesAsync();
+            transport.AnsweredCallbacks.Clear();
+            int msgsBeforeReport = transport.Messages.Count;
+            await handler.HandleAsync(Callback(123, ticket.Id, "closed", "supergroup", -100888), default);
+            Check(transport.AnsweredCallbacks.Any(c => !c.ShowAlert), "superadmin clicking closed ticket does not get modal alert");
+            Check(transport.Messages.Skip(msgsBeforeReport).Any(m => m.Chat == "123" && m.Text.Contains("Отчёт по закрытой заявке GLPI #" + ticket.GlpiId) && m.Text.Contains("Время активности:") && m.Text.Contains("Сообщения в заявке:")), "superadmin receives detailed private report about closed ticket");
+            alice.Role = Roles.Admin; await db.SaveChangesAsync();
             transport.Status[100] = 4; transport.Assigned[100] = 43; await management.SyncAsync(ticket, default);
             Check(ticket.Status == "4" && ticket.AssignedGlpiUserId == 43 && ticket.AssignedUsername == "", "external GLPI status and reassignment replace local cache");
             var race = new TicketRecord { GlpiId = 101 }; db.Tickets.Add(race); await db.SaveChangesAsync();
@@ -197,6 +249,12 @@ public static class TelegramManagementTests
             }
             Check(transport.Comments == before + 1, "restart preserves deduplication of GLPI side effects");
             Check(!transport.Messages.Any(m => m.Text == "Готово"), "ticket callbacks do not send redundant Done messages");
+            alice.Role = Roles.Admin; alice.IsActive = true; alice.BranchId = branch.Id;
+            var unassigned = new TicketRecord { GlpiId = 900, BranchId = branch.Id, Title = "Private claim" };
+            db.Tickets.Add(unassigned); await db.SaveChangesAsync();
+            await handler.HandleAsync(Callback(123, unassigned.Id, "claim"), default);
+            Check(transport.Assigned.GetValueOrDefault(900) == 42 && unassigned.AssignedUsername == alice.Username,
+                "unassigned ticket can be claimed from private chat");
             Console.WriteLine("ALL TELEGRAM MANAGEMENT CHECKS PASSED");
         }
         finally { System.IO.Directory.Delete(root, true); }

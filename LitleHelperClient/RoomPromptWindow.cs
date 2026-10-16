@@ -11,6 +11,7 @@ public sealed class RoomPromptWindow : Window
     private readonly HubConnectionService hub;
     private readonly TextBox roomBox;
     private readonly TextBlock errorText;
+    private bool saving;
 
     public RoomPromptWindow(Settings settings, HubConnectionService hub)
     {
@@ -79,7 +80,7 @@ public sealed class RoomPromptWindow : Window
         // Description
         var descBlock = new TextBlock
         {
-            Text = "Для точной маршрутизации заявок и вызова экстренных служб укажите номер вашего кабинета или поста:",
+            Text = "Например: 204, Процедурный, Приёмный покой. Кабинет нужен для маршрутизации заявок и экстренных вызовов.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 12,
             Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)), // Slate 300
@@ -110,9 +111,9 @@ public sealed class RoomPromptWindow : Window
             CaretBrush = Brushes.White,
             MaxLength = 50
         };
-        roomBox.KeyDown += (_, e) =>
+        roomBox.KeyDown += async (_, e) =>
         {
-            if (e.Key == Key.Enter) SaveAndClose();
+            if (e.Key == Key.Enter) { e.Handled = true; await SaveAndCloseAsync(); }
             else if (e.Key == Key.Escape) Close();
         };
 
@@ -167,8 +168,15 @@ public sealed class RoomPromptWindow : Window
             BorderThickness = new Thickness(0),
             Cursor = Cursors.Hand
         };
-        saveBtn.Click += (_, _) => SaveAndClose();
+        saveBtn.Click += async (_, _) => { saveBtn.IsEnabled = false; try { await SaveAndCloseAsync(); } finally { saveBtn.IsEnabled = true; } };
 
+        roomBox.TextChanged += (_,_) => {
+            bool valid=CabinetValidation.Valid(roomBox.Text,Environment.MachineName);
+            saveBtn.IsEnabled=valid && !saving;
+            errorText.Visibility=valid?Visibility.Collapsed:Visibility.Visible;
+            if(!valid)errorText.Text="Укажите кабинет (1–50 символов), а не имя компьютера";
+        };
+        saveBtn.IsEnabled=CabinetValidation.Valid(roomBox.Text,Environment.MachineName);
         buttonPanel.Children.Add(cancelBtn);
         buttonPanel.Children.Add(saveBtn);
         Grid.SetRow(buttonPanel, 4);
@@ -185,21 +193,29 @@ public sealed class RoomPromptWindow : Window
         };
     }
 
-    private void SaveAndClose()
+    private async Task SaveAndCloseAsync()
     {
+        if (saving) return;
         string val = roomBox.Text?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(val))
+        if (!CabinetValidation.Valid(val, Environment.MachineName))
         {
-            errorText.Text = "Пожалуйста, введите номер кабинета или название отделения";
+            errorText.Text = "Введите кабинет (1–50 символов), например: 204, Процедурный, Приёмный покой";
             errorText.Visibility = Visibility.Visible;
             roomBox.Focus();
             return;
         }
 
-        settings.TicketRoom = val;
-        settings.Save();
-        _ = hub.UpdateClientRoomAsync(val);
-        DialogResult = true;
-        Close();
+        saving = true;
+        try
+        {
+            await hub.UpdateClientRoomAsync(val,throwOnFailure:true);
+            settings.TicketRoom = val;
+            settings.Save();
+            DialogResult = true;
+            Close();
+        }
+        catch (Exception ex) { errorText.Text = "Не удалось сохранить кабинет: " + ex.Message; errorText.Visibility = Visibility.Visible; }
+        finally {saving=false;}
+
     }
 }

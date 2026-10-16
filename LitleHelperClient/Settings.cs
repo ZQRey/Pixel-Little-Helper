@@ -21,6 +21,12 @@ public sealed class Settings
     public bool ChatPreview { get; set; } = true;
     public bool ChatDoNotDisturb { get; set; }
     public bool ChatUrgentOverridesQuiet { get; set; } = true;
+    public string MedicalWorkStatus { get; set; } = "Available";
+    public List<MedicalStatusConfig> MedicalStatuses { get; set; } = MedicalStatusConfig.Defaults();
+    [System.Text.Json.Serialization.JsonIgnore] public bool MedicalSoundsMuted => MedicalStatuses.FirstOrDefault(s => s.IsActive && s.Key == MedicalWorkStatus)?.MuteSounds == true;
+    [System.Text.Json.Serialization.JsonIgnore] public bool MedicalTtsMuted => MedicalStatuses.FirstOrDefault(s => s.IsActive && s.Key == MedicalWorkStatus)?.MuteTts == true;
+    public bool EnableTtsEmergencyAlerts { get; set; } = true;
+    public bool EnableEyeCareReminders { get; set; } = true;
     public List<string> ChatCommandsShown { get; set; } = new();
     public List<string> UrgentNotificationsShown { get; set; } = new();
     public bool ChatWindowsNotifications { get; set; } = true;
@@ -82,12 +88,18 @@ public sealed class Settings
             string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment))
             settings.ServerUrl = uri.AbsoluteUri.TrimEnd('/');
     }
-    public void Save() => AtomicWrite(Path.Combine(Folder, "config.json"), JsonSerializer.Serialize(this, Json));
+    private static readonly object writeGate = new();
+    public void Save() { lock (writeGate) AtomicWrite(Path.Combine(Folder, "config.json"), JsonSerializer.Serialize(this, Json)); }
     public static void AtomicWrite(string path, string value)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path + ".tmp", value);
-        File.Move(path + ".tmp", path, true);
+        lock (writeGate)
+        {
+            path = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try { File.WriteAllText(temporary, value); File.Move(temporary, path, true); }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
     }
     public static bool FirstRunCompleted
     {

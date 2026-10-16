@@ -48,6 +48,16 @@ internal sealed class MessengerWindow : Window
     private Popup? emojiPopup;
     private DateTime typingSent;
 
+    private readonly AudioRecorder audioRecorder = new();
+    private Border? recordingBar;
+    private TextBlock? recordingTimerText;
+    private System.Windows.Threading.DispatcherTimer? recordingUiTimer;
+    private DateTime recordingStartTime;
+    private Border? composerCardRef;
+    private readonly MediaPlayer voicePlayer = new();
+    private string? currentPlayingVoiceUrl;
+    private Button? currentPlayingButton;
+
     internal event Action<HelperEmoji>? EmojiInserted;
     internal int ActivePeer => IsActive ? peer : 0;
 
@@ -73,9 +83,23 @@ internal sealed class MessengerWindow : Window
         Content = root;
         ApplyTheme();
 
+        voicePlayer.MediaEnded += (_, _) =>
+        {
+            if (currentPlayingButton != null) currentPlayingButton.Content = "▶";
+            currentPlayingButton = null;
+            currentPlayingVoiceUrl = null;
+        };
+        voicePlayer.MediaFailed += (_, _) =>
+        {
+            if (currentPlayingButton != null) currentPlayingButton.Content = "▶";
+            currentPlayingButton = null;
+            currentPlayingVoiceUrl = null;
+        };
+
         client.Changed += OnChanged;
         client.MessageReceived += OnMessage;
         client.TypingReceived += OnTyping;
+        client.IncomingCallReceived += OnIncomingCall;
         Loaded += async (_, _) =>
         {
             _ = client.SetWindowOpenAsync(true);
@@ -94,6 +118,9 @@ internal sealed class MessengerWindow : Window
             client.Changed -= OnChanged;
             client.MessageReceived -= OnMessage;
             client.TypingReceived -= OnTyping;
+            client.IncomingCallReceived -= OnIncomingCall;
+            audioRecorder.Dispose();
+            try { voicePlayer.Close(); } catch { }
             try { if (Directory.Exists(clipboardDirectory)) Directory.Delete(clipboardDirectory, true); } catch (IOException ex) { Settings.Log(ex); }
         };
     }
@@ -156,6 +183,9 @@ internal sealed class MessengerWindow : Window
     private void OnChanged() => Dispatcher.BeginInvoke(new Action(async () => { if (!closing) await RefreshAsync(); }));
     private void OnMessage(ChatEntry message)
     {
+        bool hasVisibleContent = !string.IsNullOrWhiteSpace(message.Body) || (message.Attachments != null && message.Attachments.Count > 0);
+        if (!hasVisibleContent) return;
+
         if (message.SenderId != client.UserId)
         {
             if (message.IsUrgent)
@@ -184,6 +214,39 @@ internal sealed class MessengerWindow : Window
         {
             var contact = contacts.FirstOrDefault(c => c.Id == peer);
             UpdateContactStatus(contact);
+        }
+    }));
+
+    private void OnIncomingCall(System.Text.Json.JsonElement call) => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        if (closing) return;
+        try
+        {
+            string callId = call.TryGetProperty("callId", out var cId) ? (cId.GetString() ?? "") : "";
+            int callerId = call.TryGetProperty("callerId", out var clId) ? clId.GetInt32() : 0;
+            string callerName = call.TryGetProperty("callerName", out var cn) ? (cn.GetString() ?? "Собеседник") : "Собеседник";
+            bool isVideo = call.TryGetProperty("isVideo", out var iv) && iv.GetBoolean();
+
+            if (callerId == client.UserId || callerId == 0) return;
+
+            SoundManager.Play(SoundEvent.Urgent, settings);
+
+            string title = isVideo ? "Входящий видеозвонок" : "Входящий аудиозвонок";
+            string prompt = $"Входящий {(isVideo ? "видеозвонок" : "аудиозвонок")} от: {callerName}\n\nПринять вызов?";
+
+            var result = MessageBox.Show(this, prompt, title, MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result == MessageBoxResult.Yes)
+            {
+                VideoCallWindow.OpenCall(client.ServerAddress, callerId, callerName, isVideo, isCaller: false, client.UserId, callId, client.Token);
+            }
+            else
+            {
+                _ = client.RejectCallAsync(callId, callerId);
+            }
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
         }
     }));
 
@@ -718,8 +781,19 @@ internal sealed class MessengerWindow : Window
         };
         var headerDock = new DockPanel();
 
-        // Right side header buttons: Search & Info
+        // Right side header buttons: Call, Video, Search & Info
         var headerRight = new StackPanel { Orientation = Orientation.Horizontal };
+
+        var callAudioBtn = ModernButton("📞", (_, _) => StartCall(false), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
+        callAudioBtn.ToolTip = "Аудиозвонок";
+        callAudioBtn.Margin = new Thickness(0, 0, 6, 0);
+        headerRight.Children.Add(callAudioBtn);
+
+        var callVideoBtn = ModernButton("🎥", (_, _) => StartCall(true), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
+        callVideoBtn.ToolTip = "Видеозвонок";
+        callVideoBtn.Margin = new Thickness(0, 0, 6, 0);
+        headerRight.Children.Add(callVideoBtn);
+
         var searchInChatBtn = ModernButton("⌕", (_, _) => SearchHistory(), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
         searchInChatBtn.ToolTip = "Поиск по переписке";
         searchInChatBtn.Margin = new Thickness(0, 0, 6, 0);
@@ -836,6 +910,22 @@ internal sealed class MessengerWindow : Window
         DockPanel.SetDock(emojiBtn, Dock.Right);
         composerDock.Children.Add(emojiBtn);
 
+        // Voice message button
+        var voiceBtn = new Button
+        {
+            Content = "🎙️",
+            FontSize = 17,
+            Foreground = muted,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Width = 34, Height = 36,
+            Cursor = Cursors.Hand,
+            ToolTip = "Записать голосовое сообщение"
+        };
+        voiceBtn.Click += (_, _) => StartVoiceRecording();
+        DockPanel.SetDock(voiceBtn, Dock.Right);
+        composerDock.Children.Add(voiceBtn);
+
         // File Attach Button
         var fileBtn = new Button
         {
@@ -914,7 +1004,45 @@ internal sealed class MessengerWindow : Window
 
         composerDock.Children.Add(inputGrid);
         composerCard.Child = composerDock;
+        composerCardRef = composerCard;
         composerOuter.Children.Add(composerCard);
+
+        // Recording Bar (voice recording active state)
+        recordingBar = new Border
+        {
+            Background = surface,
+            BorderBrush = (Brush)new BrushConverter().ConvertFromString("#F43F5E")!,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(16),
+            Margin = new Thickness(14, 4, 14, 10),
+            Padding = new Thickness(12, 6, 12, 6),
+            Visibility = Visibility.Collapsed,
+            Effect = new DropShadowEffect { BlurRadius = 14, ShadowDepth = 2, Opacity = 0.12, Color = Colors.Black }
+        };
+        var recDock = new DockPanel();
+
+        var cancelRecBtn = ModernButton("✕", (_, _) => StopVoiceRecording(cancel: true), cornerRadius: 8, padding: new Thickness(12, 6, 12, 6));
+        cancelRecBtn.ToolTip = "Отменить запись";
+        cancelRecBtn.Foreground = (Brush)new BrushConverter().ConvertFromString("#F43F5E")!;
+        DockPanel.SetDock(cancelRecBtn, Dock.Left);
+        recDock.Children.Add(cancelRecBtn);
+
+        var sendRecBtn = ModernButton("✓", async (_, _) => await StopVoiceRecordingAsync(cancel: false), primary: true, cornerRadius: 8, padding: new Thickness(14, 6, 14, 6));
+        sendRecBtn.ToolTip = "Отправить голосовое сообщение";
+        DockPanel.SetDock(sendRecBtn, Dock.Right);
+        recDock.Children.Add(sendRecBtn);
+
+        var recCenter = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var redDot = new System.Windows.Shapes.Ellipse { Width = 10, Height = 10, Fill = (Brush)new BrushConverter().ConvertFromString("#EF4444")!, Margin = new Thickness(0, 0, 8, 0) };
+        recCenter.Children.Add(redDot);
+        recordingTimerText = new TextBlock { Text = "00:00", FontWeight = FontWeights.Bold, FontSize = 14, Foreground = ink, VerticalAlignment = VerticalAlignment.Center };
+        recCenter.Children.Add(recordingTimerText);
+        var recLabel = new TextBlock { Text = " · Запись голоса…", FontSize = 13, Foreground = muted, VerticalAlignment = VerticalAlignment.Center };
+        recCenter.Children.Add(recLabel);
+        recDock.Children.Add(recCenter);
+
+        recordingBar.Child = recDock;
+        composerOuter.Children.Add(recordingBar);
 
         // Error line
         error = new TextBlock { Foreground = (Brush)new BrushConverter().ConvertFromString("#F43F5E")!, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(16, 0, 16, 4), FontSize = 12 };
@@ -923,6 +1051,87 @@ internal sealed class MessengerWindow : Window
         Grid.SetColumn(composerOuter, 2);
         Grid.SetRow(composerOuter, 2);
         root.Children.Add(composerOuter);
+    }
+
+    private void StartVoiceRecording()
+    {
+        if (peer == 0 || audioRecorder.IsRecording || sending) return;
+        try
+        {
+            audioRecorder.Start();
+            recordingStartTime = DateTime.UtcNow;
+            if (recordingTimerText != null) recordingTimerText.Text = "00:00";
+            if (composerCardRef != null) composerCardRef.Visibility = Visibility.Collapsed;
+            if (recordingBar != null) recordingBar.Visibility = Visibility.Visible;
+
+            recordingUiTimer?.Stop();
+            recordingUiTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(0.5) };
+            recordingUiTimer.Tick += (_, _) =>
+            {
+                var elapsed = DateTime.UtcNow - recordingStartTime;
+                if (recordingTimerText != null)
+                    recordingTimerText.Text = $"{(int)elapsed.TotalMinutes:D2}:{elapsed.Seconds:D2}";
+                if (elapsed >= TimeSpan.FromMinutes(5)) _ = StopVoiceRecordingAsync(cancel: false);
+            };
+            recordingUiTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            if (error != null) error.Text = "Не удалось начать запись: " + ex.Message;
+        }
+    }
+
+    private void StopVoiceRecording(bool cancel)
+    {
+        recordingUiTimer?.Stop();
+        if (recordingBar != null) recordingBar.Visibility = Visibility.Collapsed;
+        if (composerCardRef != null) composerCardRef.Visibility = Visibility.Visible;
+        if (cancel) audioRecorder.Cancel();
+    }
+
+    private async Task StopVoiceRecordingAsync(bool cancel)
+    {
+        StopVoiceRecording(cancel);
+        if (cancel) return;
+
+        try
+        {
+            var (wavPath, duration, waveformJson) = audioRecorder.Stop();
+            if (!File.Exists(wavPath) || duration < 1) return;
+
+            sending = true;
+            if (error != null) error.Text = "Отправка голосового…";
+            int target = peer;
+
+            await client.SendFilesAsync(target, "", Guid.NewGuid().ToString("N"), [wavPath], isVoice: true, duration: duration, waveform: waveformJson);
+            if (error != null) error.Text = "";
+            await LoadHistoryAsync();
+            SoundManager.Play(SoundEvent.MessageSent, settings);
+        }
+        catch (Exception ex)
+        {
+            if (error != null) error.Text = "Ошибка отправки голосового: " + ex.Message;
+        }
+        finally
+        {
+            sending = false;
+        }
+    }
+
+    private void StartCall(bool isVideo)
+    {
+        if (peer == 0) return;
+        try
+        {
+            var contact = contacts.FirstOrDefault(c => c.Id == peer);
+            string targetName = contact?.FullName ?? (peer < 0 ? "Группа" : "Собеседник");
+            string callId = Guid.NewGuid().ToString("N");
+            VideoCallLauncher.LaunchCall(client.ServerAddress, peer, targetName, isVideo, isCaller: true, client.UserId, callId, client.Token);
+        }
+        catch (Exception ex)
+        {
+            if (error != null) error.Text = "Не удалось запустить звонок: " + ex.Message;
+        }
     }
 
     private void BuildDrawer()
@@ -1265,6 +1474,20 @@ internal sealed class MessengerWindow : Window
             // Attachments
             foreach (var attachment in message.Attachments ?? [])
             {
+                if (attachment.IsVoice)
+                {
+                    var voiceBubble = BuildVoiceMessageControl(attachment, mine);
+                    panel.Children.Add(voiceBubble);
+                    continue;
+                }
+
+                if (attachment.IsVideoNote)
+                {
+                    var videoNoteBubble = BuildVideoNoteControl(attachment, mine);
+                    panel.Children.Add(videoNoteBubble);
+                    continue;
+                }
+
                 var fileRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 2) };
                 var file = ModernButton(attachment.Label, async (_, _) => await OpenFileAsync(attachment), cornerRadius: 8, padding: new Thickness(10, 6, 10, 6));
                 file.ToolTip = attachment.IsImage ? "Просмотр изображения" : (attachment.IsTextDocument || attachment.IsPdf ? "Предпросмотр документа" : "Скачать/открыть файл");
@@ -1512,34 +1735,46 @@ internal sealed class MessengerWindow : Window
         if (pendingId == null || pendingText != signature || pendingPeer != peer) { pendingId = Guid.NewGuid().ToString("N"); pendingText = signature; pendingPeer = peer; }
         sending = true;
         send.IsEnabled = false;
-        input.IsEnabled = false;
-        if (users != null) users.IsEnabled = false;
+        // Keep input and users list enabled to prevent WPF Aero default style from flashing white
+        input.Clear();
+        var filesToSend = pendingFiles.ToArray();
+        pendingFiles.Clear();
+        RenderPendingFiles();
         if (error != null) error.Text = "Отправляется…";
-        pendingMessage = new ChatEntry(0, client.UserId, peer, text.Length > 0 ? text : "Вложения: " + string.Join(", ", pendingFiles.Select(Path.GetFileName)), pendingId, DateTime.UtcNow, null);
+        pendingMessage = new ChatEntry(0, client.UserId, peer, text.Length > 0 ? text : "Вложения: " + string.Join(", ", filesToSend.Select(Path.GetFileName)), pendingId, DateTime.UtcNow, null);
         pendingFailed = false;
         RenderHistory(true);
 
         int target = peer;
         try
         {
-            if (pendingFiles.Count == 0) await client.SendAsync(target, text, pendingId);
-            else await client.SendFilesAsync(target, text, pendingId, pendingFiles.ToArray());
+            if (filesToSend.Length == 0) await client.SendAsync(target, text, pendingId);
+            else await client.SendFilesAsync(target, text, pendingId, filesToSend);
             pendingMessage = null;
-            if (peer == target && input.Text.Trim() == text) { input.Clear(); pendingFiles.Clear(); RenderPendingFiles(); pendingId = null; }
+            pendingId = null;
+            if (error != null) error.Text = "";
             await LoadHistoryAsync();
             SoundManager.Play(SoundEvent.MessageSent, settings);
         }
         catch (Exception ex)
         {
             pendingFailed = true;
+            // Restore text and files on failure so user doesn't lose the draft
+            if (peer == target && string.IsNullOrEmpty(input.Text))
+            {
+                input.Text = text;
+                input.CaretIndex = text.Length;
+                if (filesToSend.Length > 0) { pendingFiles.AddRange(filesToSend); RenderPendingFiles(); }
+            }
             if (error != null) error.Text = ex.Message;
             RenderHistory(true);
         }
         finally
         {
             sending = false;
-            if (users != null) users.IsEnabled = true;
-            input.IsEnabled = send.IsEnabled = contacts.FirstOrDefault(c => c.Id == peer)?.IsActive == true;
+            bool active = contacts.FirstOrDefault(c => c.Id == peer)?.IsActive == true;
+            if (input != null) input.IsEnabled = active;
+            if (send != null) send.IsEnabled = active && (!string.IsNullOrWhiteSpace(input?.Text) || pendingFiles.Count > 0);
         }
     }
 
@@ -1849,5 +2084,177 @@ internal sealed class MessengerWindow : Window
             finally { if (File.Exists(path)) { try { File.Delete(path); } catch { } } }
         }
         catch (Exception ex) { if (error != null) error.Text = "Не удалось открыть вложение: " + ex.Message; }
+    }
+
+    private UIElement BuildVoiceMessageControl(ChatAttachment attachment, bool mine)
+    {
+        var card = new Border
+        {
+            Background = mine ? (Brush)new BrushConverter().ConvertFromString("#20FFFFFF")! : raised,
+            BorderBrush = line,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(8, 6, 12, 6),
+            Margin = new Thickness(0, 4, 0, 4),
+            MinWidth = 220
+        };
+
+        var row = new DockPanel();
+
+        var playBtn = new Button
+        {
+            Content = "▶",
+            Width = 36, Height = 36,
+            FontSize = 14,
+            FontWeight = FontWeights.Bold,
+            Foreground = mine ? Brushes.White : ink,
+            Background = mine ? (Brush)new BrushConverter().ConvertFromString("#40FFFFFF")! : (Brush)new BrushConverter().ConvertFromString("#20818CF8")!,
+            BorderThickness = new Thickness(0),
+            Cursor = Cursors.Hand
+        };
+        DockPanel.SetDock(playBtn, Dock.Left);
+        row.Children.Add(playBtn);
+
+        int dur = attachment.DurationSeconds;
+        string durText = dur > 0 ? $"{dur / 60:D2}:{dur % 60:D2}" : "Голосовое";
+        var timerTb = new TextBlock
+        {
+            Text = durText,
+            FontSize = 11,
+            Foreground = mine ? (Brush)new BrushConverter().ConvertFromString("#E0E7FF")! : muted,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        DockPanel.SetDock(timerTb, Dock.Right);
+        row.Children.Add(timerTb);
+
+        // Waveform bars
+        var waveStack = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 8, 0),
+            Height = 24
+        };
+
+        List<double> bars = [];
+        try
+        {
+            if (!string.IsNullOrEmpty(attachment.Waveform))
+                bars = System.Text.Json.JsonSerializer.Deserialize<List<double>>(attachment.Waveform) ?? [];
+        }
+        catch { }
+
+        if (bars.Count == 0)
+        {
+            bars = [0.3, 0.5, 0.7, 0.4, 0.8, 0.6, 0.9, 0.5, 0.3, 0.6, 0.8, 0.4, 0.7, 0.5, 0.3];
+        }
+
+        foreach (double h in bars.Take(25))
+        {
+            double barHeight = Math.Max(4, Math.Min(22, h * 22));
+            var bar = new Border
+            {
+                Width = 3,
+                Height = barHeight,
+                CornerRadius = new CornerRadius(1.5),
+                Background = mine ? Brushes.White : accent,
+                Margin = new Thickness(1, 0, 1, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            waveStack.Children.Add(bar);
+        }
+        row.Children.Add(waveStack);
+
+        playBtn.Click += async (_, _) =>
+        {
+            await TogglePlayVoiceAsync(attachment, playBtn);
+        };
+
+        card.Child = row;
+        return card;
+    }
+
+    private async Task TogglePlayVoiceAsync(ChatAttachment attachment, Button playBtn)
+    {
+        string localPath = Path.Combine(clipboardDirectory, $"voice_{attachment.Id}.wav");
+        if (currentPlayingVoiceUrl == localPath)
+        {
+            voicePlayer.Stop();
+            currentPlayingVoiceUrl = null;
+            if (currentPlayingButton != null) currentPlayingButton.Content = "▶";
+            currentPlayingButton = null;
+            return;
+        }
+
+        try
+        {
+            if (!File.Exists(localPath))
+            {
+                Directory.CreateDirectory(clipboardDirectory);
+                await client.DownloadAsync(attachment, localPath);
+            }
+
+            if (currentPlayingButton != null) currentPlayingButton.Content = "▶";
+            currentPlayingButton = playBtn;
+            currentPlayingVoiceUrl = localPath;
+
+            voicePlayer.Open(new Uri(localPath, UriKind.Absolute));
+            voicePlayer.Play();
+            playBtn.Content = "⏸";
+        }
+        catch (Exception ex)
+        {
+            if (error != null) error.Text = "Не удалось воспроизвести аудио: " + ex.Message;
+        }
+    }
+
+    private UIElement BuildVideoNoteControl(ChatAttachment attachment, bool mine)
+    {
+        var container = new Border
+        {
+            Width = 200,
+            Height = 200,
+            CornerRadius = new CornerRadius(100),
+            BorderBrush = accent,
+            BorderThickness = new Thickness(2),
+            ClipToBounds = true,
+            Background = Brushes.Black,
+            Margin = new Thickness(0, 4, 0, 4),
+            Cursor = Cursors.Hand
+        };
+
+        var grid = new Grid();
+        var icon = new TextBlock
+        {
+            Text = "📹\nВидеозаметка",
+            TextAlignment = TextAlignment.Center,
+            Foreground = Brushes.White,
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        grid.Children.Add(icon);
+
+        int dur = attachment.DurationSeconds;
+        var durPill = new Border
+        {
+            Background = (Brush)new BrushConverter().ConvertFromString("#A0000000")!,
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(6, 2, 6, 2),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 12),
+            Child = new TextBlock { Text = dur > 0 ? $"{dur / 60:D2}:{dur % 60:D2}" : "Видео", Foreground = Brushes.White, FontSize = 10.5 }
+        };
+        grid.Children.Add(durPill);
+
+        container.Child = grid;
+        container.MouseLeftButtonDown += async (_, _) =>
+        {
+            await OpenFileAsync(attachment);
+        };
+
+        return container;
     }
 }

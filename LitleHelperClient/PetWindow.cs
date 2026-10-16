@@ -12,7 +12,7 @@ using System.Windows.Threading;
 
 namespace PixelHelper;
 
-public sealed class PetWindow : Window
+public sealed partial class PetWindow : Window
 {
     private const double SpriteLeft = 202, SpriteTopNormal = 286, SpriteTopMenu = 152, Scale = 2;
     private double currentSpriteTop = SpriteTopNormal;
@@ -36,7 +36,14 @@ public sealed class PetWindow : Window
     private readonly FaceBadges faceBadges = new();
     private readonly Image faceOverlay = new() { Width = 30, Height = 22, IsHitTestVisible = false };
     private readonly Image hatOverlay = new() { Width = 32, Height = 32, IsHitTestVisible = false };
+    private readonly Image maskOverlay = new() { Width = 32, Height = 32, IsHitTestVisible = false };
     private BitmapSource? birthdayHatSource;
+    private BitmapSource? doctorHatSource;
+    private BitmapSource? medicalMaskSource;
+    private BitmapSource? santaHatSource;
+    private BitmapSource? winterHatSource;
+    private bool? lastReportedOnline;
+    private DateTime lastPaperworkCheck = DateTime.MinValue;
     private readonly List<DateTime> rapidClicks = new();
     private DateTime lastSixtyMinReaction = DateTime.MinValue;
     private DateTime lastWorkoutReaction = DateTime.MinValue;
@@ -46,12 +53,14 @@ public sealed class PetWindow : Window
     private DateTime faceStatusUntil;
     private int faceHeartFrame;
     private int unreadChatsCount;
+    private int totalUnreadMessages;
     private readonly CancellationTokenSource lifetime = new();
     private readonly DispatcherTimer animation = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
     private readonly DispatcherTimer inactivity = new(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer refresh = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(30) };
     private readonly DispatcherTimer outsideClick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(100) };
     private readonly DispatcherTimer unreadReminderTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(5) };
+    private readonly DispatcherTimer eyeCareTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMinutes(50) };
     private readonly Dictionary<(PetState, int, double, double), nint> regionCache = new();
     private HwndSource? source;
     private nint handle;
@@ -66,6 +75,7 @@ public sealed class PetWindow : Window
     private double startLeft, startTop;
     private bool refreshing;
     private TicketWindow? ticket;
+    private List<ActionButton> systemButtons = [];
     private SuperAdminWindow? superWindow;
     private EmergencyAlertWindow? activeAlertWindow;
     private bool superAvailable, announcementVisible;
@@ -116,18 +126,19 @@ public sealed class PetWindow : Window
         ShowActivated = false;
         if (settings.DisplayMode is not ("Topmost" or "Normal" or "Background")) settings.DisplayMode = "Topmost";
         if (diagnostics) settings.DisplayMode = "Background";
-        else { settings.DisplayMode = "Topmost"; settings.AssistantHidden = false; }
         Topmost = settings.DisplayMode == "Topmost";
         Title = "PixelHelper";
         Content = canvas;
         actions = ApiClient.Defaults();
         unreadReminderTimer.Tick += (_, _) => CheckUnreadReminder();
+        eyeCareTimer.Tick += (_, _) => CheckEyeCareReminder();
         if (!diagnostics)
         {
             try
             {
                 messenger = new MessengerClient(settings);
-                messenger.Changed += () => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
+                messenger.Changed += () => _=BindVerifiedAgentAsync();
+        messenger.Changed += () => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
                 messenger.MessageReceived += message => Dispatcher.BeginInvoke(new Action(async () => { ReceiveEmoji(message); await CheckChatAsync(); }));
                 messenger.ReminderSettingsUpdated += minutes => Dispatcher.BeginInvoke(new Action(() => unreadReminderTimer.Interval = TimeSpan.FromMinutes(Math.Clamp(minutes, 1, 1440))));
             }
@@ -137,11 +148,13 @@ public sealed class PetWindow : Window
         RenderOptions.SetBitmapScalingMode(robot, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetBitmapScalingMode(faceOverlay, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetBitmapScalingMode(hatOverlay, BitmapScalingMode.NearestNeighbor);
+        RenderOptions.SetBitmapScalingMode(maskOverlay, BitmapScalingMode.NearestNeighbor);
         Canvas.SetLeft(robot, SpriteLeft); Canvas.SetTop(robot, SpriteTop);
         canvas.Children.Add(robot);
         canvas.Children.Add(faceOverlay);
+        canvas.Children.Add(maskOverlay);
         canvas.Children.Add(hatOverlay);
-        LoadBirthdayHat();
+        LoadAccessories();
         if (!diagnostics)
         {
             diskMonitor = new DiskSpaceMonitor(freePercent =>
@@ -175,6 +188,36 @@ public sealed class PetWindow : Window
             quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
             menu.Items.Add(quiet);
             AddSoundProfileMenu(menu);
+            AddMedicalStatusMenu(menu);
+
+            var hideItem = new MenuItem { Header = "🙈 " + Loc.T("DisplayHide") };
+            hideItem.Click += (_, _) => SetAssistantHidden(true);
+            menu.Items.Add(hideItem);
+
+            menu.Items.Add(new Separator());
+
+            var kbItem = new MenuItem { Header = "📚 База знаний / Инструкции" };
+            kbItem.Click += (_, _) => OpenKnowledgeWindow();
+            menu.Items.Add(kbItem);
+
+            var diagItem = new MenuItem { Header = "🩺 Экспресс-диагностика ПК" };
+            diagItem.Click += (_, _) => OpenDiagnosticWindow();
+            menu.Items.Add(diagItem);
+
+            var cleanItem = new MenuItem { Header = "🧹 Очистить временные файлы" };
+            cleanItem.Click += async (_, _) => await CleanTempAsync();
+            menu.Items.Add(cleanItem);
+
+            var certItem = new MenuItem { Header = "🔑 Проверить сертификаты ЭЦП" };
+            certItem.Click += (_, _) => CheckCertificatesMenu();
+            menu.Items.Add(certItem);
+
+            var spoolItem = new MenuItem { Header = "🖨️ Очистить очередь печати" };
+            spoolItem.Click += async (_, _) => { var res = await Task.Run(PrinterWatchdog.ClearPrintQueue); ShowNotice(res.Message); };
+            menu.Items.Add(spoolItem);
+
+            menu.Items.Add(new Separator());
+
             var exit = new MenuItem { Header = "Выход" };
             exit.Click += (_, _) => Close();
             menu.Items.Add(exit);
@@ -187,6 +230,7 @@ public sealed class PetWindow : Window
             
             animation.Start(); inactivity.Start(); refresh.Start();
             if (!diagnostics) unreadReminderTimer.Start();
+            if (!diagnostics && settings.EnableEyeCareReminders) eyeCareTimer.Start();
             if (!diagnostics) hub?.Start();
             if (!diagnostics && messenger != null) _ = messenger.StartAsync();
             if (!diagnostics && hub != null)
@@ -195,9 +239,13 @@ public sealed class PetWindow : Window
                 ncaWatchdog.StartDelayed();
                 var sessionWatchdog = new SessionWatchdog(ncaWatchdog, msg => Dispatcher.InvokeAsync(() => ShowNotice(msg)));
                 sessionWatchdog.Start();
+                printerWatchdog = new PrinterWatchdog((msg, act) => Dispatcher.InvokeAsync(() => ShowNotice(msg)));
+                printerWatchdog.Start();
+                certWatchdog = new CertificateWatchdog(msg => Dispatcher.InvokeAsync(() => ShowNotice(msg)));
+                certWatchdog.Start();
             }
-            if (!diagnostics) React(PetState.Greeting, 3);
-            if (!diagnostics) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
+            if (!diagnostics && !settings.AssistantHidden) React(PetState.Greeting, 3);
+            if (!diagnostics && !settings.AssistantHidden) { Settings.PrepareStartup(); var greeting = await Task.Run(UserGreeting.Text); if (!Dispatcher.HasShutdownStarted) { ReceiveAnnouncement(new ClientNotice(greeting, "PixelHelper", 10)); React(PetState.Greeting, 3); } }
             if (!diagnostics && string.IsNullOrWhiteSpace(settings.TicketRoom))
             {
                 _ = Dispatcher.BeginInvoke(new Action(PromptForRoom), System.Windows.Threading.DispatcherPriority.Background);
@@ -258,6 +306,7 @@ public sealed class PetWindow : Window
                 React(PetState.Yawn, 2);
             }
             CheckImageViewer();
+            CheckPaperworkAndPrinting();
         };
         refresh.Tick += async (_, _) => await RefreshActions();
         outsideClick.Tick += (_, _) =>
@@ -269,6 +318,9 @@ public sealed class PetWindow : Window
         };
         Closed += async (_, _) =>
         {
+            StopPendingEmergency();
+            printerWatchdog?.Dispose();
+            certWatchdog?.Dispose();
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
             lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); source?.RemoveHook(Hook);
             messengerWindow?.Close();
@@ -292,6 +344,7 @@ public sealed class PetWindow : Window
         source.AddHook(Hook);
         NativeMethods.ToolWindow(handle, true);
         ApplyDisplayMode();
+        if (settings.AssistantHidden && !urgentVisible) { HideBubbles(); Hide(); animation.Stop(); }
         if (!diagnostics) tray = new TrayIcon(handle, new SpriteFrame("app-icon"), () => _ = OpenMessengerAsync(), ShowTrayMenu, peer => _ = OpenMessengerAsync(peer == 0 ? null : peer));
         UpdateRegion();
         if (!diagnostics) hub?.Start();
@@ -326,22 +379,31 @@ public sealed class PetWindow : Window
         try { source?.RemoveHook(Hook); } catch { }
         ClearRegions();
     }
-    private void ApplyDisplayMode()
+    internal void ApplyDisplayMode()
     {
         if (handle == 0) return;
-        if (urgentVisible) { Topmost = true; return; }
+        if (urgentVisible)
+        {
+            Topmost = true;
+            NativeMethods.SetWindowPos(handle, new nint(-1), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+            return;
+        }
+        Topmost = settings.DisplayMode == "Topmost";
+        NativeMethods.SetWindowPos(handle, Topmost ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
         if (settings.DisplayMode == "Background") NativeMethods.Bottom(handle);
     }
     internal void SetDisplayMode(string mode)
     {
         if (mode is not ("Topmost" or "Normal" or "Background")) throw new ArgumentException("Неизвестный режим.");
-        settings.DisplayMode = mode; Topmost = urgentVisible || mode == "Topmost";
-        NativeMethods.SetWindowPos(handle, Topmost ? new nint(-1) : new nint(-2), 0, 0, 0, 0, NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
-        ApplyDisplayMode(); if (!diagnostics) settings.Save();
+        settings.DisplayMode = mode;
+        ApplyDisplayMode();
+        if (!diagnostics) settings.Save();
     }
     internal void SetAssistantHidden(bool hidden)
     {
-        settings.AssistantHidden = hidden; if (hidden && !urgentVisible) { HideBubbles(); Hide(); animation.Stop(); } else { Show(); ApplyDisplayMode(); }
+        settings.AssistantHidden = hidden;
+        if (hidden && !urgentVisible) { HideBubbles(); Hide(); animation.Stop(); }
+        else { Show(); ApplyDisplayMode(); animation.Start(); Wake(); Draw(); }
         if (!diagnostics) settings.Save();
     }
     internal void RestoreDisplayPreferences()
@@ -366,7 +428,6 @@ public sealed class PetWindow : Window
     }
     private void HandleRoomUpdated(string room)
     {
-        if (string.IsNullOrWhiteSpace(room)) return;
         string trimmed = room.Trim();
         if (settings.TicketRoom != trimmed)
         {
@@ -388,11 +449,23 @@ public sealed class PetWindow : Window
             Settings.Log(ex);
         }
     }
-    private void AddDisplayMenu(ContextMenu menu)
-    {
-        var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
-        quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
-        menu.Items.Add(quiet);
+
+    private readonly SemaphoreSlim bindAgentGate=new(1,1);
+    private string? boundConnection;
+    private int boundUser;
+    private int boundSessionGeneration;
+    private DateTime boundAt;
+    private async Task BindVerifiedAgentAsync() {
+        if(!await bindAgentGate.WaitAsync(0))return;
+        try { if(hub?.IsOnline==true && messenger?.SignedIn==true) {
+            if(boundConnection==hub.ConnectionId && boundUser==messenger.UserId && boundSessionGeneration==messenger.SessionGeneration && DateTime.UtcNow-boundAt<TimeSpan.FromMinutes(10))return;
+            int generation=messenger.SessionGeneration;
+            await messenger.BindAgentAsync(hub.ConnectionId);
+            boundSessionGeneration=generation;
+            boundConnection=hub.ConnectionId;boundUser=messenger.UserId;boundAt=DateTime.UtcNow;
+            await hub.RefreshCodePermissionsAsync();
+        }}catch(Exception ex){Settings.Log(ex);}
+        finally {bindAgentGate.Release();}
     }
     private void InitializeHub()
     {
@@ -403,16 +476,33 @@ public sealed class PetWindow : Window
                 hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
                 hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
                 hub.TicketReplyReceived += notice => Dispatcher.InvokeAsync(() => HandleTicketReply(notice));
+                InitializeSurveys();
                 hub.EmergencyAlertReceived += notice => Dispatcher.InvokeAsync(() => HandleEmergencyAlert(notice));
                 hub.EmergencyAlertCanceled += () => Dispatcher.InvokeAsync(HandleEmergencyAlertCanceled);
+                hub.EmergencyEventCanceled += id => Dispatcher.InvokeAsync(() => {if(activeEmergencyEventId==id)HandleEmergencyAlertCanceled();});
                 hub.RoomUpdated += room => Dispatcher.InvokeAsync(() => HandleRoomUpdated(room));
                 hub.LiquidationReceived += () => Dispatcher.InvokeAsync(HandleLiquidationProtocol);
                 hub.Connecting += () => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (!mouseDown && !menuOpen && !IsTemporary(state) && state != PetState.Drag) ChangeState(PetState.Charging);
                 }));
+                hub.OnlineChanged += online => { if(online) _=BindVerifiedAgentAsync(); };
                 hub.OnlineChanged += online => Dispatcher.BeginInvoke(new Action(() =>
                 {
+                    if (lastReportedOnline.HasValue && lastReportedOnline.Value != online)
+                    {
+                        if (!online)
+                        {
+                            React(PetState.Error, 4);
+                            ShowNotice("Кажется, пропала связь с сетью. Проверьте сетевой провод или роутер 🔧");
+                        }
+                        else
+                        {
+                            React(PetState.Success, 3);
+                            ShowNotice("Связь с сервером восстановлена! 🚀");
+                        }
+                    }
+                    lastReportedOnline = online;
                     ShowConnectionResult(online);
                     if (!online) { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
                 }));
@@ -420,7 +510,8 @@ public sealed class PetWindow : Window
                 {
                     if (hub.IsOnline)
                     {
-                        actions = buttons.Where(b => b.IsActive).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
+                        systemButtons = buttons.Where(b => b.IsSystem || b.SystemKey != null).ToList();
+                        actions = buttons.Where(b => b.IsActive && !b.IsSystem && b.SystemKey == null).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
                             .Select(b => new AssistantAction(b.Id.ToString(), b.GetLocalizedTitle(Loc.Code), b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
                         if (menuOpen && !announcementVisible) ShowMenu();
                     }
@@ -451,7 +542,16 @@ public sealed class PetWindow : Window
         var chat = new MenuItem { Header = "Мессенджер" }; chat.Click += async (_, _) => await OpenMessengerAsync(); menu.Items.Add(chat);
         if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
         var reconnect = new MenuItem { Header = "Повторить подключение", IsEnabled = !reconnecting }; reconnect.Click += async (_, _) => await ReconnectAsync(); menu.Items.Add(reconnect);
-        AddDisplayMenu(menu);
+        var toggleAssistant = new MenuItem
+        {
+            Header = settings.AssistantHidden ? ("👁️ " + Loc.T("DisplayShow")) : ("🙈 " + Loc.T("DisplayHide"))
+        };
+        toggleAssistant.Click += (_, _) => SetAssistantHidden(!settings.AssistantHidden);
+        menu.Items.Add(toggleAssistant);
+
+        var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
+        quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
+        menu.Items.Add(quiet);
         AddSoundProfileMenu(menu);
         var langMenu = new MenuItem { Header = Loc.T("TrayLanguage") };
         foreach (var lang in Enum.GetValues<AppLanguage>())
@@ -466,26 +566,28 @@ public sealed class PetWindow : Window
     private void AddSoundProfileMenu(ContextMenu menu)
     {
         var soundMenu = new MenuItem { Header = Loc.T("TraySoundProfile") };
-        string[] profiles = ["Sound", "VoiceAdult", "VoiceChild"];
+        string[] profiles = ["Sound", "VoiceAdult", "VoiceChild", "Mute"];
         foreach (var prof in profiles)
         {
             string labelKey = prof switch
             {
                 "VoiceAdult" => "SoundProfileVoiceAdult",
                 "VoiceChild" => "SoundProfileVoiceChild",
+                "Mute" => "SoundProfileMute",
                 _ => "SoundProfileDefault"
             };
             var item = new MenuItem
             {
                 Header = Loc.T(labelKey),
                 IsCheckable = true,
-                IsChecked = string.Equals(settings.SoundProfile, prof, StringComparison.OrdinalIgnoreCase)
+                IsChecked = string.Equals(SoundManager.NormalizeProfile(settings.SoundProfile), prof, StringComparison.OrdinalIgnoreCase)
             };
             item.Click += (_, _) =>
             {
                 settings.SoundProfile = prof;
+                settings.ChatSound = prof != "Mute";
                 settings.Save();
-                SoundManager.PlayPreview(prof, SoundEvent.MessageReceived);
+                if (prof != "Mute") SoundManager.PlayPreview(prof, SoundEvent.MessageReceived);
                 React(PetState.Twirl, 1.5);
             };
             soundMenu.Items.Add(item);
@@ -513,12 +615,13 @@ public sealed class PetWindow : Window
             faceHeartFrame++;
         }
 
-        var badge = faceBadges.Get(faceStatus, faceStatus == FaceNoticeStatus.None ? unreadChatsCount : 0, faceHeartFrame);
+        int unreadDisplay = faceStatus == FaceNoticeStatus.None ? totalUnreadMessages : 0;
+        var badge = faceBadges.Get(faceStatus, unreadDisplay, faceHeartFrame);
         if (badge != null)
         {
             int bob = GetHeadBob(state, frame);
-            Canvas.SetLeft(faceOverlay, RobotX + 16 * Scale);
-            Canvas.SetTop(faceOverlay, RobotY + (12 + bob) * Scale);
+            Canvas.SetLeft(faceOverlay, SpriteLeft + 16 * Scale);
+            Canvas.SetTop(faceOverlay, SpriteTop + (12 + bob) * Scale);
             faceOverlay.Source = badge;
             faceOverlay.Visibility = Visibility.Visible;
         }
@@ -577,7 +680,7 @@ public sealed class PetWindow : Window
         current = sprites.Get(state, frame);
         robot.Source = current.Image;
         UpdateFaceOverlay();
-        UpdateBirthdayHat();
+        UpdateAccessories();
         UpdateRegion();
     }
     private void UpdateRegion()
@@ -912,8 +1015,9 @@ public sealed class PetWindow : Window
         Wake();
 
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
-        if (!diagnostics) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
-        if (!diagnostics && hub?.IsOnline == true) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
+        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "messenger")) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
+        if (!diagnostics && hub?.IsOnline == true && SystemButtonVisibility.Enabled(systemButtons, "emergency")) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
+        if (!diagnostics && pendingSurveys.Length > 0) visibleActions.Insert(0,new("pending-surveys","Ожидают оценки: " + pendingSurveys.Length,"surveys"));
         int count = visibleActions.Count;
 
         const double winW = 500;
@@ -1085,13 +1189,13 @@ public sealed class PetWindow : Window
     }
     private void CheckUnreadReminder()
     {
-        if (unreadChatsCount <= 0 || messenger == null || !messenger.SignedIn) return;
+        if (totalUnreadMessages <= 0 || messenger == null || !messenger.SignedIn) return;
         if (messengerWindow != null && messengerWindow.IsActive && messengerWindow.IsVisible) return;
         if (settings.ChatDoNotDisturb && !settings.ChatUrgentOverridesQuiet || !ChatDesktop.Unlocked() || settings.AssistantHidden) return;
 
         if (announcements.Count < 10)
         {
-            ReceiveAnnouncement(new ClientNotice($"У вас есть непрочитанные сообщения ({unreadChatsCount}) ✉️ Нажмите, чтобы открыть", "Мессенджер", 15) { ChatPeerId = 0 });
+            ReceiveAnnouncement(new ClientNotice($"У вас есть непрочитанные сообщения ({totalUnreadMessages}) ✉️ Нажмите, чтобы открыть", "Мессенджер", 15) { ChatPeerId = 0 });
         }
         InterruptCurrentAnimationForMessage(PetState.Celebrate, 5, isUrgent: true);
         if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3))
@@ -1130,14 +1234,15 @@ public sealed class PetWindow : Window
                 InterruptCurrentAnimationForMessage(PetState.Celebrate, 5, isUrgent: true);
                 if (settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3)) { SoundManager.Play(SoundEvent.Urgent, settings); lastChatSound = DateTime.UtcNow; }
             }
-            int prevUnread = unreadChatsCount;
+            int prevUnread = totalUnreadMessages;
             unreadChatsCount = users.Count(u => u.Unread > 0);
-            if (prevUnread > 0 && unreadChatsCount == 0)
+            totalUnreadMessages = users.Sum(u => u.Unread);
+            if (prevUnread > 0 && totalUnreadMessages == 0)
             {
                 InterruptCurrentAnimationForMessage(PetState.Joy, 2);
             }
             Draw();
-            tray?.SetUnread(unreadChatsCount > 0);
+            tray?.SetUnread(totalUnreadMessages > 0);
             var notifications = new List<(string Title, string Text, int Peer)>();
             foreach (var user in users)
             {
@@ -1163,7 +1268,8 @@ public sealed class PetWindow : Window
             if (notifications.Count > 0)
             {
                 InterruptCurrentAnimationForMessage(PetState.Joy, 4);
-                bool play = settings.ChatSound && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
+                bool soundProfileActive = SoundManager.NormalizeProfile(settings.SoundProfile) != "Mute";
+                bool play = settings.ChatSound && soundProfileActive && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
                 if (settings.ChatWindowsNotifications && tray != null)
                 {
                     if (notifications.Count == 1) { var notice = notifications[0]; tray.Notify(notice.Title, notice.Text, notice.Peer, play); }
@@ -1200,6 +1306,7 @@ public sealed class PetWindow : Window
         SoundManager.Play(SoundEvent.MessageReceived, settings);
     }
 
+    private async Task ClearPrintersAsync() { var result=await Task.Run(PrinterWatchdog.ClearPrintQueue); ShowNotice(result.Message); }
     private Task ExecuteAction(AssistantAction action)
     {
         HideBubbles(); Wake(); actionUntil = DateTime.UtcNow.AddSeconds(2); ChangeState(PetState.Action);
@@ -1213,12 +1320,18 @@ public sealed class PetWindow : Window
                 case "forbidden" or "disabled":
                     ShowForbiddenNotice(); return Task.CompletedTask;
                 case "messenger": return OpenMessengerAsync();
+                case "surveys": return OpenSurveyQueue();
                 case "emergency": return OpenEmergencyDialogAsync();
+                case "knowledge_base": OpenKnowledgeWindow(); break;
+                case "diagnostics": OpenDiagnosticWindow(); break;
+                case "clean_temp": _ = CleanTempAsync(); break;
+                case "clear_printers": return ClearPrintersAsync();
                 case "exit": Application.Current.Shutdown(); break;
                 case "it_ticket":
                     if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
                     if (ticket != null) return Task.CompletedTask;
-                    ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token) { Owner = this, Topmost = true };
+                    if (!EnsureCabinetSpecified()) return Task.CompletedTask;
+                    ticket = new TicketWindow(hub.CreateTicketAtWithFilesAsync, hub.GetTicketContextAsync, settings, lifetime.Token) { Owner = this, Topmost = true };
                     ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
                     ticket.Submitting += () => ChangeState(PetState.Busy);
                     ticket.SubmissionFailed += () => React(PetState.Error, 4);
@@ -1268,6 +1381,15 @@ public sealed class PetWindow : Window
         return Task.CompletedTask;
     }
 
+    private bool EnsureCabinetSpecified()
+    {
+        if (CabinetValidation.Valid(settings.TicketRoom, Environment.MachineName)) return true;
+        if (hub?.IsOnline != true) { ShowNotice("Сервер недоступен. Кабинет не сохранён."); return false; }
+        var prompt = new RoomPromptWindow(settings, hub) { Owner = this, Topmost = true };
+        if (prompt.ShowDialog() == true && CabinetValidation.Valid(settings.TicketRoom, Environment.MachineName)) return true;
+        ShowNotice("⚠️ Действие отменено: необходимо указать номер кабинета");
+        return false;
+    }
     private Task OpenEmergencyDialogAsync()
     {
         if (hub?.IsOnline != true)
@@ -1275,6 +1397,7 @@ public sealed class PetWindow : Window
             ShowNotice("Сервер недоступен для отправки тревоги.");
             return Task.CompletedTask;
         }
+        if (!EnsureCabinetSpecified()) return Task.CompletedTask;
         var dlg = new EmergencyDialogWindow(hub, settings) { Owner = this, Topmost = true };
         dlg.ShowDialog();
         return Task.CompletedTask;
@@ -1305,8 +1428,16 @@ public sealed class PetWindow : Window
         StartEmergencySequence(notice, isTest: false);
     }
 
+    private PrinterWatchdog? printerWatchdog;
+    private CertificateWatchdog? certWatchdog;
+    private DispatcherTimer? emergencyPreTimer;
+    private string? activeEmergencyEventId;
+    private void StopPendingEmergency() { emergencyPreTimer?.Stop(); emergencyPreTimer = null; TtsNotifier.CancelEmergency(); }
+
     internal void StartEmergencySequence(EmergencyAlertNotice notice, bool isTest = false)
     {
+        StopPendingEmergency();
+        activeEmergencyEventId=notice.EventId;
         Wake();
         try { activeAlertWindow?.Close(); } catch { }
         SoundManager.Play(SoundEvent.Urgent, settings);
@@ -1334,10 +1465,12 @@ public sealed class PetWindow : Window
                     : $"🚨 ВНИМАНИЕ! ТРЕВОГА! {notice.Title}");
             }
 
-            var preTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3.5) };
+            var preTimer = emergencyPreTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3.5) };
             preTimer.Tick += (_, _) =>
             {
                 preTimer.Stop();
+                if (!ReferenceEquals(emergencyPreTimer, preTimer)) return;
+                emergencyPreTimer = null;
                 ShowEmergencyAlertWindow(notice, isTest);
             };
             preTimer.Start();
@@ -1351,12 +1484,13 @@ public sealed class PetWindow : Window
     private void ShowEmergencyAlertWindow(EmergencyAlertNotice notice, bool isTest)
     {
         Wake();
+        TtsNotifier.SpeakEmergencyAsync(notice, settings);
         try { activeAlertWindow?.Close(); } catch { }
-        var window = new EmergencyAlertWindow(notice, accepted =>
+        var window = new EmergencyAlertWindow(notice, async accepted =>
         {
             if (notice.CallId.HasValue && hub != null && !isTest)
             {
-                _ = hub.AcknowledgeSpecialistCallAsync(notice.CallId.Value, accepted);
+                await hub.AcknowledgeSpecialistCallAsync(notice.CallId.Value, accepted);
             }
         }, isTest, onCancel: () => CancelActiveEmergency(isTest));
 
@@ -1387,24 +1521,22 @@ public sealed class PetWindow : Window
 
     internal void CancelActiveEmergency(bool isTest = false)
     {
+        StopPendingEmergency();
         Wake();
         if (activeAlertWindow != null)
         {
             try { activeAlertWindow.Close(); } catch { }
             activeAlertWindow = null;
         }
-        if (!isTest && hub?.IsOnline == true)
-        {
-            _ = hub.CancelEmergencyAlertAsync();
-        }
         ShowNotice(isTest
             ? "🟢 Тестирование завершено: оповещение сброшено"
-            : "🟢 Отбой тревоги: оповещение сброшено");
+            : "Окно оповещения закрыто на этом компьютере");
         React(PetState.Joy, 3);
     }
 
     private void HandleEmergencyAlertCanceled()
     {
+        StopPendingEmergency();
         Wake();
         if (activeAlertWindow != null)
         {
@@ -1436,20 +1568,20 @@ public sealed class PetWindow : Window
         SoundManager.Play(SoundEvent.MessageReceived, settings);
     }
 
-    private void LoadBirthdayHat()
+    private static BitmapSource? LoadAssetBitmap(string fileName)
     {
         try
         {
             string baseDir = AppContext.BaseDirectory;
-            string hatPath = Path.Combine(baseDir, "Assets", "hat_birthday.png");
+            string hatPath = Path.Combine(baseDir, "Assets", fileName);
             if (!File.Exists(hatPath))
             {
                 string? cur = baseDir;
                 while (cur != null)
                 {
-                    string candidate = Path.Combine(cur, "Assets", "hat_birthday.png");
+                    string candidate = Path.Combine(cur, "Assets", fileName);
                     if (File.Exists(candidate)) { hatPath = candidate; break; }
-                    string candidate2 = Path.Combine(cur, "LitleHelperClient", "Assets", "hat_birthday.png");
+                    string candidate2 = Path.Combine(cur, "LitleHelperClient", "Assets", fileName);
                     if (File.Exists(candidate2)) { hatPath = candidate2; break; }
                     cur = Path.GetDirectoryName(cur);
                 }
@@ -1463,32 +1595,93 @@ public sealed class PetWindow : Window
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
                 bmp.EndInit();
                 bmp.Freeze();
-                birthdayHatSource = bmp;
+                return bmp;
             }
         }
         catch (Exception ex)
         {
             Settings.Log(ex);
         }
+        return null;
     }
 
-    private void UpdateBirthdayHat()
+    private void LoadAccessories()
+    {
+        birthdayHatSource = LoadAssetBitmap("hat_birthday.png");
+        doctorHatSource = LoadAssetBitmap("hat_doctor.png");
+        medicalMaskSource = LoadAssetBitmap("mask_medical.png");
+        santaHatSource = LoadAssetBitmap("hat_santa.png");
+        winterHatSource = LoadAssetBitmap("hat_winter.png");
+    }
+
+    private void UpdateAccessories()
     {
         DateTime now = DateTime.Now;
+        int bob = GetHeadBob(state, frame);
+
         bool isBirthday = (now.Month == 10 && now.Day == 1) ||
                           (now.Month == settings.FirstStartupDate.Month && now.Day == settings.FirstStartupDate.Day);
+        bool isMedicalDay = now.Month == 6 && now.DayOfWeek == DayOfWeek.Sunday && now.Day >= 15 && now.Day <= 21;
+        bool isMedicalDuty = settings.MedicalWorkStatus is "InSurgery" or "InConsultation" || isMedicalDay;
+
+        BitmapSource? selectedHat = null;
         if (isBirthday && birthdayHatSource != null)
         {
-            int bob = GetHeadBob(state, frame);
+            selectedHat = birthdayHatSource;
+        }
+        else if (isMedicalDuty && doctorHatSource != null)
+        {
+            selectedHat = doctorHatSource;
+        }
+        else if (((now.Month == 12 && now.Day >= 20) || (now.Month == 1 && now.Day <= 10)) && santaHatSource != null)
+        {
+            selectedHat = santaHatSource;
+        }
+        else if ((now.Month == 12 || now.Month == 1 || now.Month == 2) && winterHatSource != null)
+        {
+            selectedHat = winterHatSource;
+        }
+
+        if (selectedHat != null)
+        {
             Canvas.SetLeft(hatOverlay, SpriteLeft + 8 * Scale);
             Canvas.SetTop(hatOverlay, SpriteTop + (bob - 4) * Scale);
-            hatOverlay.Source = birthdayHatSource;
+            hatOverlay.Source = selectedHat;
             hatOverlay.Visibility = Visibility.Visible;
         }
         else
         {
             hatOverlay.Visibility = Visibility.Collapsed;
         }
+
+        if (isMedicalDuty && medicalMaskSource != null)
+        {
+            Canvas.SetLeft(maskOverlay, SpriteLeft + 8 * Scale);
+            Canvas.SetTop(maskOverlay, SpriteTop + (bob + 2) * Scale);
+            maskOverlay.Source = medicalMaskSource;
+            maskOverlay.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            maskOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void CheckPaperworkAndPrinting()
+    {
+        if (IsAnimationLocked || emojiAnimating || menuOpen || mouseDown || ticket != null || state == PetState.Charging) return;
+        if (DateTime.UtcNow - lastPaperworkCheck < TimeSpan.FromMinutes(10)) return;
+
+        try
+        {
+            if (PrinterWatchdog.GetJobCount() > 0)
+            {
+                lastPaperworkCheck = DateTime.UtcNow;
+                React(PetState.Think, 4);
+                ShowNotice("Идёт печать документа на принтере... Проверяю очередь 📄");
+            }
+        }
+        catch { }
     }
 
     internal void OpenCompanionChat()
@@ -1521,7 +1714,8 @@ public sealed class PetWindow : Window
             return;
         }
         if (ticket != null) return;
-        ticket = new TicketWindow(hub.CreateTicketAtAsync, hub.GetBranchesAsync, settings, lifetime.Token, Loc.T("DiskSpaceLowTicketTitle"))
+        if (!EnsureCabinetSpecified()) return;
+        ticket = new TicketWindow(hub.CreateTicketAtWithFilesAsync, hub.GetTicketContextAsync, settings, lifetime.Token, Loc.T("DiskSpaceLowTicketTitle"))
         {
             Owner = this,
             Topmost = true
@@ -1534,6 +1728,155 @@ public sealed class PetWindow : Window
         ticket.Show();
         ticket.Activate();
         ticket.Focus();
+    }
+
+    private void OpenDiagnosticWindow(string? initialText = null)
+    {
+        Wake(); HideBubbles();
+        var diag = new DiagnosticWindow(settings, hub, reportText =>
+        {
+            if (hub?.IsOnline != true)
+            {
+                ShowNotice("Сервер помощника недоступен для отправки заявки.");
+                return;
+            }
+            if (ticket != null) return;
+            if (!EnsureCabinetSpecified()) return;
+        ticket = new TicketWindow(hub.CreateTicketAtWithFilesAsync, hub.GetTicketContextAsync, settings, lifetime.Token, reportText)
+            {
+                Owner = this,
+                Topmost = true
+            };
+            ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
+            ticket.Submitting += () => ChangeState(PetState.Busy);
+            ticket.SubmissionFailed += () => React(PetState.Error, 4);
+            ticket.TicketCreated += _ => React(PetState.Success, 4);
+            ticket.Closed += (_, _) => { ticket = null; Wake(); if (state == PetState.Busy) ChangeState(PetState.Idle); };
+            ticket.Show();
+            ticket.Activate();
+            ticket.Focus();
+        });
+        diag.Owner = this;
+        diag.Show();
+        diag.Activate();
+    }
+
+    private async Task CleanTempAsync()
+    {
+        Wake(); HideBubbles();
+        React(PetState.Workout, 4);
+        ShowNotice("Выполняется очистка временных файлов и кэша… 🧹");
+        var res = await DiskCleaner.CleanAsync();
+        ShowNotice(res.Message);
+        React(PetState.Joy, 3);
+    }
+
+    private void CheckCertificatesMenu()
+    {
+        Wake(); HideBubbles();
+        var certs = CertificateWatchdog.GetInstalledCertificates();
+        var nuc = certs.Where(c => c.IsNucRk).ToList();
+        if (nuc.Count == 0)
+        {
+            ShowNotice("В личных хранилищах не найдено сертификатов НУЦ РК. Используйте NCALayer для подписания. 🔑");
+            return;
+        }
+        var expiring = nuc.OrderBy(c => c.DaysRemaining).First();
+        string info = expiring.IsExpired
+            ? $"Сертификат \"{expiring.Subject}\" ИСТЁК! Требуется перевыпуск на pki.gov.kz"
+            : $"ЭЦП \"{expiring.Subject}\": годен до {expiring.NotAfter:dd.MM.yyyy} (осталось {expiring.DaysRemaining} дн.) 🔑";
+        ShowNotice(info);
+    }
+
+    private void AddMedicalStatusMenu(ContextMenu menu)
+    {
+        var statusMenu = new MenuItem { Header = "🩺 Рабочий статус" };
+        var statuses = settings.MedicalStatuses.Where(s => s.IsActive).OrderBy(s => s.OrderIndex).Select(s => (s.Key, Label: s.Emoji + " " + s.Title));
+        foreach (var (key, label) in statuses)
+        {
+            var item = new MenuItem
+            {
+                Header = label,
+                IsCheckable = true,
+                IsChecked = string.Equals(settings.MedicalWorkStatus, key, StringComparison.OrdinalIgnoreCase)
+            };
+            item.Click += (_, _) =>
+            {
+                settings.MedicalWorkStatus = key;
+                settings.Save();
+                if (settings.MedicalSoundsMuted || settings.MedicalTtsMuted)
+                {
+                    ShowNotice("Режим тишины включен. Звуковые сигналы приглушены 🤫");
+                    React(PetState.Notice, 2.5);
+                }
+                else
+                {
+                    ShowNotice($"Статус изменён: {label}");
+                    React(PetState.Joy, 2.0);
+                }
+            };
+            statusMenu.Items.Add(item);
+        }
+        menu.Items.Add(statusMenu);
+    }
+
+    private void OpenKnowledgeWindow()
+    {
+        Wake(); HideBubbles();
+        if (hub == null) return;
+        var kb = new KnowledgeWindow(hub, prefilledTitle =>
+        {
+            if (ticket != null) return;
+            if (!EnsureCabinetSpecified()) return;
+        ticket = new TicketWindow(hub.CreateTicketAtWithFilesAsync, hub.GetTicketContextAsync, settings, lifetime.Token, prefilledTitle)
+            {
+                Owner = this,
+                Topmost = true
+            };
+            ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
+            ticket.Submitting += () => ChangeState(PetState.Busy);
+            ticket.SubmissionFailed += () => React(PetState.Error, 4);
+            ticket.TicketCreated += _ => React(PetState.Success, 4);
+            ticket.Closed += (_, _) => { ticket = null; Wake(); if (state == PetState.Busy) ChangeState(PetState.Idle); };
+            ticket.Show();
+            ticket.Activate();
+            ticket.Focus();
+        });
+        kb.Owner = this;
+        kb.Show();
+        kb.Activate();
+        kb.Focus();
+    }
+
+    private void CheckEyeCareReminder()
+    {
+        if (!settings.EnableEyeCareReminders) return;
+        if (state is PetState.Sleep or PetState.Drag or PetState.Dizzy or PetState.Busy) return;
+        if (settings.MedicalWorkStatus is "InSurgery" or "InConsultation") return;
+
+        ShowNotice("Давайте сделаем разминку для глаз! Повторяйте за мной 👀");
+        _ = RunEyeGymnasticsAsync();
+    }
+
+    private async Task RunEyeGymnasticsAsync()
+    {
+        try
+        {
+            ChangeState(PetState.LookLeft);
+            await Task.Delay(1200);
+            ChangeState(PetState.LookRight);
+            await Task.Delay(1200);
+            ChangeState(PetState.LookUp);
+            await Task.Delay(1200);
+            ChangeState(PetState.LookDown);
+            await Task.Delay(1200);
+            ChangeState(PetState.Notice);
+            await Task.Delay(1200);
+            ChangeState(PetState.Joy);
+            await Task.Delay(1500);
+            ChangeState(PetState.Idle);
+        }
+        catch { }
     }
 
     private void CheckImageViewer()

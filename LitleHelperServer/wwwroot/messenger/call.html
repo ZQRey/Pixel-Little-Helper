@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Видеозвонок · PixelHelper</title>
+  <link rel="icon" type="image/png" href="/messenger/app-icon.png">
+  <link rel="stylesheet" href="/messenger/call.css?v=1.2.51">
+  <script src="/messenger/call.js?v=1.2.51" defer></script>
+</head>
+<body>
+  <div class="call-wrapper">
+    <!-- Top floating status bar -->
+    <header class="call-top-bar glass">
+      <div class="target-info">
+        <strong id="call-target-name">Собеседник</strong>
+        <span id="call-status">Вызов…</span>
+      </div>
+      <div class="call-indicators">
+        <span id="record-indicator" class="record-badge" hidden>
+          <span class="record-pulse"></span>
+          <span id="record-timer">REC 00:00</span>
+        </span>
+        <span id="call-timer" class="call-timer">00:00</span>
+      </div>
+    </header>
+
+    <!-- Main video stage -->
+    <main class="video-stage">
+      <div id="video-container" class="video-container">
+        <!-- Remote participant video (full stage) -->
+        <video id="remote-video" autoplay playsinline></video>
+        
+        <!-- Remote avatar fallback when camera is off -->
+        <div id="remote-avatar-fallback" class="avatar-fallback" hidden>
+          <div class="avatar-circle">
+            <span id="remote-initials">PH</span>
+          </div>
+          <span id="remote-fallback-name">Собеседник</span>
+        </div>
+
+        <!-- Local self view (Picture-in-Picture) -->
+        <div id="local-pip-container" class="local-pip">
+          <video id="local-video" autoplay playsinline muted></video>
+          <div id="local-avatar-fallback" class="avatar-fallback mini" hidden>
+            <span>Вы</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Bottom floating control panel -->
+    <footer class="call-controls-bar glass">
+      <button id="btn-toggle-mic" class="control-btn" title="Микрофон (Вкл/Выкл)">
+        <span class="icon">🎤</span>
+        <span class="label">Микрофон</span>
+      </button>
+
+      <button id="btn-toggle-cam" class="control-btn" title="Камера (Вкл/Выкл)">
+        <span class="icon">📷</span>
+        <span class="label">Камера</span>
+      </button>
+
+      <button id="btn-toggle-screen" class="control-btn" title="Демонстрация экрана">
+        <span class="icon">🖥️</span>
+        <span class="label">Экран</span>
+      </button>
+
+      <!-- Record button: visible ONLY for the caller (initiator) -->
+      <button id="btn-record" class="control-btn record-btn" title="Запись видеозвонка на компьютер (папка «Видео»)" hidden>
+        <span class="icon">⏺️</span>
+        <span id="btn-record-label" class="label">Запись</span>
+      </button>
+
+      <button id="btn-hangup" class="control-btn hangup-btn" title="Завершить звонок">
+        <span class="icon">📞✕</span>
+        <span class="label">Завершить</span>
+      </button>
+    </footer>
+
+    <!-- Notification toast -->
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+</body>
+</html>

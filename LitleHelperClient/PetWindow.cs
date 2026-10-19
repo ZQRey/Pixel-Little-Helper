@@ -141,6 +141,7 @@ public sealed partial class PetWindow : Window
         messenger.Changed += () => Dispatcher.BeginInvoke(new Action(async () => await CheckChatAsync()));
                 messenger.MessageReceived += message => Dispatcher.BeginInvoke(new Action(async () => { ReceiveEmoji(message); await CheckChatAsync(); }));
                 messenger.ReminderSettingsUpdated += minutes => Dispatcher.BeginInvoke(new Action(() => unreadReminderTimer.Interval = TimeSpan.FromMinutes(Math.Clamp(minutes, 1, 1440))));
+                messenger.IncomingCallReceived += OnIncomingCall;
             }
             catch (Exception ex) { Settings.Log(ex); }
             InitializeHub();
@@ -1173,6 +1174,24 @@ public sealed partial class PetWindow : Window
         AddBubble(tail, SpriteLeft + 36, 262, 22, 22);
         announcementUntil = DateTime.UtcNow.AddSeconds(notice.DurationSeconds); KeepMenuVisible(); UpdateRegion();
     }
+    private void OnIncomingCall(System.Text.Json.JsonElement call) => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        try
+        {
+            string callId = call.TryGetProperty("callId", out var cId) ? (cId.GetString() ?? "") : "";
+            int callerId = call.TryGetProperty("callerId", out var clId) ? clId.GetInt32() : 0;
+            string callerName = call.TryGetProperty("callerName", out var cn) ? (cn.GetString() ?? "Собеседник") : "Собеседник";
+            bool isVideo = call.TryGetProperty("isVideo", out var iv) && iv.GetBoolean();
+
+            if (messenger == null || callerId == messenger.UserId || callerId == 0) return;
+
+            IncomingCallWindow.ShowCall(messenger, settings, callId, callerId, callerName, isVideo);
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }));
     private async Task OpenMessengerAsync(int? peer = null)
     {
         if (messenger == null) throw new InvalidOperationException("Мессенджер недоступен. Проверьте HTTPS сервера.");

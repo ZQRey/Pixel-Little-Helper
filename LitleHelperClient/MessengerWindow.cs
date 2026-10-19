@@ -229,20 +229,7 @@ internal sealed class MessengerWindow : Window
 
             if (callerId == client.UserId || callerId == 0) return;
 
-            SoundManager.Play(SoundEvent.Urgent, settings);
-
-            string title = isVideo ? "Входящий видеозвонок" : "Входящий аудиозвонок";
-            string prompt = $"Входящий {(isVideo ? "видеозвонок" : "аудиозвонок")} от: {callerName}\n\nПринять вызов?";
-
-            var result = MessageBox.Show(this, prompt, title, MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (result == MessageBoxResult.Yes)
-            {
-                VideoCallWindow.OpenCall(client.ServerAddress, callerId, callerName, isVideo, isCaller: false, client.UserId, callId, client.Token);
-            }
-            else
-            {
-                _ = client.RejectCallAsync(callId, callerId);
-            }
+            IncomingCallWindow.ShowCall(client, settings, callId, callerId, callerName, isVideo);
         }
         catch (Exception ex)
         {

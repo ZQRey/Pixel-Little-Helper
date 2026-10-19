@@ -1143,7 +1143,7 @@ $('incoming-accept').onclick = async () => {
     await setupPeerConnection(callId, callerId);
 
     if (state.ws?.readyState === WebSocket.OPEN) {
-      state.ws.send(JSON.stringify({ type: 1, target: 'AcceptCall', arguments: [callId] }) + '\u001e');
+      state.ws.send(JSON.stringify({ type: 1, target: 'AcceptCall', arguments: [callId, callerId] }) + '\u001e');
     }
   } catch (err) {
     showError(new Error('Не удалось принять вызов: ' + err.message));
@@ -1155,7 +1155,7 @@ $('incoming-reject').onclick = () => {
   stopRingtone();
   $('incoming-call-banner').hidden = true;
   if (incomingCallState && state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 1, target: 'RejectCall', arguments: [incomingCallState.callId] }) + '\u001e');
+    state.ws.send(JSON.stringify({ type: 1, target: 'RejectCall', arguments: [incomingCallState.callId, incomingCallState.callerId || 0] }) + '\u001e');
   }
   incomingCallState = null;
 };
@@ -1164,12 +1164,29 @@ async function connect(){const generation=++state.generation;state.ws?.close();t
   if(packet.target==='Typing'){const t=packet.arguments[0];if(t.peer===state.peer){const isPeerPsychologist=t.isPsychologist||state.contacts.find(c=>c.id===t.peer)?.position?.toLowerCase().includes('психолог')||state.contacts.find(c=>c.id===t.peer)?.role==='Psychologist';const amIPsychologist=state.me?.position?.toLowerCase().includes('психолог')||state.me?.role==='Psychologist';let label=isPeerPsychologist?t('typing_psychologist'):(amIPsychologist?t('typing_employee'):t.fullName+t('typing'));$('chat-status').textContent=label;setTimeout(()=>{if(state.peer===t.peer)$('chat-status').textContent=state.contacts.find(c=>c.id===t.peer)?.isOnline?'В сети':'Рабочий чат';},5000);}continue;}
   if(packet.target==='ChatMessage'){const msg=packet.arguments[0];if(msg&&(msg.body?.trim()||msg.attachments?.length)){notify(msg);refresh();}}
   if(packet.target==='IncomingCall'){
-    const [callId, callerId, callerName, isVideo, isGroup, groupId] = packet.arguments;
+    const raw = (packet.arguments && typeof packet.arguments[0] === 'object' && packet.arguments[0] !== null)
+      ? packet.arguments[0]
+      : {};
+    const callId = raw.callId || packet.arguments[0] || ('call_' + Date.now());
+    const callerId = raw.callerId !== undefined ? raw.callerId : packet.arguments[1];
+    const callerName = raw.callerName || packet.arguments[2] || 'Собеседник';
+    const isVideo = raw.isVideo !== undefined ? !!raw.isVideo : (packet.arguments[3] !== undefined ? !!packet.arguments[3] : true);
+    const isGroup = raw.isGroup !== undefined ? !!raw.isGroup : (raw.groupId !== undefined || !!packet.arguments[4]);
+    const groupId = raw.groupId || packet.arguments[5];
+
     incomingCallState = { callId, callerId, callerName, isVideo, isGroup, groupId };
     $('incoming-caller-name').textContent = callerName + (isGroup ? ' (Группа)' : '');
     $('incoming-call-type').textContent = isVideo ? 'Входящий видеозвонок…' : 'Входящий аудиозвонок…';
     $('incoming-call-banner').hidden = false;
     playRingtone();
+
+    if ('Notification' in window && Notification.permission === 'granted' && (!document.hasFocus() || document.hidden)) {
+      const n = new Notification('Входящий звонок · PixelHelper', {
+        body: (isVideo ? 'Видеозвонок' : 'Аудиозвонок') + ' от: ' + callerName,
+        tag: 'call-' + callId
+      });
+      n.onclick = () => { window.focus(); };
+    }
   }
   if(packet.target==='CallAccepted'){
     const [callId, byUserId] = packet.arguments;

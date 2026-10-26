@@ -1314,6 +1314,13 @@ try
     File.WriteAllText(excludedExtFile, "Log content");
     Check(avService.IsExcluded(excludedExtFile, new FileInfo(excludedExtFile).Length), "Excluded extensions are skipped by scanner");
 
+    // 4. Test ScanPathAsync (file and directory scanning for context menu)
+    var pathSummaryFile = avService.ScanPathAsync(scriptFile, null, CancellationToken.None).GetAwaiter().GetResult();
+    Check(pathSummaryFile.TotalFilesScanned == 1 && pathSummaryFile.ThreatsDetected == 1, "ScanPathAsync scans single file correctly");
+
+    var pathSummaryDir = avService.ScanPathAsync(avTestDir, null, CancellationToken.None).GetAwaiter().GetResult();
+    Check(pathSummaryDir.TotalFilesScanned >= 3 && pathSummaryDir.ThreatsDetected >= 2, "ScanPathAsync scans directory recursively correctly");
+
     // Reset overrides
     QuarantineManager.OverrideBaseDir = null;
     AntivirusService.OverrideDbDir = null;

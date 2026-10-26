@@ -487,12 +487,25 @@ public static class IntegrationApi
         {
             try
             {
-                bool success = await avWorker.TriggerSyncNowAsync(token);
+                bool success = await avWorker.TriggerSyncNowAsync(token, force: true);
                 return Results.Ok(new { success, message = success ? "Синхронизация баз успешно запущена и завершена." : "Синхронизация уже выполняется." });
             }
             catch (Exception ex)
             {
                 return Results.BadRequest(new { success = false, message = ex.Message });
+            }
+        }).RequireAuthorization("settings.manage");
+
+        app.MapPost("/api/antivirus/probe-servers", async (AntivirusSyncWorker avWorker, CancellationToken token) =>
+        {
+            try
+            {
+                var probeList = await avWorker.ProbeUpdateServersAsync(token);
+                return Results.Ok(probeList);
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
             }
         }).RequireAuthorization("settings.manage");
 

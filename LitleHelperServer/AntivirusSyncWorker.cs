@@ -14,6 +14,17 @@ public record AntivirusManifest(
     long BundleSizeBytes
 );
 
+public record ServerProbeResult(
+    string Name,
+    string Url,
+    string Description,
+    bool IsReachable,
+    long LatencyMs,
+    int StatusCode,
+    string StatusText,
+    string ErrorMessage
+);
+
 public class AntivirusSyncWorker : BackgroundService
 {
     private readonly IConfiguration configuration;
@@ -88,6 +99,13 @@ public class AntivirusSyncWorker : BackgroundService
         // Initial delay before first background check
         await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
 
+        // If existing bundle is only the bootstrap bundle (or empty), trigger initial sync immediately
+        if (cachedManifest == null || cachedManifest.MalwareBazaarHashCount <= 1)
+        {
+            logger.LogInformation("Обнаружен только базовый пакет баз. Запуск первичной синхронизации внешних антивирусных баз...");
+            _ = Task.Run(() => SyncInternalAsync(stoppingToken, force: true), stoppingToken);
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -117,12 +135,12 @@ public class AntivirusSyncWorker : BackgroundService
         }
     }
 
-    public async Task<bool> TriggerSyncNowAsync(CancellationToken token)
+    public async Task<bool> TriggerSyncNowAsync(CancellationToken token, bool force = false)
     {
-        // Enforce 15-minute rate-limiting cooldown for manual sync
-        if (lastSyncAt.HasValue && (DateTime.UtcNow - lastSyncAt.Value).TotalMinutes < 15)
+        bool isBootstrap = cachedManifest != null && cachedManifest.MalwareBazaarHashCount <= 1;
+        if (!force && !isBootstrap && lastSyncAt.HasValue && (DateTime.UtcNow - lastSyncAt.Value).TotalMinutes < 2)
         {
-            throw new InvalidOperationException($"Слишком частый запрос. Повторное обновление доступно через {Math.Ceiling(15 - (DateTime.UtcNow - lastSyncAt.Value).TotalMinutes)} мин.");
+            throw new InvalidOperationException($"Слишком частый запрос. Повторное обновление доступно через {Math.Ceiling(2 - (DateTime.UtcNow - lastSyncAt.Value).TotalMinutes)} мин.");
         }
 
         return await SyncInternalAsync(token, force: true);
@@ -280,24 +298,24 @@ rule Suspicious_Double_Extension_Executable {
             int hashCount = 0;
             int yaraCount = 3;
 
-            // 1. Abuse.ch MalwareBazaar SHA256 daily dump
+            // 1. Abuse.ch / Daily Malicious SHA256 hashes feed
             try
             {
-                // Download MalwareBazaar recent SHA256 hashes (daily csv)
-                var mbResp = await client.GetAsync("https://bazaar.abuse.ch/export/csv/recent/", token);
-                if (mbResp.IsSuccessStatusCode)
+                // Fetch daily SHA256 malware threats
+                string hashFeedUrl = "https://raw.githubusercontent.com/romainmarcoux/malicious-hash/main/full-hash-sha256-aa.txt";
+                using var feedResp = await client.GetAsync(hashFeedUrl, HttpCompletionOption.ResponseHeadersRead, token);
+                if (feedResp.IsSuccessStatusCode)
                 {
-                    string content = await mbResp.Content.ReadAsStringAsync(token);
-                    var lines = content.Split('\n');
+                    using var stream = await feedResp.Content.ReadAsStreamAsync(token);
+                    using var reader = new StreamReader(stream);
                     var validHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var line in lines)
+                    string? line;
+                    while ((line = await reader.ReadLineAsync(token)) != null && validHashes.Count < 10000)
                     {
-                        if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) continue;
-                        var parts = line.Split("\",\"");
-                        if (parts.Length > 2)
+                        line = line.Trim();
+                        if (line.Length == 64 && !line.StartsWith("#"))
                         {
-                            string sha = parts[1].Trim('"').Trim();
-                            if (sha.Length == 64) validHashes.Add(sha);
+                            validHashes.Add(line);
                         }
                     }
 
@@ -305,34 +323,65 @@ rule Suspicious_Double_Extension_Executable {
                     {
                         await File.WriteAllLinesAsync(Path.Combine(hashesDir, "malware_hashes.txt"), validHashes, token);
                         hashCount = validHashes.Count;
-                        logger.LogInformation("Успешно загружено {Count} хэшей Abuse.ch MalwareBazaar.", hashCount);
+                        logger.LogInformation("Успешно загружено {Count} актуальных хэшей вредоносного ПО.", hashCount);
                     }
                 }
             }
             catch (Exception ex)
             {
-                logger.LogWarning("Не удалось загрузить свежие хэши MalwareBazaar (будет использован кэш): {Error}", ex.Message);
+                logger.LogWarning("Не удалось загрузить внешние хэши вредоносного ПО (используется локальный кэш): {Error}", ex.Message);
             }
 
-            // 2. YARA community rules
+            // 2. YARA community rules (Worms, Droppers, Ransomware)
             try
             {
-                var yaraResp = await client.GetAsync("https://raw.githubusercontent.com/Yara-Rules/rules/master/malware/MALW_Worms.yar", token);
-                if (yaraResp.IsSuccessStatusCode)
+                var yaraRules = new (string FileName, string Url)[]
                 {
-                    string yaraContent = await yaraResp.Content.ReadAsStringAsync(token);
-                    await File.WriteAllTextAsync(Path.Combine(yaraDir, "worms.yar"), yaraContent, token);
-                    yaraCount += 10;
-                    logger.LogInformation("Успешно загружены правила YARA Worms.");
+                    ("blackworm.yar", "https://raw.githubusercontent.com/Yara-Rules/rules/master/malware/MALW_BlackWorm.yar"),
+                    ("cryptxxx.yar", "https://raw.githubusercontent.com/Yara-Rules/rules/master/malware/RANSOM_.CRYPTXXX.yar")
+                };
+
+                foreach (var (fileName, ruleUrl) in yaraRules)
+                {
+                    try
+                    {
+                        var yaraResp = await client.GetAsync(ruleUrl, token);
+                        if (yaraResp.IsSuccessStatusCode)
+                        {
+                            string yaraContent = await yaraResp.Content.ReadAsStringAsync(token);
+                            await File.WriteAllTextAsync(Path.Combine(yaraDir, fileName), yaraContent, token);
+                            yaraCount += 5;
+                            logger.LogInformation("Успешно загружены правила YARA {FileName}.", fileName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning("Не удалось загрузить правило YARA {FileName}: {Error}", fileName, ex.Message);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                logger.LogWarning("Не удалось загрузить внешние правила YARA (будет использован кэш): {Error}", ex.Message);
+                logger.LogWarning("Не удалось загрузить внешние правила YARA: {Error}", ex.Message);
             }
 
             // 3. ClamAV mirror check
             string clamAvVer = "ClamAV-Talos-" + DateTime.UtcNow.ToString("yyyyMMdd");
+            try
+            {
+                using var clamReq = new HttpRequestMessage(HttpMethod.Head, "https://database.clamav.net/daily.cvd");
+                clamReq.Headers.UserAgent.ParseAdd("CVDUPDATE/0.1.0");
+                using var clamResp = await client.SendAsync(clamReq, HttpCompletionOption.ResponseHeadersRead, token);
+                if (clamResp.IsSuccessStatusCode)
+                {
+                    string etag = clamResp.Headers.ETag?.Tag?.Trim('"') ?? "";
+                    if (!string.IsNullOrEmpty(etag))
+                    {
+                        clamAvVer = "ClamAV-Talos-" + etag;
+                    }
+                }
+            }
+            catch { }
 
             // 4. Create and pack bundle
             string bundlePath = Path.Combine(StorageDir, "antivirus_bundle.zip");
@@ -388,5 +437,68 @@ rule Suspicious_Double_Extension_Executable {
             isSyncing = false;
             syncLock.Release();
         }
+    }
+
+    public async Task<List<ServerProbeResult>> ProbeUpdateServersAsync(CancellationToken token)
+    {
+        var targets = new (string Name, string Url, string Description, string Method, string? CustomUserAgent)[]
+        {
+            ("Abuse.ch Portal", "https://bazaar.abuse.ch", "Сервер актуальных угроз и репутаций Abuse.ch", "HEAD", null),
+            ("YARA Rules Mirror", "https://raw.githubusercontent.com/Yara-Rules/rules/master/malware/MALW_BlackWorm.yar", "Зеркало сигнатурных правил YARA Community на GitHub", "HEAD", null),
+            ("Cisco Talos ClamAV", "https://database.clamav.net/daily.cvd", "Официальное зеркало антивирусных баз ClamAV (Cloudflare)", "HEAD", "CVDUPDATE/0.1.0"),
+            ("Malware Hash Feed", "https://raw.githubusercontent.com/romainmarcoux/malicious-hash/main/full-hash-sha256-aa.txt", "Канал синхронизации SHA-256 хэшей вредоносных файлов", "HEAD", null)
+        };
+
+        var client = httpFactory.CreateClient("AntivirusProbeClient");
+        client.Timeout = TimeSpan.FromSeconds(6);
+
+        var list = new List<ServerProbeResult>();
+        foreach (var target in targets)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var req = new HttpRequestMessage(target.Method == "HEAD" ? HttpMethod.Head : HttpMethod.Get, target.Url);
+                if (!string.IsNullOrEmpty(target.CustomUserAgent))
+                {
+                    req.Headers.UserAgent.ParseAdd(target.CustomUserAgent);
+                }
+                else
+                {
+                    req.Headers.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) PixelGuard-Probe/1.2");
+                }
+
+                using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, token);
+                sw.Stop();
+                int code = (int)resp.StatusCode;
+                bool isReachable = code >= 200 && code < 400;
+                list.Add(new ServerProbeResult(
+                    Name: target.Name,
+                    Url: target.Url,
+                    Description: target.Description,
+                    IsReachable: isReachable,
+                    LatencyMs: sw.ElapsedMilliseconds,
+                    StatusCode: code,
+                    StatusText: $"{code} {resp.ReasonPhrase}",
+                    ErrorMessage: isReachable ? "" : $"HTTP {code}"
+                ));
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                list.Add(new ServerProbeResult(
+                    Name: target.Name,
+                    Url: target.Url,
+                    Description: target.Description,
+                    IsReachable: false,
+                    LatencyMs: sw.ElapsedMilliseconds,
+                    StatusCode: 0,
+                    StatusText: "Ошибка соединения",
+                    ErrorMessage: ex.Message
+                ));
+            }
+        }
+
+        return list;
     }
 }

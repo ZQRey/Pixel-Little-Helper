@@ -35,23 +35,33 @@ public partial class App : Application
         var appIcon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/PixelHelper;component/Assets/PixelHelper.ico")); appIcon.Freeze();
         EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler((sender,args) => { if (sender is Window window && ReferenceEquals(args.OriginalSource,window) && window.Icon==null) window.Icon=appIcon; }));
         string? guardUrl = null;
+        string? scanTarget = null;
         for (int i = 0; i < e.Args.Length; i++)
         {
+            if ((e.Args[i] == "--scan" || e.Args[i] == "-scan") && i + 1 < e.Args.Length)
+            {
+                scanTarget = e.Args[i + 1];
+                continue;
+            }
             if (e.Args[i] == "--guard-url" && i + 1 < e.Args.Length)
             {
                 guardUrl = e.Args[i + 1];
-                break;
+                continue;
             }
             if (e.Args[i].StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                 e.Args[i].StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
                 guardUrl = e.Args[i];
-                break;
+                continue;
             }
         }
         singleton = new Mutex(true, @"Local\PixelHelper-" + Environment.UserName, out bool created);
         if (!created)
         {
+            if (!string.IsNullOrWhiteSpace(scanTarget))
+            {
+                AntivirusScanIpc.SendScanPathToRunningInstance(scanTarget);
+            }
             if (!string.IsNullOrWhiteSpace(guardUrl))
             {
                 WebGuardIpc.SendUrlToRunningInstance(guardUrl);
@@ -67,11 +77,12 @@ public partial class App : Application
             Shutdown(1);
         };
         bool diagnostics = e.Args.Length == 2 && e.Args[0] == "--diagnostics";
-        MainWindow = new PetWindow(diagnostics);
+        MainWindow = new PetWindow(diagnostics, initialScanPath: scanTarget);
         if (!diagnostics)
         {
             NativeMethods.RegisterApplicationRestart(null, 0);
             WebGuardIpc.StartServer(url => Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).HandleGuardedUrl(url)));
+            AntivirusScanIpc.StartServer(path => Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).HandlePathScanRequest(path)));
             if (!string.IsNullOrWhiteSpace(guardUrl))
             {
                 Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).HandleGuardedUrl(guardUrl));
@@ -127,6 +138,7 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e)
     {
+        AntivirusScanIpc.StopServer();
         WebGuardIpc.StopServer();
         singleton?.Dispose();
         base.OnExit(e);

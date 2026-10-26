@@ -452,6 +452,38 @@ public sealed class AntivirusService : IDisposable
         return new ScanSummary(scanned, threats.Count, threats, sw.Elapsed);
     }
 
+    public async Task<ScanSummary> ScanPathAsync(
+        string targetPath,
+        Action<string, int, int>? onProgress,
+        CancellationToken token)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var threats = new List<ScanResult>();
+        int scanned = 0;
+
+        if (File.Exists(targetPath))
+        {
+            scanned = 1;
+            onProgress?.Invoke(targetPath, 1, 1);
+            var res = await ScanFileAsync(targetPath, token);
+            if (res.IsThreat)
+            {
+                threats.Add(res);
+                ThreatFound?.Invoke(res);
+                await HandleDetectedThreatAsync(res);
+            }
+            sw.Stop();
+            return new ScanSummary(scanned, threats.Count, threats, sw.Elapsed);
+        }
+        else if (Directory.Exists(targetPath))
+        {
+            return await ScanDirectoryAsync(targetPath, onProgress, token);
+        }
+
+        sw.Stop();
+        return new ScanSummary(0, 0, threats, sw.Elapsed);
+    }
+
     public async Task<ScanSummary> ScanRemovableDriveAsync(
         string driveLetter,
         Action<string>? onStatus,

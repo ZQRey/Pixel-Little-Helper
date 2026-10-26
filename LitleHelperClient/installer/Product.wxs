@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.70" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.71" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
     <MediaTemplate EmbedCab="yes" /><Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" /><Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
@@ -75,6 +75,26 @@
             <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
           </RegistryKey>
         </Component>
+        <Component Id="ExplorerContextMenu" Guid="B4E17C2F-4389-4B52-9A2E-8E7C5D1F6A34" Win64="yes">
+          <!-- Files context menu -->
+          <RegistryKey Root="HKLM" Key="Software\Classes\*\shell\PixelHelperScan">
+            <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" KeyPath="yes" />
+            <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+            <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
+          </RegistryKey>
+          <!-- Folders / Directories context menu -->
+          <RegistryKey Root="HKLM" Key="Software\Classes\Directory\shell\PixelHelperScan">
+            <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" />
+            <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+            <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
+          </RegistryKey>
+          <!-- Drives context menu -->
+          <RegistryKey Root="HKLM" Key="Software\Classes\Drive\shell\PixelHelperScan">
+            <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" />
+            <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+            <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
+          </RegistryKey>
+        </Component>
       </DirectoryRef>
     <Feature Id="Complete" Title="PixelHelper" Level="1">
       <ComponentGroupRef Id="PublishedFiles" />
@@ -84,6 +104,7 @@
       <ComponentRef Id="MachineStartup" />
       <ComponentRef Id="WebGuardBrowserRegistration" />
       <ComponentRef Id="BrowserExtensionPolicies" />
+      <ComponentRef Id="ExplorerContextMenu" />
     </Feature>
     <CustomAction Id="CleanUserProfiles" FileKey="MainExecutable" ExeCommand="--cleanup-machine" Execute="deferred" Impersonate="no" Return="check" />
     <InstallExecuteSequence>

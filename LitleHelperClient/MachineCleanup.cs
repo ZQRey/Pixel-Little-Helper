@@ -29,6 +29,25 @@ internal static class MachineCleanup
                     catch (InvalidOperationException) { }
                 }
             }
+
+            // Remove explorer context menu entries if any persist
+            try
+            {
+                using var hklmClasses = Registry.LocalMachine.OpenSubKey(@"Software\Classes", true);
+                if (hklmClasses != null)
+                {
+                    using var starShell = hklmClasses.OpenSubKey(@"*\shell", true);
+                    starShell?.DeleteSubKeyTree("PixelHelperScan", false);
+
+                    using var dirShell = hklmClasses.OpenSubKey(@"Directory\shell", true);
+                    dirShell?.DeleteSubKeyTree("PixelHelperScan", false);
+
+                    using var driveShell = hklmClasses.OpenSubKey(@"Drive\shell", true);
+                    driveShell?.DeleteSubKeyTree("PixelHelperScan", false);
+                }
+            }
+            catch { }
+
             using var profiles = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList");
             foreach (string sid in profiles?.GetSubKeyNames() ?? [])
             {

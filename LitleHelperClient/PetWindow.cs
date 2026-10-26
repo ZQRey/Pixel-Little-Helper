@@ -108,15 +108,17 @@ public sealed partial class PetWindow : Window
     private DateTime imageReactionPhase2Until;
     private bool imageReactionActive;
     private readonly bool diagnostics;
+    private string? pendingScanPath;
     private bool isOneEightyMinNoticeActive;
     private bool expanded = true;
     internal int AnimatedFrames { get; private set; }
     private double RobotX => expanded ? Canvas.GetLeft(robot) : 0;
     private double RobotY => expanded ? Canvas.GetTop(robot) : 0;
 
-    public PetWindow(bool diagnostics = false)
+    public PetWindow(bool diagnostics = false, string? initialScanPath = null)
     {
         this.diagnostics = diagnostics;
+        this.pendingScanPath = initialScanPath;
         Loc.Initialize(settings.Language);
         SkinManager.Instance.Initialize(settings);
         SkinManager.Instance.SkinChanged += (_, _) => Dispatcher.BeginInvoke(new Action(() => { ClearRegions(); Draw(); React(PetState.Twirl, 1.5); }));
@@ -367,6 +369,16 @@ public sealed partial class PetWindow : Window
         });
         UpdateRegion();
         if (!diagnostics) hub?.Start();
+        if (!string.IsNullOrWhiteSpace(pendingScanPath))
+        {
+            string path = pendingScanPath;
+            pendingScanPath = null;
+            Dispatcher.InvokeAsync(async () =>
+            {
+                await Task.Delay(600);
+                HandlePathScanRequest(path);
+            });
+        }
     }
     private nint Hook(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
@@ -803,6 +815,73 @@ public sealed partial class PetWindow : Window
             Settings.Log(ex);
         }
     }
+
+    public async void HandlePathScanRequest(string targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath)) return;
+        targetPath = targetPath.Trim().Trim('"');
+
+        if (settings.AssistantHidden)
+        {
+            SetAssistantHidden(false);
+        }
+        Expand();
+
+        if (!File.Exists(targetPath) && !Directory.Exists(targetPath))
+        {
+            React(PetState.Sad, 5);
+            ReceiveAnnouncement(new ClientNotice(
+                $"Объект не найден для проверки:\n{targetPath}",
+                "PixelGuard AV", 8) { LocalAnimation = PetState.Sad });
+            return;
+        }
+
+        if (antivirus == null)
+        {
+            ReceiveAnnouncement(new ClientNotice(
+                "Служба антивируса PixelGuard инициализируется…",
+                "PixelGuard AV", 6));
+            return;
+        }
+
+        string targetName = Path.GetFileName(targetPath);
+        if (string.IsNullOrWhiteSpace(targetName)) targetName = targetPath;
+
+        React(PetState.Think, 5);
+        ReceiveAnnouncement(new ClientNotice(
+            $"Проверяю: {targetName}… 🛡️\nАнализирую безопасность файлов…",
+            "PixelGuard AV", 10) { LocalAnimation = PetState.Think });
+
+        try
+        {
+            var summary = await antivirus.ScanPathAsync(targetPath, null, lifetime.Token);
+
+            if (summary.ThreatsDetected == 0)
+            {
+                React(PetState.Joy, 4);
+                ReceiveAnnouncement(new ClientNotice(
+                    $"Проверка завершена: {targetName}\n✅ Угроз не обнаружено! (Проверено объектов: {summary.TotalFilesScanned})",
+                    "PixelGuard AV", 10) { LocalAnimation = PetState.Joy });
+            }
+            else
+            {
+                React(PetState.Offended, 8);
+                try { System.Media.SystemSounds.Hand.Play(); } catch { }
+                string threatList = string.Join("\n", summary.Threats.Take(3).Select(t => "• " + t.ThreatName + " (" + Path.GetFileName(t.FilePath) + ")"));
+                ReceiveAnnouncement(new ClientNotice(
+                    $"⚠️ ВНИМАНИЕ! В {targetName} обнаружены угрозы ({summary.ThreatsDetected}):\n{threatList}\nФайлы изолированы в защищённый карантин.",
+                    "PixelGuard AV", 30) { LocalAnimation = PetState.Offended });
+            }
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+            ReceiveAnnouncement(new ClientNotice(
+                $"Ошибка при проверке {targetName}:\n{ex.Message}",
+                "PixelGuard AV", 10) { LocalAnimation = PetState.Sad });
+        }
+    }
+
     private void AddSoundProfileMenu(ContextMenu menu)
     {
         var soundMenu = new MenuItem { Header = Loc.T("TraySoundProfile") };

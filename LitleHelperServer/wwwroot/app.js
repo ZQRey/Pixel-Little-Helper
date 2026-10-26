@@ -326,6 +326,13 @@ function renderSecuritySettings(data){
   const av = data.antivirusStatus || {};
   const manifest = av.manifest || {};
 
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 байт';
+    if (bytes < 1024) return bytes + ' байт';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' КБ';
+    return (bytes / 1048576).toFixed(2) + ' МБ';
+  }
+
   host.innerHTML = `<div class="panel glpi-settings-panel">
     <h2>Безопасность и защита рабочих станций</h2>
     <p>Централизованное управление защитой от фишинга (WebGuard) и антивирусным модулем PixelGuard AV (проверка USB, эвристика, сигнатуры, изоляция в карантин и доверие Windows Defender).</p>
@@ -383,11 +390,22 @@ function renderSecuritySettings(data){
         <div style="margin-top:0.75rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
           <span style="font-size:0.85rem;color:var(--text-muted,#64748B)">
             Последнее обновление баз: <strong>${av.lastSyncAt ? new Date(av.lastSyncAt).toLocaleString() : 'Только что'}</strong>
-            ${manifest.bundleSizeBytes ? ` · Размер пакета: ${(manifest.bundleSizeBytes / 1024 / 1024).toFixed(2)} МБ` : ''}
+            ${manifest.bundleSizeBytes ? ` · Размер пакета: <strong>${formatBytes(manifest.bundleSizeBytes)}</strong>` : ''}
+            ${manifest.malwareBazaarHashCount ? ` · Сигнатур: <strong>${manifest.malwareBazaarHashCount.toLocaleString()}</strong>` : ''}
           </span>
-          <button id="btn-sync-av-now" type="button" class="secondary" style="font-size:0.85rem;padding:4px 10px">
-            🔄 Обновить базы сейчас
-          </button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="btn-probe-servers" type="button" class="secondary" style="font-size:0.85rem;padding:4px 10px">
+              🌐 Проверить доступность серверов
+            </button>
+            <button id="btn-sync-av-now" type="button" class="secondary" style="font-size:0.85rem;padding:4px 10px">
+              🔄 Обновить базы сейчас
+            </button>
+          </div>
+        </div>
+        <!-- Блок результатов проверки серверов обновления -->
+        <div id="probe-servers-result" style="display:none;margin-top:0.75rem;padding-top:0.75rem;border-top:1px dashed var(--border,#CBD5E1)">
+          <div style="font-weight:600;font-size:0.85rem;margin-bottom:6px">Статус доступности серверов обновления баз:</div>
+          <div id="probe-servers-list" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:8px;font-size:0.82rem"></div>
         </div>
       </div>
 
@@ -618,6 +636,42 @@ function renderSecuritySettings(data){
   $('#btn-refresh-threats').addEventListener('click', loadThreats);
   $('#threat-filter-status').addEventListener('change', loadThreats);
   loadThreats();
+
+  // Probe update servers availability
+  $('#btn-probe-servers').addEventListener('click', async () => {
+    const btn = $('#btn-probe-servers');
+    const container = $('#probe-servers-result');
+    const list = $('#probe-servers-list');
+    btn.disabled = true;
+    btn.textContent = '⏳ Проверка…';
+    container.style.display = 'block';
+    list.innerHTML = '<div style="color:var(--text-muted,#64748B);padding:4px">Тестирование соединения с внешними серверами обновлений…</div>';
+    try {
+      const results = await api('/antivirus/probe-servers', 'POST');
+      list.innerHTML = results.map(r => {
+        const badge = r.isReachable
+          ? `<span class="badge" style="background:#DCFCE7;color:#15803D">🟢 Доступен (${r.latencyMs} мс)</span>`
+          : `<span class="badge" style="background:#FEE2E2;color:#DC2626">🔴 Недоступен</span>`;
+        return `<div style="background:#fff;border:1px solid #CBD5E1;border-radius:6px;padding:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <strong>${escape(r.name)}</strong>
+            ${badge}
+          </div>
+          <div style="font-size:0.75rem;color:var(--text-muted,#64748B)">${escape(r.description)}</div>
+          <div style="font-size:0.75rem;margin-top:2px">
+            <span style="color:${r.isReachable ? 'var(--text-muted,#64748B)' : '#DC2626'}">${escape(r.statusText || r.errorMessage)}</span>
+          </div>
+        </div>`;
+      }).join('');
+      toast('Проверка серверов завершена');
+    } catch (e) {
+      list.innerHTML = `<div style="color:#DC2626;padding:4px">Ошибка проверки: ${escape(e.message)}</div>`;
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🌐 Проверить доступность серверов';
+    }
+  });
 
   // Manual AV sync now
   $('#btn-sync-av-now').addEventListener('click', async () => {

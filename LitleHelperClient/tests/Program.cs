@@ -1232,6 +1232,92 @@ try
     WebGuardProtocolHandler.RemoveOverride();
     Check(true, "WebGuardProtocolHandler methods executed safely");
 
+    // ==========================================
+    // Antivirus & PixelGuard AV Unit Tests
+    // ==========================================
+    var avTestDir = Path.Combine(temp, "av-tests");
+    Directory.CreateDirectory(avTestDir);
+    QuarantineManager.OverrideBaseDir = avTestDir;
+    AntivirusService.OverrideDbDir = Path.Combine(avTestDir, "av-db");
+
+    // 1. Test ResourceThrottler
+    var throttler = new ResourceThrottler(testSettings);
+    Check(throttler.ProcessorCount > 0, "ResourceThrottler detected CPU cores count");
+    Check(throttler.Tier == HardwareTier.Low || throttler.Tier == HardwareTier.Medium || throttler.Tier == HardwareTier.High, "ResourceThrottler detected valid HardwareTier");
+    var cpu = throttler.GetSystemCpuUsage();
+    Check(cpu >= 0 && cpu <= 100, "ResourceThrottler reads valid system CPU percentage");
+
+    // 2. Test QuarantineManager
+    var qm = new QuarantineManager();
+    string dummyThreatFile = Path.Combine(avTestDir, "malware_sample.exe");
+    File.WriteAllText(dummyThreatFile, "DUMMY_VIRUS_PAYLOAD_12345");
+    string threatHash = QuarantineManager.ComputeSha256(dummyThreatFile);
+    Check(!qm.IsWhitelisted(dummyThreatFile, threatHash), "Newly discovered file is not whitelisted");
+
+    // Quarantine file
+    var quarantinedItem = qm.QuarantineFile(dummyThreatFile, "Trojan.Test.Payload", "Heuristic", 30);
+    Check(quarantinedItem != null, "QuarantineFile successfully returned QuarantinedItem");
+    Check(!File.Exists(dummyThreatFile), "Original threat file was removed from source location");
+    Check(File.Exists(quarantinedItem!.QuarantinedPath), "Quarantined encrypted file was created");
+    Check(quarantinedItem.QuarantinedPath.EndsWith(".quarantine"), "Quarantined file has .quarantine extension");
+
+    var qList = qm.GetQuarantinedItems();
+    Check(qList.Any(i => i.Id == quarantinedItem.Id), "Quarantine index tracks the isolated item");
+
+    // Restore file and verify auto-whitelist
+    bool restored = qm.RestoreFile(quarantinedItem.Id);
+    Check(restored, "RestoreFile returned true");
+    Check(File.Exists(dummyThreatFile), "Restored file exists at original location");
+    Check(File.ReadAllText(dummyThreatFile) == "DUMMY_VIRUS_PAYLOAD_12345", "Restored file decrypted content matches original");
+    Check(qm.IsWhitelisted(dummyThreatFile, threatHash), "Restored file was automatically added to whitelist");
+
+    // Test Delete & Auto-Purge
+    string fileToDelete = Path.Combine(avTestDir, "temp_threat.exe");
+    File.WriteAllText(fileToDelete, "TEMP_TEST_DATA");
+    var toDelete = qm.QuarantineFile(fileToDelete, "Riskware.Test", "Heuristic", 7);
+    Check(toDelete != null && File.Exists(toDelete.QuarantinedPath), "Second threat quarantined");
+    bool deleted = qm.DeletePermanently(toDelete!.Id);
+    Check(deleted, "DeletePermanently returned true");
+    Check(!File.Exists(toDelete.QuarantinedPath), "Permanently deleted file physically wiped from disk");
+
+    // 3. Test AntivirusService Heuristics & Exclusions
+    var hubMock = new HubConnectionService(testSettings);
+    using var avService = new AntivirusService(testSettings, hubMock);
+
+    // Double extension heuristic
+    string doubleExtFile = Path.Combine(avTestDir, "financial_report.pdf.exe");
+    File.WriteAllText(doubleExtFile, "MZ_EXECUTABLE_STUB");
+    var scanDoubleExt = avService.ScanFileAsync(doubleExtFile, CancellationToken.None).GetAwaiter().GetResult();
+    Check(scanDoubleExt.IsThreat && scanDoubleExt.ThreatName == "Worm.DisguisedDoubleExtension", "Antivirus detects double extension threat (.pdf.exe)");
+
+    // Autorun worm heuristic
+    string autorunFile = Path.Combine(avTestDir, "autorun.inf");
+    File.WriteAllText(autorunFile, "[autorun]\r\nopen=malware.exe\r\naction=Start");
+    var scanAutorun = avService.ScanFileAsync(autorunFile, CancellationToken.None).GetAwaiter().GetResult();
+    Check(scanAutorun.IsThreat && scanAutorun.ThreatName == "Worm.Autorun.USB", "Antivirus detects malicious autorun.inf USB worm");
+
+    // Malicious script dropper heuristic
+    string scriptFile = Path.Combine(avTestDir, "invoice.vbs");
+    File.WriteAllText(scriptFile, "Set sh = CreateObject(\"WScript.Shell\")\r\nsh.Run \"powershell.exe -enc AAAA\"");
+    var scanScript = avService.ScanFileAsync(scriptFile, CancellationToken.None).GetAwaiter().GetResult();
+    Check(scanScript.IsThreat && scanScript.ThreatName == "Dropper.Script.Heuristic", "Antivirus detects obfuscated PowerShell dropper script");
+
+    // Clean file verification
+    string cleanFile = Path.Combine(avTestDir, "normal_notes.txt");
+    File.WriteAllText(cleanFile, "Hello, this is a clean text file without any threats.");
+    var scanClean = avService.ScanFileAsync(cleanFile, CancellationToken.None).GetAwaiter().GetResult();
+    Check(!scanClean.IsThreat, "Clean text file passes scan as safe");
+
+    // Excluded extension test
+    testSettings.AntivirusExcludedExtensions = ".bak,.log,.tmp";
+    string excludedExtFile = Path.Combine(avTestDir, "report.pdf.exe.log");
+    File.WriteAllText(excludedExtFile, "Log content");
+    Check(avService.IsExcluded(excludedExtFile, new FileInfo(excludedExtFile).Length), "Excluded extensions are skipped by scanner");
+
+    // Reset overrides
+    QuarantineManager.OverrideBaseDir = null;
+    AntivirusService.OverrideDbDir = null;
+
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

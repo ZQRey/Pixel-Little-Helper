@@ -43,7 +43,22 @@ public record EmergencyOptions(
     Dictionary<string, List<string>>? CodeBlueBranchUsers = null
 );
 
-public record SecurityOptions(bool WebGuardEnabled = true);
+public record SecurityOptions(
+    bool WebGuardEnabled = true,
+    bool AntivirusEnabled = true,
+    int AntivirusScheduleHours = 6,
+    int AntivirusRetentionDays = 30,
+    string PerformanceProfile = "auto",
+    int MaxCpuPercent = 25,
+    bool PauseOnUserActivity = true,
+    bool ClamAvEnabled = true,
+    bool YaraEnabled = true,
+    bool HashCheckEnabled = true,
+    string ExcludedExtensions = ".iso, .vmdk, .bak, .1cd, .log",
+    string ExcludedPaths = "",
+    long MaxScanSizeBytes = 262144000,
+    string ThreatAction = "quarantine"
+);
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
 {

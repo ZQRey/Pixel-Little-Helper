@@ -322,53 +322,343 @@ function renderClientUpdates(data){
 
 function renderSecuritySettings(data){
   const host = ($('#settings-tab-body')||$('#content'));
+  const s = data.settings || data;
+  const av = data.antivirusStatus || {};
+  const manifest = av.manifest || {};
+
   host.innerHTML = `<div class="panel glpi-settings-panel">
-    <h2>Безопасность и защита от фишинга (WebGuard)</h2>
-    <p>Централизованное управление защитой рабочих станций от вредоносных и фишинговых ссылок, перехват опасных URL в браузере и автоматическое развертывание групповых политик (GPO) в домене Active Directory.</p>
+    <h2>Безопасность и защита рабочих станций</h2>
+    <p>Централизованное управление защитой от фишинга (WebGuard) и антивирусным модулем PixelGuard AV (проверка USB, эвристика, сигнатуры, изоляция в карантин и доверие Windows Defender).</p>
+
+    <!-- ВЕБ-ЗАЩИТА WEBGUARD -->
     <div style="background:var(--card-bg,#fff);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1.25rem;margin-bottom:1.5rem">
-      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">🛡️ Проверка фишинговых ссылок (WebGuard)</h3>
+      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">🛡️ Защита от фишинговых ссылок (WebGuard)</h3>
       <p style="font-size:0.95rem;color:var(--text-muted,#475569);margin-bottom:1rem">
-        <strong>При включении:</strong> интерактивный помощник назначает себя в качестве обработчика ссылок по умолчанию, использует Microsoft Edge для открытия проверенных ссылок (или запрашивает предпочтительный браузер у пользователя при отсутствии Edge) и активирует расширение браузера.<br>
-        <strong>При выключении:</strong> помощник возвращает системным браузером по умолчанию браузер, выбранный пользователем, и отключает расширение.
+        <strong>При включении:</strong> интерактивный помощник назначает себя обработчиком веб-ссылок, открывает безопасные сайты в браузере по умолчанию и блокирует фишинговые ресурсы.<br>
+        <strong>При выключении:</strong> системным браузером по умолчанию восстанавливается стандартный браузер пользователя.
       </p>
       <label class="check-label" style="font-size:1.05rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px">
-        <input id="webguard-enabled" type="checkbox" ${data.webGuardEnabled !== false ? 'checked' : ''}>
+        <input id="webguard-enabled" type="checkbox" ${s.webGuardEnabled !== false ? 'checked' : ''}>
         Включить проверку фишинговых ссылок на всех ПК
       </label>
-      <div style="margin-top:1rem">
-        <button id="save-security-switch" class="primary" type="button">Сохранить состояние защиты</button>
-      </div>
-      <p id="security-save-result" style="margin-top:0.5rem;font-size:0.9rem"></p>
-    </div>
-
-    <div style="background:var(--card-bg,#fff);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1.25rem">
-      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">📜 Автоматическая групповая политика Active Directory (GPO)</h3>
-      <p style="font-size:0.95rem;color:var(--text-muted,#475569);line-height:1.5">
-        Скачайте готовый PowerShell-скрипт <code>Deploy-WebGuardGpo.ps1</code> и запустите его от имени Администратора домена на сервере контроллера домена Active Directory.<br>
-        Скрипт автоматически проверит наличие GPO <strong>«PixelHelper Web Guard Policy»</strong>, создаст её при отсутствии, сконфигурирует принудительную установку защитного расширения для Microsoft Edge, Google Chrome и Яндекс Браузера, свяжет политику с доменом и выведет подробный отчёт с GUID и списком изменённых параметров.
-      </p>
       <div style="margin-top:1rem;display:flex;gap:1rem;align-items:center">
-        <a id="btn-download-gpo" href="/api/settings/security/gpo-script" download="Deploy-WebGuardGpo.ps1" class="primary" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:600;background:var(--primary,#2563EB);color:#fff">
-          ⬇ Скачать скрипт групповой политики (.ps1)
+        <a id="btn-download-gpo" href="/api/settings/security/gpo-script" download="Deploy-WebGuardGpo.ps1" class="secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem">
+          ⬇ Скачать GPO-скрипт WebGuard (.ps1)
         </a>
       </div>
-      <p style="margin-top:0.75rem;font-size:0.85rem;color:var(--text-muted,#64748B)">
-        После выполнения скрипта на сервере AD изменения вступят в силу на рабочих станциях после следующего автоматического обновления политик либо при выполнении команды <code>gpupdate /force</code>.
+    </div>
+
+    <!-- АНТИВИРУСНЫЙ МОДУЛЬ PIXELGUARD AV -->
+    <div style="background:var(--card-bg,#fff);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1.25rem;margin-bottom:1.5rem">
+      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">🦠 Антивирусная защита (PixelGuard AV) и сканирование накопителей</h3>
+      <p style="font-size:0.95rem;color:var(--text-muted,#475569);margin-bottom:1rem">
+        Автономный антивирусный сканер на базе открытых баз безопасности: автоматически проверяет подключаемые USB-накопители, выполняет экспресс- и фоновую детекцию угроз, изолирует подозрительные файлы в карантин с шифрованием и контролирует нагрузку на систему.
       </p>
+
+      <label class="check-label" style="font-size:1.05rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;margin-bottom:1.25rem">
+        <input id="av-enabled" type="checkbox" ${s.antivirusEnabled !== false ? 'checked' : ''}>
+        Включить антивирусную защиту PixelGuard AV на всех ПК
+      </label>
+
+      <!-- Информационный блок источников баз -->
+      <div style="background:var(--bg-secondary,#F8FAFC);border:1px solid var(--border,#E2E8F0);border-radius:8px;padding:1rem;margin-bottom:1.25rem">
+        <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem">Источники открытых баз безопасности:</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:0.75rem;font-size:0.85rem">
+          <div style="background:#fff;border:1px solid #CBD5E1;border-radius:6px;padding:0.75rem">
+            <strong>Cisco Talos ClamAV</strong><br>
+            <span style="color:var(--text-muted,#64748B)">PE-файлы, архивы, байткод</span><br>
+            <span class="badge" style="margin-top:4px;display:inline-block;background:#E0F2FE;color:#0369A1">${manifest.clamAvVersion || 'Подключено'}</span>
+          </div>
+          <div style="background:#fff;border:1px solid #CBD5E1;border-radius:6px;padding:0.75rem">
+            <strong>YARA Community</strong><br>
+            <span style="color:var(--text-muted,#64748B)">Autorun-черви, макросы, скрипты</span><br>
+            <span class="badge" style="margin-top:4px;display:inline-block;background:#DCFCE7;color:#15803D">${manifest.yaraRulesCount ? manifest.yaraRulesCount + ' правил' : 'Активно'}</span>
+          </div>
+          <div style="background:#fff;border:1px solid #CBD5E1;border-radius:6px;padding:0.75rem">
+            <strong>Abuse.ch MalwareBazaar</strong><br>
+            <span style="color:var(--text-muted,#64748B)">SHA-256 свежих угроз за 30 дней</span><br>
+            <span class="badge" style="margin-top:4px;display:inline-block;background:#FEF3C7;color:#B45309">${manifest.malwareBazaarHashCount ? manifest.malwareBazaarHashCount.toLocaleString() + ' хэшей' : 'Синхронизировано'}</span>
+          </div>
+        </div>
+        <div style="margin-top:0.75rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
+          <span style="font-size:0.85rem;color:var(--text-muted,#64748B)">
+            Последнее обновление баз: <strong>${av.lastSyncAt ? new Date(av.lastSyncAt).toLocaleString() : 'Только что'}</strong>
+            ${manifest.bundleSizeBytes ? ` · Размер пакета: ${(manifest.bundleSizeBytes / 1024 / 1024).toFixed(2)} МБ` : ''}
+          </span>
+          <button id="btn-sync-av-now" type="button" class="secondary" style="font-size:0.85rem;padding:4px 10px">
+            🔄 Обновить базы сейчас
+          </button>
+        </div>
+      </div>
+
+      <!-- Настройки расписания, карантина и адаптивной производительности -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;margin-bottom:1.25rem">
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Расписание загрузки баз сервером:</label>
+          <select id="av-schedule-hours" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
+            <option value="3" ${s.antivirusScheduleHours === 3 ? 'selected' : ''}>Каждые 3 часа (рекомендуется для сети)</option>
+            <option value="6" ${s.antivirusScheduleHours === 6 || !s.antivirusScheduleHours ? 'selected' : ''}>Каждые 6 часов (стандартный режим)</option>
+            <option value="12" ${s.antivirusScheduleHours === 12 ? 'selected' : ''}>Каждые 12 часов</option>
+            <option value="24" ${s.antivirusScheduleHours === 24 ? 'selected' : ''}>Раз в сутки (24 часа)</option>
+          </select>
+          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Сервер защищен от блокировок Cloudflare по IP-адресу.</small>
+        </div>
+
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Срок хранения угроз в карантине:</label>
+          <select id="av-retention-days" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
+            <option value="7" ${s.antivirusRetentionDays === 7 ? 'selected' : ''}>7 дней</option>
+            <option value="14" ${s.antivirusRetentionDays === 14 ? 'selected' : ''}>14 дней</option>
+            <option value="30" ${s.antivirusRetentionDays === 30 || !s.antivirusRetentionDays ? 'selected' : ''}>30 дней (рекомендуется)</option>
+            <option value="60" ${s.antivirusRetentionDays === 60 ? 'selected' : ''}>60 дней</option>
+            <option value="0" ${s.antivirusRetentionDays === 0 ? 'selected' : ''}>Бессрочно (только ручное удаление)</option>
+          </select>
+          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">По истечении срока файл автоматически физически удаляется с диска ПК.</small>
+        </div>
+
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Профиль нагрузки на компьютер:</label>
+          <select id="av-perf-profile" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
+            <option value="auto" ${s.performanceProfile === 'auto' || !s.performanceProfile ? 'selected' : ''}>Авто (Адаптивный под мощность ПК)</option>
+            <option value="low" ${s.performanceProfile === 'low' ? 'selected' : ''}>Энергосберегающий (CPU &lt;15%, слабые ПК)</option>
+            <option value="balanced" ${s.performanceProfile === 'balanced' ? 'selected' : ''}>Сбалансированный (CPU &lt;25–30%)</option>
+            <option value="high" ${s.performanceProfile === 'high' ? 'selected' : ''}>Максимальный (для свободных станций)</option>
+          </select>
+          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Помощник определяет CPU/RAM и не нагружает систему на 100%.</small>
+        </div>
+
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Лимит нагрузки процессора:</label>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input id="av-max-cpu" type="range" min="10" max="50" step="5" value="${s.maxCpuPercent || 25}" style="flex:1">
+            <span id="av-max-cpu-val" style="font-weight:600;min-width:45px">${s.maxCpuPercent || 25}%</span>
+          </div>
+          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Пользователь может комфортно работать в браузере и 1С.</small>
+        </div>
+      </div>
+
+      <div style="margin-bottom:1.25rem">
+        <label class="check-label" style="font-size:0.95rem;cursor:pointer;display:inline-flex;align-items:center;gap:8px">
+          <input id="av-pause-user-activity" type="checkbox" ${s.pauseOnUserActivity !== false ? 'checked' : ''}>
+          Приостанавливать фоновое сканирование при активной работе пользователя (User Activity Backoff)
+        </label>
+      </div>
+
+      <!-- Исключения от сканирования -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem">
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Исключаемые расширения файлов:</label>
+          <input id="av-excluded-ext" type="text" value="${escape(s.excludedExtensions || '.iso, .vmdk, .bak, .1cd, .log')}" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
+          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Файлы с указанными расширениями пропускаются при сканировании.</small>
+        </div>
+        <div>
+          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Исключаемые пути и папки:</label>
+          <input id="av-excluded-paths" type="text" placeholder="C:\\Bases\\1C; D:\\Backups" value="${escape(s.excludedPaths || '')}" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
+          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Разделитель путей — точка с запятой (;).</small>
+        </div>
+      </div>
+
+      <!-- Доверие Windows Defender GPO -->
+      <div style="border-top:1px solid var(--border,#E2E8F0);padding-top:1rem;margin-top:1rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem">
+        <div>
+          <strong>Политика доверия Windows Defender (GPO):</strong><br>
+          <span style="font-size:0.85rem;color:var(--text-muted,#64748B)">Исключает PixelHelper и его антивирусные базы из проверок защитника Windows Defender во избежание конфликтов.</span>
+        </div>
+        <a href="/api/settings/security/antivirus-gpo-script" download="Deploy-AntivirusTrustGpo.ps1" class="secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem">
+          ⬇ Скачать GPO доверия Defender (.ps1)
+        </a>
+      </div>
+
+      <div style="margin-top:1.25rem">
+        <button id="save-security-switch" class="primary" type="button" style="padding:8px 20px;font-weight:600">
+          Сохранить параметры безопасности
+        </button>
+        <span id="security-save-result" style="margin-left:1rem;font-size:0.9rem"></span>
+      </div>
+    </div>
+
+    <!-- ЖУРНАЛ ОБНАРУЖЕННЫХ УГРОЗ И КАРАНТИН -->
+    <div style="background:var(--card-bg,#fff);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1.25rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.75rem">
+        <div>
+          <h3 style="margin:0;display:flex;align-items:center;gap:8px">☣️ Журнал обнаруженных угроз и управление карантином</h3>
+          <p style="margin:4px 0 0 0;font-size:0.85rem;color:var(--text-muted,#64748B)">
+            Просмотр изолированных файлов на рабочих станциях сети, полное удаление с диска или восстановление с автоматическим занесением в список исключений.
+          </p>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select id="threat-filter-status" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border,#CBD5E1);font-size:0.85rem">
+            <option value="all">Все статусы</option>
+            <option value="Quarantined" selected>В карантине</option>
+            <option value="Restored">Восстановленные</option>
+            <option value="Deleted">Удаленные</option>
+          </select>
+          <button id="btn-refresh-threats" class="secondary" type="button" style="font-size:0.85rem;padding:5px 10px">Обновить</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+          <thead>
+            <tr style="border-bottom:2px solid var(--border,#E2E8F0);text-align:left">
+              <th style="padding:8px">ДАТА</th>
+              <th style="padding:8px">КОМПЬЮТЕР</th>
+              <th style="padding:8px">ПОЛЬЗОВАТЕЛЬ</th>
+              <th style="padding:8px">ИСХОДНЫЙ ПУТЬ</th>
+              <th style="padding:8px">УГРОЗА</th>
+              <th style="padding:8px">СТАТУС</th>
+              <th style="padding:8px;text-align:right">ДЕЙСТВИЯ</th>
+            </tr>
+          </thead>
+          <tbody id="threat-table-body">
+            <tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted,#64748B)">Загрузка списка угроз…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>`;
 
+  // Slider update listener
+  $('#av-max-cpu').addEventListener('input', e => {
+    $('#av-max-cpu-val').textContent = e.target.value + '%';
+  });
+
+  // Load Threats
+  async function loadThreats() {
+    const tbody = $('#threat-table-body');
+    if (!tbody) return;
+    try {
+      const status = $('#threat-filter-status').value;
+      const threats = await api('/antivirus/threats?status=' + encodeURIComponent(status));
+      if (!threats || !threats.length) {
+        tbody.innerHTML = `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-muted,#64748B)">Обнаруженных угроз нет. Система безопасности в норме.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = threats.map(t => {
+        const isQuarantined = t.status === 'Quarantined';
+        const isRestored = t.status === 'Restored';
+        const isDeleted = t.status === 'Deleted';
+        let statusBadge = `<span class="badge" style="background:#FEF3C7;color:#B45309">В карантине</span>`;
+        if (isRestored) statusBadge = `<span class="badge" style="background:#DCFCE7;color:#15803D">Восстановлен (исключение)</span>`;
+        if (isDeleted) statusBadge = `<span class="badge" style="background:#F1F5F9;color:#64748B">Удален безвозвратно</span>`;
+
+        let retentionInfo = '';
+        if (isQuarantined && t.quarantinedUntil) {
+          const daysLeft = Math.ceil((new Date(t.quarantinedUntil) - new Date()) / (1000 * 3600 * 24));
+          retentionInfo = daysLeft > 0 ? `<div style="font-size:0.75rem;color:var(--text-muted,#64748B)">Автоудаление через ${daysLeft} дн.</div>` : `<div style="font-size:0.75rem;color:#DC2626">Срок истёк</div>`;
+        }
+
+        return `<tr style="border-bottom:1px solid var(--border,#E2E8F0)">
+          <td style="padding:8px;white-space:nowrap">${new Date(t.detectedAt).toLocaleString()}</td>
+          <td style="padding:8px;font-weight:600">${escape(t.machineName)}</td>
+          <td style="padding:8px">${escape(t.userName || '—')}</td>
+          <td style="padding:8px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escape(t.filePath)}">
+            <code>${escape(t.filePath)}</code>
+          </td>
+          <td style="padding:8px">
+            <strong style="color:#DC2626">${escape(t.threatName)}</strong>
+            <div style="font-size:0.75rem;color:var(--text-muted,#64748B)">${escape(t.threatType)} · ${(t.fileSizeBytes / 1024).toFixed(1)} КБ</div>
+          </td>
+          <td style="padding:8px">
+            ${statusBadge}
+            ${retentionInfo}
+          </td>
+          <td style="padding:8px;text-align:right;white-space:nowrap">
+            ${isQuarantined ? `
+              <button class="secondary btn-restore-threat" data-id="${t.id}" style="color:#15803D;padding:4px 8px;font-size:0.8rem;margin-right:4px" title="Восстановить файл на ПК и добавить в исключения">
+                Восстановить
+              </button>
+              <button class="secondary btn-delete-threat" data-id="${t.id}" style="color:#DC2626;padding:4px 8px;font-size:0.8rem" title="Удалить файл навсегда с компьютера">
+                Удалить навсегда
+              </button>
+            ` : '—'}
+          </td>
+        </tr>`;
+      }).join('');
+
+      // Bind restore buttons
+      tbody.querySelectorAll('.btn-restore-threat').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.id;
+          if (!confirm('Восстановить файл из карантина на прежнее место?\n\nФайл будет расшифрован, возвращен на рабочий компьютер и автоматически добавлен в доверенный белый список исключений, чтобы не попадать в карантин повторно.')) return;
+          btn.disabled = true;
+          try {
+            await api(`/antivirus/threats/${id}/restore`, 'POST');
+            toast('Команда на восстановление отправлена агенту. Файл добавлен в исключения.');
+            loadThreats();
+          } catch (e) {
+            toast(e.message, true);
+            btn.disabled = false;
+          }
+        });
+      });
+
+      // Bind delete buttons
+      tbody.querySelectorAll('.btn-delete-threat').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const id = btn.dataset.id;
+          if (!confirm('ВНИМАНИЕ! Полностью и безвозвратно стереть изолированный файл с рабочего компьютера?')) return;
+          btn.disabled = true;
+          try {
+            await api(`/antivirus/threats/${id}`, 'DELETE');
+            toast('Файл безвозвратно удален с рабочего компьютера.');
+            loadThreats();
+          } catch (e) {
+            toast(e.message, true);
+            btn.disabled = false;
+          }
+        });
+      });
+
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" style="padding:20px;text-align:center;color:#DC2626">Ошибка загрузки угроз: ${escape(e.message)}</td></tr>`;
+    }
+  }
+
+  $('#btn-refresh-threats').addEventListener('click', loadThreats);
+  $('#threat-filter-status').addEventListener('change', loadThreats);
+  loadThreats();
+
+  // Manual AV sync now
+  $('#btn-sync-av-now').addEventListener('click', async () => {
+    const btn = $('#btn-sync-av-now');
+    btn.disabled = true;
+    btn.textContent = '⏳ Синхронизация…';
+    try {
+      const res = await api('/antivirus/sync-now', 'POST');
+      toast(res.message || 'Синхронизация баз успешно запущена');
+      // Reload page data
+      const refreshed = await api('/settings/security');
+      renderSecuritySettings(refreshed);
+    } catch (e) {
+      toast(e.message, true);
+      btn.disabled = false;
+      btn.textContent = '🔄 Обновить базы сейчас';
+    }
+  });
+
+  // Save all security & AV settings
   $('#save-security-switch').addEventListener('click', async () => {
     const btn = $('#save-security-switch');
     const result = $('#security-save-result');
     btn.disabled = true;
-    result.textContent = 'Применение…';
+    result.textContent = 'Сохранение…';
     try {
-      const enabled = $('#webguard-enabled').checked;
-      await api('/settings/security', 'PUT', { webGuardEnabled: enabled });
-      result.textContent = enabled ? 'Проверка фишинговых ссылок включена на рабочих станциях.' : 'Проверка ссылок отключена. На ПК восстановлен стандартный браузер пользователя.';
+      const payload = {
+        webGuardEnabled: $('#webguard-enabled').checked,
+        antivirusEnabled: $('#av-enabled').checked,
+        antivirusScheduleHours: parseInt($('#av-schedule-hours').value, 10) || 6,
+        antivirusRetentionDays: parseInt($('#av-retention-days').value, 10),
+        performanceProfile: $('#av-perf-profile').value,
+        maxCpuPercent: parseInt($('#av-max-cpu').value, 10) || 25,
+        pauseOnUserActivity: $('#av-pause-user-activity').checked,
+        excludedExtensions: $('#av-excluded-ext').value,
+        excludedPaths: $('#av-excluded-paths').value
+      };
+      await api('/settings/security', 'PUT', payload);
+      result.textContent = 'Параметры безопасности сохранены и отправлены на рабочие станции.';
       result.style.color = 'var(--success,#16a34a)';
-      toast('Настройки безопасности сохранены и отправлены на ПК');
+      toast('Настройки безопасности и антивируса сохранены');
     } catch (e) {
       result.textContent = e.message;
       result.style.color = 'var(--error,#dc2626)';

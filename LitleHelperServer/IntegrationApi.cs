@@ -453,12 +453,17 @@ public static class IntegrationApi
             });
         });
 
-        app.MapGet("/api/settings/security", (IntegrationSettings settings) => Results.Ok(settings.Security())).RequireAuthorization("settings.manage");
+        app.MapGet("/api/settings/security", (IntegrationSettings settings, AntivirusSyncWorker avWorker) => Results.Ok(new
+        {
+            settings = settings.Security(),
+            antivirusStatus = avWorker.GetStatus()
+        })).RequireAuthorization("settings.manage");
 
         app.MapPut("/api/settings/security", async (SecurityOptions request, IntegrationSettings settings, IHubContext<HelperHub> hub) =>
         {
             settings.SaveSecurity(request);
             await hub.Clients.Group("AllAgents").SendAsync("WebGuardToggled", request.WebGuardEnabled);
+            await hub.Clients.Group("AllAgents").SendAsync("AntivirusSettingsUpdated", JsonSerializer.Serialize(request));
             return Results.Ok(settings.Security());
         }).RequireAuthorization("settings.manage");
 
@@ -470,9 +475,140 @@ public static class IntegrationApi
             byte[] bytes = System.Text.Encoding.UTF8.GetBytes(script);
             return Results.File(bytes, "application/octet-stream", "Deploy-WebGuardGpo.ps1");
         }).RequireAuthorization("settings.manage");
+
+        app.MapGet("/api/settings/security/antivirus-gpo-script", () =>
+        {
+            string script = AntivirusGpoGenerator.GenerateScript();
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(script);
+            return Results.File(bytes, "application/octet-stream", "Deploy-AntivirusTrustGpo.ps1");
+        }).RequireAuthorization("settings.manage");
+
+        app.MapPost("/api/antivirus/sync-now", async (AntivirusSyncWorker avWorker, CancellationToken token) =>
+        {
+            try
+            {
+                bool success = await avWorker.TriggerSyncNowAsync(token);
+                return Results.Ok(new { success, message = success ? "Синхронизация баз успешно запущена и завершена." : "Синхронизация уже выполняется." });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { success = false, message = ex.Message });
+            }
+        }).RequireAuthorization("settings.manage");
+
+        app.MapGet("/api/antivirus/manifest", (AntivirusSyncWorker avWorker) =>
+        {
+            var manifest = avWorker.GetManifest();
+            return manifest != null ? Results.Ok(manifest) : Results.NoContent();
+        }).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { AuthenticationSchemes = "Bearer,Agent" });
+
+        app.MapGet("/api/antivirus/bundle", (AntivirusSyncWorker avWorker) =>
+        {
+            string? bundlePath = avWorker.GetBundlePath();
+            return bundlePath != null && File.Exists(bundlePath)
+                ? Results.File(bundlePath, "application/zip", "antivirus_bundle.zip", enableRangeProcessing: true)
+                : Results.NotFound(new { error = "Пакет баз ещё не сформирован на сервере." });
+        }).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { AuthenticationSchemes = "Bearer,Agent" });
+
+        app.MapGet("/api/antivirus/threats", async (HelperDb db, string? status, CancellationToken token) =>
+        {
+            var query = db.ThreatRecords.AsNoTracking().AsQueryable();
+            if (!string.IsNullOrWhiteSpace(status) && status != "all")
+            {
+                query = query.Where(t => t.Status == status);
+            }
+            var list = await query.OrderByDescending(t => t.DetectedAt).Take(200).ToListAsync(token);
+            return Results.Ok(list);
+        }).RequireAuthorization("settings.manage");
+
+        app.MapPost("/api/antivirus/threats", async (ThreatReportRequest req, HelperDb db, IntegrationSettings settings, IHubContext<HelperHub> hub, CancellationToken token) =>
+        {
+            var sec = settings.Security();
+            DateTime now = DateTime.UtcNow;
+            DateTime? until = sec.AntivirusRetentionDays > 0 ? now.AddDays(sec.AntivirusRetentionDays) : null;
+
+            var record = new ThreatRecord
+            {
+                MachineName = req.MachineName,
+                UserName = req.UserName,
+                FilePath = req.FilePath,
+                ThreatName = req.ThreatName,
+                ThreatType = req.ThreatType,
+                FileSizeBytes = req.FileSizeBytes,
+                Sha256 = req.Sha256,
+                Status = "Quarantined",
+                DetectedAt = now,
+                QuarantinedUntil = until,
+                ActionTaken = req.ActionTaken
+            };
+
+            db.ThreatRecords.Add(record);
+            await db.SaveChangesAsync(token);
+
+            await hub.Clients.Group("PanelStaff").SendAsync("ThreatDetected", record);
+            return Results.Ok(record);
+        }).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { AuthenticationSchemes = "Bearer,Agent" });
+
+        app.MapPost("/api/antivirus/threats/{id:int}/restore", async (int id, HelperDb db, IHubContext<HelperHub> hub, System.Security.Claims.ClaimsPrincipal actor, CancellationToken token) =>
+        {
+            var threat = await db.ThreatRecords.FindAsync([id], token);
+            if (threat == null) return Results.NotFound(new { error = "Запись об угрозе не найдена." });
+
+            threat.Status = "Restored";
+            threat.RestoredAt = DateTime.UtcNow;
+
+            if (!string.IsNullOrWhiteSpace(threat.Sha256))
+            {
+                bool exists = await db.AntivirusWhitelist.AnyAsync(w => w.Sha256 == threat.Sha256, token);
+                if (!exists)
+                {
+                    db.AntivirusWhitelist.Add(new AntivirusWhitelistItem
+                    {
+                        Sha256 = threat.Sha256,
+                        FilePath = threat.FilePath,
+                        AddedBy = actor.Identity?.Name ?? "Admin",
+                        Reason = $"Восстановлен из карантина ({threat.ThreatName})",
+                        AddedAt = DateTime.UtcNow
+                    });
+                }
+            }
+
+            await db.SaveChangesAsync(token);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                threatId = threat.Id,
+                filePath = threat.FilePath,
+                sha256 = threat.Sha256
+            });
+            await hub.Clients.Group("AgentMachine:" + threat.MachineName.ToLowerInvariant()).SendAsync("AntivirusRestoreFile", payload);
+
+            return Results.Ok(new { success = true, threat });
+        }).RequireAuthorization("settings.manage");
+
+        app.MapDelete("/api/antivirus/threats/{id:int}", async (int id, HelperDb db, IHubContext<HelperHub> hub, CancellationToken token) =>
+        {
+            var threat = await db.ThreatRecords.FindAsync([id], token);
+            if (threat == null) return Results.NotFound(new { error = "Запись об угрозе не найдена." });
+
+            threat.Status = "Deleted";
+            threat.DeletedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(token);
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                threatId = threat.Id,
+                filePath = threat.FilePath,
+                sha256 = threat.Sha256
+            });
+            await hub.Clients.Group("AgentMachine:" + threat.MachineName.ToLowerInvariant()).SendAsync("AntivirusDeleteFile", payload);
+
+            return Results.Ok(new { success = true, threat });
+        }).RequireAuthorization("settings.manage");
     }
     public record UpdateSwitch(bool Enabled);
     public record TelegramDirectoryProbe(long TelegramId);
+    public record ThreatReportRequest(string MachineName, string UserName, string FilePath, string ThreatName, string ThreatType, long FileSizeBytes, string Sha256, string ActionTaken = "Quarantined");
     public record ChangeAdPasswordRequest(string Username, string NewPassword, string CurrentPassword = "");
 }
 

@@ -138,6 +138,8 @@ builder.Services.AddScoped<GlpiReports>();
 builder.Services.AddScoped<TicketSurveys>();
 builder.Services.AddScoped<SurveyAlerts>();
 builder.Services.AddHostedService<GlpiReportWorker>();
+builder.Services.AddSingleton<AntivirusSyncWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AntivirusSyncWorker>());
 var app = builder.Build();
 app.MapGlpiReports();
 app.MapGlpiReportPortal();

@@ -32,6 +32,7 @@ public sealed partial class PetWindow : Window
     private readonly RobotClicks robotClicks = new();
     private PetState? localNoticeAnimation;
     private HubConnectionService? hub;
+    private AntivirusService? antivirus;
     private readonly Sprites sprites = new();
     private readonly FaceBadges faceBadges = new();
     private readonly Image faceOverlay = new() { Width = 30, Height = 22, IsHitTestVisible = false };
@@ -390,12 +391,38 @@ public sealed partial class PetWindow : Window
             handled = true;
             return new nint(hit ? 1 : -1);
         }
+        if (message == NativeMethods.WM_DEVICECHANGE && wParam.ToInt32() == NativeMethods.DBT_DEVICEARRIVAL && lParam != 0)
+        {
+            try
+            {
+                var vol = Marshal.PtrToStructure<NativeMethods.DEV_BROADCAST_VOLUME>(lParam);
+                if (vol.dbcv_devicetype == NativeMethods.DBT_DEVTYP_VOLUME)
+                {
+                    int mask = vol.dbcv_unitmask;
+                    for (int i = 0; i < 26; i++)
+                    {
+                        if ((mask & (1 << i)) != 0)
+                        {
+                            char driveLetter = (char)('A' + i);
+                            string drivePath = driveLetter + @":\";
+                            Dispatcher.InvokeAsync(() => HandleUsbArrival(drivePath));
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Settings.Log(ex);
+            }
+        }
         return 0;
     }
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
         try { source?.RemoveHook(Hook); } catch { }
+        try { antivirus?.Dispose(); } catch { }
         ClearRegions();
     }
     internal void ApplyDisplayMode()
@@ -556,6 +583,7 @@ public sealed partial class PetWindow : Window
             try
             {
                 hub = new HubConnectionService(settings);
+                antivirus = new AntivirusService(settings, hub);
                 hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; RefreshMenuIfOpen(); }));
                 hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
                 hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
@@ -640,6 +668,7 @@ public sealed partial class PetWindow : Window
         AddSkinMenu(menu);
         AddSoundProfileMenu(menu);
         AddBrowserMenu(menu);
+        AddAntivirusMenu(menu);
         var langMenu = new MenuItem { Header = Loc.T("TrayLanguage") };
         foreach (var lang in Enum.GetValues<AppLanguage>())
         {
@@ -684,6 +713,95 @@ public sealed partial class PetWindow : Window
         browserMenu.Items.Add(chooseItem);
 
         menu.Items.Add(browserMenu);
+    }
+    private void AddAntivirusMenu(ContextMenu menu)
+    {
+        var avMenu = new MenuItem { Header = "🛡️ Антивирус PixelGuard AV" };
+        var statusItem = new MenuItem { Header = "Статус: " + (settings.AntivirusEnabled ? "Активен" : "Отключен"), IsEnabled = false };
+        avMenu.Items.Add(statusItem);
+
+        var scanFolder = new MenuItem { Header = "🔍 Проверить папку или диск…" };
+        scanFolder.Click += (_, _) => StartManualScan();
+        avMenu.Items.Add(scanFolder);
+
+        menu.Items.Add(avMenu);
+    }
+    private async void StartManualScan()
+    {
+        if (antivirus == null) return;
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "Выберите диск или папку для проверки на вирусы"
+        };
+        if (dialog.ShowDialog(this) == true && !string.IsNullOrWhiteSpace(dialog.FolderName))
+        {
+            string path = dialog.FolderName;
+            React(PetState.Think, 5);
+            ReceiveAnnouncement(new ClientNotice(
+                $"Запущена проверка папки:\n{path}\nПроверяю на вирусы… 🛡️",
+                "PixelGuard AV", 10) { LocalAnimation = PetState.Think });
+
+            try
+            {
+                var summary = await antivirus.ScanDirectoryAsync(path, (file, current, total) => { }, lifetime.Token);
+                if (summary.ThreatsDetected == 0)
+                {
+                    React(PetState.Joy, 4);
+                    ReceiveAnnouncement(new ClientNotice(
+                        $"Проверка завершена!\nПроверено файлов: {summary.TotalFilesScanned}.\nУгроз не обнаружено 🛡️",
+                        "PixelGuard AV", 10) { LocalAnimation = PetState.Joy });
+                }
+                else
+                {
+                    React(PetState.Offended, 6);
+                    ReceiveAnnouncement(new ClientNotice(
+                        $"Внимание! Обнаружено угроз: {summary.ThreatsDetected}.\nФайлы изолированы в карантин.",
+                        "PixelGuard AV", 25) { LocalAnimation = PetState.Offended });
+                }
+            }
+            catch (Exception ex)
+            {
+                Settings.Log(ex);
+            }
+        }
+    }
+    private async void HandleUsbArrival(string drivePath)
+    {
+        if (antivirus == null || !settings.AntivirusEnabled) return;
+
+        try
+        {
+            var di = new DriveInfo(drivePath);
+            if (di.DriveType != DriveType.Removable && di.DriveType != DriveType.Fixed) return;
+
+            React(PetState.Think, 5);
+            ReceiveAnnouncement(new ClientNotice(
+                $"Подключен накопитель {drivePath}\nПроверяю файлы на безопасность… 🛡️",
+                "PixelGuard AV", 10) { LocalAnimation = PetState.Think });
+
+            var summary = await antivirus.ScanRemovableDriveAsync(drivePath, null, lifetime.Token);
+
+            if (summary.ThreatsDetected == 0)
+            {
+                React(PetState.Joy, 4);
+                ReceiveAnnouncement(new ClientNotice(
+                    $"Накопитель {drivePath} проверен.\nУгроз не обнаружено! (Проверено файлов: {summary.TotalFilesScanned})",
+                    "PixelGuard AV", 10) { LocalAnimation = PetState.Joy });
+            }
+            else
+            {
+                React(PetState.Offended, 8);
+                try { System.Media.SystemSounds.Hand.Play(); } catch { }
+                string threatList = string.Join("\n", summary.Threats.Take(3).Select(t => "• " + t.ThreatName + " (" + Path.GetFileName(t.FilePath) + ")"));
+                ReceiveAnnouncement(new ClientNotice(
+                    $"⚠️ ВНИМАНИЕ! На {drivePath} обнаружены угрозы ({summary.ThreatsDetected}):\n{threatList}\nФайлы изолированы в карантин.",
+                    "PixelGuard AV", 30) { LocalAnimation = PetState.Offended });
+            }
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
     }
     private void AddSoundProfileMenu(ContextMenu menu)
     {

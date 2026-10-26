@@ -191,6 +191,32 @@ public class ChatPollVote
     public int OptionIndex { get; set; }
     public DateTime VotedAt { get; set; } = DateTime.UtcNow;
 }
+public class ThreatRecord
+{
+    public int Id { get; set; }
+    public string MachineName { get; set; } = "";
+    public string UserName { get; set; } = "";
+    public string FilePath { get; set; } = "";
+    public string ThreatName { get; set; } = "";
+    public string ThreatType { get; set; } = "ClamAV"; // Hash, Yara, ClamAV, Heuristic
+    public long FileSizeBytes { get; set; }
+    public string Sha256 { get; set; } = "";
+    public string Status { get; set; } = "Quarantined"; // Quarantined, Restored, Deleted
+    public DateTime DetectedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? QuarantinedUntil { get; set; }
+    public string ActionTaken { get; set; } = "Quarantined";
+    public DateTime? RestoredAt { get; set; }
+    public DateTime? DeletedAt { get; set; }
+}
+public class AntivirusWhitelistItem
+{
+    public int Id { get; set; }
+    public string Sha256 { get; set; } = "";
+    public string FilePath { get; set; } = "";
+    public string AddedBy { get; set; } = "";
+    public string Reason { get; set; } = "";
+    public DateTime AddedAt { get; set; } = DateTime.UtcNow;
+}
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
     public DbSet<AiSession> AiSessions => Set<AiSession>();
@@ -228,6 +254,8 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<GlpiReportState> GlpiReportStates => Set<GlpiReportState>();
     public DbSet<TicketSurveyInvitation> TicketSurveyInvitations => Set<TicketSurveyInvitation>();
     public DbSet<SurveyAdminAlert> SurveyAdminAlerts => Set<SurveyAdminAlert>();
+    public DbSet<ThreatRecord> ThreatRecords => Set<ThreatRecord>();
+    public DbSet<AntivirusWhitelistItem> AntivirusWhitelist => Set<AntivirusWhitelistItem>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<AiSession>().HasIndex(s => new { s.OwnerUserId, s.WindowInstanceId }).IsUnique();
@@ -261,6 +289,10 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
         b.Entity<TicketRecord>().HasIndex(x => x.Username);
         b.Entity<TicketAttachment>().HasIndex(x => x.TicketId);
         b.Entity<KnowledgeArticle>().HasIndex(x => x.Category);
+        b.Entity<ThreatRecord>().HasIndex(x => x.MachineName);
+        b.Entity<ThreatRecord>().HasIndex(x => x.Status);
+        b.Entity<ThreatRecord>().HasIndex(x => x.DetectedAt);
+        b.Entity<AntivirusWhitelistItem>().HasIndex(x => x.Sha256);
     }
 }
 public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false);

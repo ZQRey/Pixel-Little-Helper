@@ -51,6 +51,14 @@ public sealed class Settings
     public string? PreferredBrowserPath { get; set; }
     public string? PreferredBrowserName { get; set; }
     public bool BrowserPromptShown { get; set; }
+    public bool AntivirusEnabled { get; set; } = true;
+    public int AntivirusRetentionDays { get; set; } = 30;
+    public string AntivirusPerformanceProfile { get; set; } = "auto";
+    public int AntivirusMaxCpuPercent { get; set; } = 25;
+    public bool AntivirusPauseOnUserActivity { get; set; } = true;
+    public string AntivirusExcludedExtensions { get; set; } = ".iso, .vmdk, .bak, .1cd, .log";
+    public string AntivirusExcludedPaths { get; set; } = "";
+    public long AntivirusMaxScanSizeBytes { get; set; } = 262144000;
     internal bool EnsureClientKey()
     {
         string? machineKey = MachineIdentity.Read(ServerUrl);
@@ -142,6 +150,17 @@ public sealed class Settings
         SetStartup(false);
         Registry.CurrentUser.DeleteSubKeyTree(RegistryPath, false);
         if (Directory.Exists(Folder)) Directory.Delete(Folder, true);
+    }
+    public static void Log(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Folder);
+            var path = Path.Combine(Folder, "error.log");
+            if (File.Exists(path) && new FileInfo(path).Length > 256_000) File.Delete(path);
+            File.AppendAllText(path, $"{DateTimeOffset.Now:u} [INFO] {message}{Environment.NewLine}");
+        }
+        catch { }
     }
     public static void Log(Exception ex)
     {

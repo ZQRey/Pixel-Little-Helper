@@ -9,7 +9,17 @@ internal static class NativeMethods
 {
     [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     internal static extern int RegisterApplicationRestart(string? commandLine, int flags);
-    internal const int WM_NCHITTEST = 0x84, WM_WINDOWPOSCHANGING = 0x46, WM_DPICHANGED = 0x2E0;
+    internal const int WM_NCHITTEST = 0x84, WM_WINDOWPOSCHANGING = 0x46, WM_DPICHANGED = 0x2E0, WM_DEVICECHANGE = 0x0219;
+    internal const int DBT_DEVICEARRIVAL = 0x8000, DBT_DEVTYP_VOLUME = 0x0002;
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DEV_BROADCAST_VOLUME
+    {
+        public int dbcv_size;
+        public int dbcv_devicetype;
+        public int dbcv_reserved;
+        public int dbcv_unitmask;
+        public short dbcv_flags;
+    }
     internal static readonly nint HWND_BOTTOM = new(1);
     internal const uint SWP_NOSIZE = 1, SWP_NOMOVE = 2, SWP_NOZORDER = 4, SWP_NOACTIVATE = 0x10;
     private const int GWL_EXSTYLE = -20;

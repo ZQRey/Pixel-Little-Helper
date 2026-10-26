@@ -1076,6 +1076,7 @@ try
     Check(availableSkins.Any(s => s.Id == "StealthNeon"), "SkinManager discovers StealthNeon skin");
     Check(availableSkins.Any(s => s.Id == "CyberFamiliar"), "SkinManager discovers CyberFamiliar skin");
     Check(availableSkins.Any(s => s.Id == "GlassmorphismOrb"), "SkinManager discovers GlassmorphismOrb skin");
+    Check(availableSkins.Any(s => s.Id == "Mage"), "SkinManager discovers Mage skin");
 
     // Test StealthNeon
     var snSkin = availableSkins.First(s => s.Id == "StealthNeon");
@@ -1126,6 +1127,20 @@ try
         }
     }
     Check(true, "All 38 states (98 frames) of GlassmorphismOrb successfully verified");
+
+    // Test Mage (Arcane Mage HD 96x96)
+    Check(skinMgr.SetSkin("Mage"), "SetSkin('Mage') returned true");
+    Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "Mage has HighQuality scaling mode");
+    Check(skinMgr.CurrentSkin.Manifest.BadgeAnchor.X == 34.0 && skinMgr.CurrentSkin.Manifest.BadgeAnchor.Y == 6.0, "Mage badge anchor is positioned on staff gem (34, 6)");
+    foreach (var state in Enum.GetValues<PetState>())
+    {
+        for (int index = 0; index < Sprites.FrameCount(state); index++)
+        {
+            var frame = skinMgr.GetSpriteFrame(state, index);
+            Check(frame != null && frame.Width == 96 && frame.Height == 96, $"Mage {state}_{index + 1} valid 96x96");
+        }
+    }
+    Check(true, "All 38 states (98 frames) of Mage successfully verified");
 
     // Verify HD top-half hit-testing (GlassmorphismOrb top half is interactive)
     var orbIdle = skinMgr.GetSpriteFrame(PetState.Idle, 0);

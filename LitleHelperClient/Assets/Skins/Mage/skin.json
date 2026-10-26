@@ -1,0 +1,26 @@
+{
+  "id": "Mage",
+  "displayName": "Энергичный чародей (Arcane Mage)",
+  "author": "PixelHelper",
+  "version": "1.0",
+  "spriteWidth": 96,
+  "spriteHeight": 96,
+  "scalingMode": "HighQuality",
+  "badgeAnchor": {
+    "x": 34.0,
+    "y": 6.0
+  },
+  "hatAnchor": {
+    "x": 16.0,
+    "y": -6.0
+  },
+  "frameIntervalsMs": {
+    "Twirl": 100,
+    "Sleep": 300,
+    "Workout": 150,
+    "Dance": 120,
+    "Charging": 150,
+    "Idle": 140,
+    "Default": 120
+  }
+}

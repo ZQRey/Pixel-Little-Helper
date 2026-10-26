@@ -48,6 +48,7 @@ public sealed partial class PetWindow : Window
     private readonly List<DateTime> rapidClicks = new();
     private DateTime lastSixtyMinReaction = DateTime.MinValue;
     private DateTime lastWorkoutReaction = DateTime.MinValue;
+    private DateTime cursorNearbyStart = DateTime.MinValue;
     private CompanionChatWindow? companionWindow;
     private DiskSpaceMonitor? diskMonitor;
     private FaceNoticeStatus faceStatus = FaceNoticeStatus.None;
@@ -272,7 +273,18 @@ public sealed partial class PetWindow : Window
         animation.Tick += (_, _) =>
         {
             AdvanceEmoji();
-            if (!emojiAnimating && IsTemporary(state) && DateTime.UtcNow >= actionUntil) ChangeState(state == PetState.Yawn ? PetState.Sleep : PetState.Idle);
+            if (!emojiAnimating && IsTemporary(state) && DateTime.UtcNow >= actionUntil)
+            {
+                if (state == PetState.Yawn)
+                {
+                    if (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(15) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(15))
+                        ChangeState(PetState.Sleep);
+                }
+                else
+                {
+                    ChangeState(PetState.Idle);
+                }
+            }
             FollowCursor();
             frame++; AnimatedFrames++; Draw();
         };
@@ -317,10 +329,15 @@ public sealed partial class PetWindow : Window
                 lastWorkoutReaction = DateTime.UtcNow;
                 React(PetState.Workout, 10);
             }
+            else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Workout or PetState.Charging) &&
+                (DateTime.UtcNow - lastInteraction >= TimeSpan.FromMinutes(15) || NativeMethods.IdleTime() >= TimeSpan.FromMinutes(15)))
+            {
+                ChangeState(PetState.Sleep);
+            }
             else if (!IsAnimationLocked && !emojiAnimating && !menuOpen && !mouseDown && ticket == null && state is not (PetState.Sleep or PetState.Yawn or PetState.Workout or PetState.Charging) &&
                 (DateTime.UtcNow - lastInteraction > TimeSpan.FromMinutes(5) || NativeMethods.IdleTime() > TimeSpan.FromMinutes(5)))
             {
-                React(PetState.Yawn, 2);
+                ChangeState(PetState.Yawn);
             }
             CheckImageViewer();
             CheckPaperworkAndPrinting();
@@ -959,6 +976,10 @@ public sealed partial class PetWindow : Window
         }
 
         int unreadDisplay = faceStatus == FaceNoticeStatus.None ? totalUnreadMessages : 0;
+        if (state == PetState.Yawn && string.Equals(SkinManager.Instance.CurrentSkinId, "Mage", StringComparison.OrdinalIgnoreCase))
+        {
+            unreadDisplay = 0;
+        }
         var badge = faceBadges.Get(faceStatus, unreadDisplay, faceHeartFrame);
         if (badge != null)
         {
@@ -1161,10 +1182,21 @@ public sealed partial class PetWindow : Window
         double dist = Math.Abs(dx) + Math.Abs(dy);
         if (dist > 250 || dist < 20)
         {
+            cursorNearbyStart = DateTime.MinValue;
             ChangeState(PetState.Idle);
         }
         else
         {
+            if (cursorNearbyStart == DateTime.MinValue)
+            {
+                cursorNearbyStart = DateTime.UtcNow;
+            }
+            else if (DateTime.UtcNow - cursorNearbyStart >= TimeSpan.FromMinutes(5))
+            {
+                cursorNearbyStart = DateTime.MinValue;
+                React(PetState.Surprise, 4);
+                return;
+            }
             double angle = Math.Atan2(dy, dx) * (180.0 / Math.PI);
             if (angle < 0) angle += 360.0;
             PetState lookState = angle switch
@@ -1901,8 +1933,10 @@ public sealed partial class PetWindow : Window
             return Task.CompletedTask;
         }
         if (!EnsureCabinetSpecified()) return Task.CompletedTask;
+        React(PetState.Workout, 15);
         var dlg = new EmergencyDialogWindow(hub, settings) { Owner = this, Topmost = true };
         dlg.ShowDialog();
+        if (state == PetState.Workout) ChangeState(PetState.Idle);
         return Task.CompletedTask;
     }
 
@@ -2176,15 +2210,19 @@ public sealed partial class PetWindow : Window
     private void CheckPaperworkAndPrinting()
     {
         if (IsAnimationLocked || emojiAnimating || menuOpen || mouseDown || ticket != null || state == PetState.Charging) return;
-        if (DateTime.UtcNow - lastPaperworkCheck < TimeSpan.FromMinutes(10)) return;
 
         try
         {
             if (PrinterWatchdog.GetJobCount() > 0)
             {
-                lastPaperworkCheck = DateTime.UtcNow;
-                React(PetState.Think, 4);
-                ShowNotice("Идёт печать документа на принтере... Проверяю очередь 📄");
+                React(PetState.Twirl, 3);
+                if (DateTime.UtcNow - lastPaperworkCheck >= TimeSpan.FromMinutes(5))
+                {
+                    lastPaperworkCheck = DateTime.UtcNow;
+                    ShowNotice(string.Equals(SkinManager.Instance.CurrentSkinId, "Mage", StringComparison.OrdinalIgnoreCase)
+                        ? "Идёт печать документа... Колдую над очередью принтера 📄✨"
+                        : "Идёт печать документа на принтере... Проверяю очередь 📄");
+                }
             }
         }
         catch { }

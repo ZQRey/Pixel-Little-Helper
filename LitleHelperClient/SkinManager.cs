@@ -387,6 +387,34 @@ public sealed class SkinManager : ISkinManager
             };
             availableSkins["GlassmorphismOrb"] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
         }
+
+        // Ensure Mage (Arcane Mage)
+        if (!availableSkins.ContainsKey("Mage"))
+        {
+            var manifest = LoadManifestFromResource("Mage") ?? new SkinManifest
+            {
+                Id = "Mage",
+                DisplayName = "Энергичный чародей (Arcane Mage)",
+                Author = "PixelHelper",
+                Version = "1.0",
+                SpriteWidth = 96,
+                SpriteHeight = 96,
+                ScalingMode = "HighQuality",
+                BadgeAnchor = new SkinAnchor { X = 34.0, Y = 6.0 },
+                HatAnchor = new SkinAnchor { X = 16.0, Y = -6.0 },
+                FrameIntervalsMs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Twirl"] = 100,
+                    ["Sleep"] = 300,
+                    ["Workout"] = 150,
+                    ["Dance"] = 120,
+                    ["Charging"] = 150,
+                    ["Idle"] = 140,
+                    ["Default"] = 120
+                }
+            };
+            availableSkins["Mage"] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
+        }
     }
 
     private static SkinManifest? LoadManifestFromResource(string skinId)

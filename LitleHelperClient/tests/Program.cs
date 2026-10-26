@@ -1131,7 +1131,7 @@ try
     // Test Mage (Arcane Mage HD 96x96)
     Check(skinMgr.SetSkin("Mage"), "SetSkin('Mage') returned true");
     Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "Mage has HighQuality scaling mode");
-    Check(skinMgr.CurrentSkin.Manifest.BadgeAnchor.X == 34.0 && skinMgr.CurrentSkin.Manifest.BadgeAnchor.Y == 6.0, "Mage badge anchor is positioned on staff gem (34, 6)");
+    Check(skinMgr.CurrentSkin.Manifest.BadgeAnchor.X == 35.0 && skinMgr.CurrentSkin.Manifest.BadgeAnchor.Y == 12.0, "Mage badge anchor is positioned on staff gem (35, 12)");
     foreach (var state in Enum.GetValues<PetState>())
     {
         for (int index = 0; index < Sprites.FrameCount(state); index++)

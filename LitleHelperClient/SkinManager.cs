@@ -400,8 +400,8 @@ public sealed class SkinManager : ISkinManager
                 SpriteWidth = 96,
                 SpriteHeight = 96,
                 ScalingMode = "HighQuality",
-                BadgeAnchor = new SkinAnchor { X = 34.0, Y = 6.0 },
-                HatAnchor = new SkinAnchor { X = 16.0, Y = -6.0 },
+                BadgeAnchor = new SkinAnchor { X = 35.0, Y = 12.0 },
+                HatAnchor = new SkinAnchor { X = 24.0, Y = -6.0 },
                 FrameIntervalsMs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["Twirl"] = 100,

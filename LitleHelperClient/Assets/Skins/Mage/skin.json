@@ -19,8 +19,8 @@
     "Sleep": 300,
     "Workout": 150,
     "Dance": 120,
-    "Charging": 150,
-    "Idle": 140,
-    "Default": 120
+    "Charging": 160,
+    "Idle": 220,
+    "Default": 140
   }
 }

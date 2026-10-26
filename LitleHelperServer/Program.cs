@@ -99,6 +99,9 @@ builder.Services.AddScoped<AnnouncementService>();
 builder.Services.AddSingleton<PanelSessions>();
 builder.Services.AddSingleton<ChatPresence>();
 builder.Services.AddSingleton<ChatGroupGate>();
+builder.Services.AddSingleton<CallSessionRegistry>();
+builder.Services.AddSingleton<LiveKitService>();
+builder.Services.AddSingleton<ReportOrganizationStore>();
 builder.Services.AddSingleton<IMessengerKerberos, MessengerKerberos>();
 builder.Services.AddScoped<IMessengerWindowsDirectory, MessengerWindowsDirectory>();
 builder.Services.AddScoped<IAgentMachineDirectory, AgentMachineDirectory>();
@@ -106,6 +109,7 @@ builder.Services.AddSingleton<MessengerSettings>();
 builder.Services.AddHostedService<ChatRetentionWorker>();
 builder.Services.AddSingleton<GlpiSettingsStore>();
 builder.Services.AddSingleton<IntegrationSettings>();
+builder.Services.AddAi();
 builder.Services.AddSingleton<ClientReleases>();
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options => options.MultipartBodyLengthLimit = PixelHelper.Updates.ClientUpdateManifest.MaximumSize + 65536);
 builder.Services.AddScoped<IAdAuthentication, AdAuthentication>();
@@ -144,6 +148,12 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
     await db.Database.EnsureCreatedAsync();
+    await AiSchema.EnsureAsync(db);
+    await db.AiMessages.Where(m => m.Status == "Running").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "Interrupted"));
+    await db.AiDiagnosticChecks.Where(m => m.Status == "Running").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "Interrupted"));
+    await db.AiRequestLogs.Where(m => m.Status == "Running" || m.Status == "Creating").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "Interrupted"));
+    await db.AiSessions.Where(s => (s.Status == "Active" || s.Status == "Creating") && s.Backend == "OpenCode" && s.ExternalSessionId != "").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "Closing"));
+    await db.AiSessions.Where(s => s.Status == "Active" || s.Status == "Creating").ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, "Closed"));
     await Access.EnsureSchema(db);
     await GlpiReports.EnsureSchema(db);
     await SurveyAlerts.EnsureSchema(db);
@@ -194,7 +204,8 @@ app.Use(async (context, next) =>
 app.UseDefaultFiles(); app.UseStaticFiles(); app.UseRouting(); app.UseRateLimiter(); app.UseAuthentication(); app.UseAuthorization();
 app.Use(async (context, next) =>
 {
-    if (context.User.HasClaim("messenger", "1") && !context.Request.Path.StartsWithSegments("/api/messenger") && !context.Request.Path.StartsWithSegments("/messengerHub"))
+    bool companionAi = context.Request.Path == "/api/ai/capabilities" || context.Request.Path == "/api/ai/diagnostics/options" || context.Request.Path == "/api/ai/credentials" || context.Request.Path.StartsWithSegments("/api/ai/knowledge") || context.Request.Path.StartsWithSegments("/api/ai/sessions");
+    if (context.User.HasClaim("messenger", "1") && !companionAi && !context.Request.Path.StartsWithSegments("/api/messenger") && !context.Request.Path.StartsWithSegments("/messengerHub"))
     { context.Response.StatusCode = 403; return; }
     if (context.User.Identity?.IsAuthenticated == true && !context.User.IsInRole("Agent") &&
         context.Request.Path != "/api/auth/me" && context.Request.Path != "/api/auth/change-password")
@@ -218,6 +229,7 @@ app.MapIntegrationApi();
 app.MapAnnouncementApi();
 app.MapBranchApi();
 app.MapKnowledgeBaseApi();
+app.MapAi();
 app.MapMessenger();
 await app.RunAsync();
 public partial class Program { }

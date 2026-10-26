@@ -30,6 +30,7 @@ internal sealed class MessengerWindow : Window
     private StackPanel? filterChipsRow;
     private readonly List<Button> dockNavButtons = [];
     private readonly List<Button> filterChipButtons = [];
+    private readonly Dictionary<int, (string Text, string[] Files)> chatDrafts = [];
     private int peer;
     private bool updating, closing, showingLogin;
     private string? pendingId, pendingText;
@@ -108,6 +109,11 @@ internal sealed class MessengerWindow : Window
         IsVisibleChanged += (_, e) =>
         {
             if (e.NewValue is bool visible) _ = client.SetWindowOpenAsync(visible);
+        };
+        KeyDown += (_, e) => {
+            if (e.Key != Key.Escape || e.Handled) return;
+            if (emojiPopup?.IsOpen == true) { emojiPopup.IsOpen = false; e.Handled = true; return; }
+            if (peer != 0) { CloseConversation(); e.Handled = true; }
         };
         Activated += async (_, _) => await MarkReadAsync();
         SizeChanged += (_, _) => AdjustDrawer();
@@ -297,6 +303,9 @@ internal sealed class MessengerWindow : Window
 
     private void MainForm()
     {
+        string searchTerm = search?.Text ?? "";
+        string draft = input?.Text ?? "";
+        int draftStart = input?.SelectionStart ?? 0, draftLength = input?.SelectionLength ?? 0;
         showingLogin = false;
         root.Children.Clear(); root.ColumnDefinitions.Clear(); root.RowDefinitions.Clear();
         dockNavButtons.Clear(); filterChipButtons.Clear();
@@ -317,6 +326,12 @@ internal sealed class MessengerWindow : Window
         BuildChatColumn();
         BuildDrawer();
         AdjustDrawer();
+
+        // Rebuilding appearance must not wait for the next directory request.
+        // Filter uses cached contacts and suppresses selection-triggered network calls.
+        if (search != null) search.Text = searchTerm;
+        if (input != null) { input.Text = draft; input.Select(draftStart, draftLength); }
+        Filter();
     }
 
     private void BuildTopTitleBar()
@@ -661,7 +676,15 @@ internal sealed class MessengerWindow : Window
         users.SelectionChanged += async (_, _) =>
         {
             if (updating || users.SelectedItem is not ChatContact contact) return;
-            if (peer != contact.Id) { peer = contact.Id; input!.Text = ""; pendingId = null; pendingFiles.Clear(); RenderPendingFiles(); messages.Clear(); }
+            if (peer != contact.Id) {
+                SaveConversationDraft();
+                peer = contact.Id; input!.Text = ""; pendingId = null; pendingFiles.Clear(); messages.Clear();
+                RestoreConversationDraft();
+                RenderPendingFiles();
+            }
+            bool writable = contact.IsActive && !(contact.SuspendedUntil > DateTime.UtcNow);
+            input!.IsEnabled = writable && !sending;
+            if (send != null) send.IsEnabled = writable && !sending;
             await LoadHistoryAsync();
         };
         users.PreviewMouseRightButtonDown += (_, e) =>
@@ -841,6 +864,21 @@ internal sealed class MessengerWindow : Window
         BuildComposer();
     }
 
+    private void FormatSelection(string marker)
+    {
+        if (input?.IsEnabled != true || sending) return;
+        try { ApplyMessageEdit(MessageFormatting.Toggle(input.Text, input.SelectionStart, input.SelectionLength, marker)); }
+        catch (ArgumentException ex) { if (error != null) error.Text = ex.Message; }
+    }
+    private void ApplyMessageEdit(MessageEdit edit)
+    {
+        if (input == null) return;
+        input.BeginChange();
+        try { input.SelectAll(); input.SelectedText = edit.Text; input.Select(edit.Start, edit.Length); }
+        finally { input.EndChange(); }
+        input.Focus();
+    }
+
     private void BuildComposer()
     {
         var composerOuter = new StackPanel { Background = Brushes.Transparent };
@@ -849,6 +887,11 @@ internal sealed class MessengerWindow : Window
         attachmentsPanel = new WrapPanel { Margin = new Thickness(16, 0, 16, 4) };
         var attachmentsScroll = new ScrollViewer { Content = attachmentsPanel, MaxHeight = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         composerOuter.Children.Add(attachmentsScroll);
+
+        var preview = new Border { Margin = new Thickness(18, 2, 18, 5), Padding = new Thickness(6), BorderBrush = line, BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed, MaxHeight = 100 };
+        var previewScroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        preview.Child = previewScroll;
+        composerOuter.Children.Add(preview);
 
         // Unified Composer Card
         var composerCard = new Border
@@ -967,6 +1010,18 @@ internal sealed class MessengerWindow : Window
         };
         input.PreviewKeyDown += (_, e) =>
         {
+            var modifiers = Keyboard.Modifiers;
+            bool alignKeys = (modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == (ModifierKeys.Control | ModifierKeys.Alt);
+            string? alignment = alignKeys ? (e.Key == Key.System ? e.SystemKey : e.Key) switch { Key.L => "left", Key.E => "center", Key.R => "right", _ => null } : null;
+            if (alignment != null) {
+                e.Handled = true;
+                if (input.IsEnabled && !sending) try { ApplyMessageEdit(MessageFormatting.Align(input.Text, input.SelectionStart, input.SelectionLength, alignment, modifiers.HasFlag(ModifierKeys.Shift))); }
+                catch (ArgumentException ex) { if (error != null) error.Text = ex.Message; }
+                return;
+            }
+            string? marker = modifiers == ModifierKeys.Control ? e.Key switch { Key.B => "**", Key.I => "*", Key.U => "__", Key.E => "`", _ => null }
+                : modifiers == (ModifierKeys.Control | ModifierKeys.Shift) ? e.Key switch { Key.X => "~~", Key.E => "```", _ => null } : null;
+            if (marker != null) { e.Handled = true; FormatSelection(marker); return; }
             if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && !sending && input.IsEnabled)
             {
                 try
@@ -980,6 +1035,9 @@ internal sealed class MessengerWindow : Window
         input.TextChanged += async (_, _) =>
         {
             inputPlaceholder.Visibility = string.IsNullOrEmpty(input.Text) ? Visibility.Visible : Visibility.Collapsed;
+            preview.Visibility = input.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+            preview.ToolTip = "Предпросмотр сообщения";
+            previewScroll.Content = MessageFormatting.Render(input.Text, 22, false, FontSize, ink);
             if (peer != 0 && input.Text.Length > 0 && DateTime.UtcNow - typingSent > TimeSpan.FromSeconds(2))
             {
                 typingSent = DateTime.UtcNow;
@@ -1150,6 +1208,12 @@ internal sealed class MessengerWindow : Window
         if (users == null) return;
         bool wasUpdating = updating;
         updating = true;
+        int unreadCount = contacts.Count(c => c.Unread > 0);
+        foreach (var chip in filterChipButtons)
+        {
+            if ((string)chip.Tag == "unread")
+                chip.Content = unreadCount > 0 ? $"Непрочитанные ({unreadCount})" : "Непрочитанные";
+        }
         string term = search?.Text.Trim() ?? "";
         users.ItemsSource = ChatContact.Ordered(contacts.Where(u =>
             (chatFilter == "all" ||
@@ -1171,12 +1235,6 @@ internal sealed class MessengerWindow : Window
         try
         {
             contacts = await client.UsersAsync();
-            int unreadCount = contacts.Count(c => c.Unread > 0);
-            foreach (var chip in filterChipButtons)
-            {
-                if ((string)chip.Tag == "unread")
-                    chip.Content = unreadCount > 0 ? $"Непрочитанные ({unreadCount})" : "Непрочитанные";
-            }
             if (peer < 0 && !contacts.Any(c => c.Id == peer))
             {
                 peer = 0;
@@ -1194,9 +1252,41 @@ internal sealed class MessengerWindow : Window
         finally { updating = false; }
     }
 
+    private void SaveConversationDraft()
+    {
+        if (peer != 0) chatDrafts[peer] = (input?.Text ?? "", pendingFiles.ToArray());
+    }
+    private void RestoreConversationDraft()
+    {
+        if (input != null && chatDrafts.TryGetValue(peer, out var draft)) {
+            input.Text = draft.Text;
+            pendingFiles.AddRange(draft.Files.Where(File.Exists));
+        }
+    }
+    private void CloseConversation()
+    {
+        SaveConversationDraft();
+        if (audioRecorder.IsRecording) StopVoiceRecording(cancel: true);
+        peer = 0;
+        messages.Clear(); groupEvents.Clear(); reactions.Clear(); eventsPeer = 0;
+        if (!sending) { pendingMessage = null; pendingId = null; pendingText = null; pendingFailed = false; }
+        pendingFiles.Clear(); RenderPendingFiles();
+        if (input != null) { input.Clear(); input.IsEnabled = false; }
+        if (send != null) send.IsEnabled = false;
+        detailsOpen = false; details?.Children.Clear(); AdjustDrawer();
+        UpdateContactStatus(null); RenderHistory(false); Filter();
+        if (error != null) error.Text = "";
+        search?.Focus();
+    }
+
     internal async Task OpenPeerAsync(int id)
     {
-        peer = id;
+        if (peer != id) {
+            SaveConversationDraft(); peer = id;
+            pendingFiles.Clear();
+            if (input != null) input.Clear();
+            RestoreConversationDraft(); RenderPendingFiles();
+        }
         await RefreshAsync();
         await LoadHistoryAsync();
         Activate();
@@ -1452,10 +1542,8 @@ internal sealed class MessengerWindow : Window
                 });
             }
 
-            // Body text with emoji render
-            var body = HelperEmojis.Render(message.Body, Math.Max(32, FontSize * 2.3), settings.AnimatedChatEmojis);
-            body.FontSize = FontSize;
-            body.Foreground = mine ? Brushes.White : ink;
+            // Formatting uses explicit text runs; HTML is never evaluated.
+            var body = MessageFormatting.Render(message.Body, Math.Max(32, FontSize * 2.3), settings.AnimatedChatEmojis, FontSize, mine ? Brushes.White : ink);
             panel.Children.Add(body);
 
             // Attachments
@@ -1737,6 +1825,7 @@ internal sealed class MessengerWindow : Window
         {
             if (filesToSend.Length == 0) await client.SendAsync(target, text, pendingId);
             else await client.SendFilesAsync(target, text, pendingId, filesToSend);
+            chatDrafts.Remove(target);
             pendingMessage = null;
             pendingId = null;
             if (error != null) error.Text = "";
@@ -1753,6 +1842,7 @@ internal sealed class MessengerWindow : Window
                 input.CaretIndex = text.Length;
                 if (filesToSend.Length > 0) { pendingFiles.AddRange(filesToSend); RenderPendingFiles(); }
             }
+            if (peer != target) chatDrafts[target] = (text, filesToSend);
             if (error != null) error.Text = ex.Message;
             RenderHistory(true);
         }

@@ -44,6 +44,7 @@ public sealed record SurveyPolicy
     public static bool Active(TicketSurveyInvitation i) => i.State is "Pending" or "Writing" or "Blocked";
     public static bool Eligible(TicketSurveyInvitation i, ReportTicket t) => !t.Deleted && t.Status == 6
         && t.ClosedAt == i.ClosedAt && t.Score == null && t.Requesters.FirstOrDefault()?.Id == i.RequesterId
+        && t.Responsible != null && ReportMath.IsTechnician(t.Responsible)
         && !t.Assignees.Any(a => a.Id == i.RequesterId) && t.Responsible?.Id != i.RequesterId;
     public bool Required(TicketSurveyInvitation i, DateTime now) => Mandatory && i.Mandatory && i.State == "Pending"
         && i.ExpiresAt > now && i.FirstShownAt != null && i.NextNoticeAt <= now

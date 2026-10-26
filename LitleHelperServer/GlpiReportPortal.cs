@@ -37,6 +37,14 @@ public static class GlpiReportPortal
             if (request == null || request.UserId < 1 || string.IsNullOrWhiteSpace(request.Username) || request.Username.Length > 255 || request.Entities == null || request.Entities.Length > 1000 || request.Entities.Any(x => x < 0) || request.Query == null || request.Query.Length > 6000) return Results.BadRequest();
             if (request.Operation.StartsWith("survey-",StringComparison.Ordinal)) {
                 var person = new PanelUser { Username = request.Username, PasswordHash = "!AD", IsActive = true };
+                if (request.Operation == "survey-ticket") {
+                    try {
+                        using var ticketInput = JsonDocument.Parse(request.Query);
+                        return Results.Json(await surveys.ForTicket(person,request.UserId,ticketInput.RootElement.GetProperty("ticketId").GetInt32(),
+                            ticketInput.RootElement.GetProperty("closedAt").GetDateTime(),request.Entities,ct));
+                    } catch (UnauthorizedAccessException) { return Results.StatusCode(403); }
+                    catch (Exception e) when (e is JsonException or KeyNotFoundException or FormatException or InvalidOperationException) { return Results.BadRequest(); }
+                }
                 if (request.Operation == "survey-gate") {
                     try { await surveys.EnsureCanCreate(person,false,ct,request.UserId); return Results.Json(new { required = false }); }
                     catch (Microsoft.AspNetCore.SignalR.HubException) { return Results.Json(new { required = true }); }
@@ -54,6 +62,7 @@ public static class GlpiReportPortal
                 if (request.Operation == "survey-snooze") { await surveys.Defer(person,id,false,ct,input.RootElement.GetProperty("minutes").GetInt32());return Results.Json(new { ok=true }); }
                 return Results.BadRequest();
             }
+            if (request.Operation == "context") return Results.Json(await reports.CardContext(ct));
             if (request.Operation is not ("report" or "xlsx" or "pdf")) return Results.BadRequest();
             // Synthetic identity exists only in this call; no database account or elevated session is created.
             var user = new PanelUser { Username = "GLPI:" + request.UserId + ":" + request.Username, Permissions = new() { ["reports.glpi.all"] = true } };

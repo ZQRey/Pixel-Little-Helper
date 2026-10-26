@@ -7,6 +7,11 @@ public static class Access
 {
     public static readonly Dictionary<string, string> Catalog = new()
     {
+        ["ai.chat"] = "Чат с ИИ-помощником",
+        ["ai.agent"] = "ИИ-агент в клиенте помощника",
+        ["ai.diagnostics"] = "Диагностика через ИИ (требуется роль администратора)",
+        ["ai.settings.manage"] = "Настройки ИИ и моделей",
+        ["ai.audit.all"] = "Общий аудит ИИ без содержимого личных разговоров",
         ["reports.glpi.view"] = "Просмотр статистики GLPI",
         ["reports.glpi.all"] = "Статистика GLPI всех филиалов",
         ["reports.glpi.export"] = "Выгрузка статистики GLPI",
@@ -31,9 +36,9 @@ public static class Access
     public static string[] Defaults(string role) => role switch
     {
         Roles.SuperAdmin => Catalog.Keys.ToArray(),
-        Roles.Admin => ["computers.view", "computers.manage", "commands.execute", "buttons.manage", "tickets.all", "tickets.manage", "audit.view"],
-        Roles.Operator => ["computers.view", "tickets.all", "tickets.manage"],
-        _ => []
+        Roles.Admin => ["ai.chat", "ai.agent", "computers.view", "computers.manage", "commands.execute", "buttons.manage", "tickets.all", "tickets.manage", "audit.view"],
+        Roles.Operator => ["ai.chat", "computers.view", "tickets.all", "tickets.manage"],
+        _ => ["ai.chat"]
     };
     public static string[] Effective(PanelUser user) => user.Role == Roles.SuperAdmin ? Defaults(user.Role) :
         Catalog.Keys.Where(key => user.Permissions.TryGetValue(key, out bool value) ? value : Defaults(user.Role).Contains(key)).ToArray();

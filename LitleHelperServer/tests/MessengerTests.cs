@@ -22,6 +22,7 @@ public static class MessengerTests
         public Task<AdIdentity> FindAsync(string principal, CancellationToken token) => new Ad().AuthenticateAsync(new LoginRequest(principal.Split('@')[0], "valid"), token);
     }
     private static void Check(bool ok, string text) { if (!ok) throw new Exception(text); Console.WriteLine("PASS " + text); }
+    private record TestIncomingCallPayload(string CallId, int CallerId, string CallerName, string CallerUsername, bool IsVideo);
     private class Ad : IAdAuthentication
     {
         public Task TestConnectionAsync(CancellationToken token) => Task.CompletedTask;
@@ -35,7 +36,7 @@ public static class MessengerTests
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:SigningKey"] = new string('k', 48), ["Jwt:Issuer"] = "test", ["Jwt:Audience"] = "test", ["Messenger:SettingsFile"] = Path.Combine(folder, "messenger.json") });
         string? postgres = Environment.GetEnvironmentVariable("HELPER_CHAT_TEST_POSTGRES");
         builder.Services.AddDbContext<HelperDb>(o => { if (string.IsNullOrEmpty(postgres)) o.UseSqlite("Data Source=" + Path.Combine(folder, "chat.db")); else o.UseNpgsql(postgres); });
-        builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSignalR();
+        builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSingleton<CallSessionRegistry>(); builder.Services.AddSignalR();
         builder.Services.AddSingleton<IMessengerKerberos, Kerberos>(); builder.Services.AddSingleton<IMessengerWindowsDirectory, WindowsDirectory>();
         builder.Services.AddSingleton<ChatGroupGate>();
         builder.Services.AddRateLimiter(o => o.AddPolicy("login", c => RateLimitPartition.GetNoLimiter("test")));
@@ -311,6 +312,130 @@ public static class MessengerTests
             var closed = await closeResp.Content.ReadFromJsonAsync<PollDetails>();
             Check(closed!.IsClosed, "poll is marked closed");
         }
+
+        // WebRTC Signaling Integration Tests
+        {
+            var aliceHub = new HubConnectionBuilder()
+                .WithUrl(address.TrimEnd('/') + "/messengerHub", o => o.AccessTokenProvider = () => Task.FromResult<string?>(alice.Token))
+                .Build();
+            var peerHub = new HubConnectionBuilder()
+                .WithUrl(address.TrimEnd('/') + "/messengerHub", o => o.AccessTokenProvider = () => Task.FromResult<string?>(charlie.Token))
+                .Build();
+
+            string testCallId = "call_" + Guid.NewGuid().ToString("N");
+            var incomingTcs = new TaskCompletionSource<(string CallId, int CallerId, bool IsVideo)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var acceptedTcs = new TaskCompletionSource<(string CallId, int UserId)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sdpOfferTcs = new TaskCompletionSource<(string CallId, int FromUserId, string Sdp)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sdpAnswerTcs = new TaskCompletionSource<(string CallId, int FromUserId, string Sdp)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var iceTcs = new TaskCompletionSource<(string CallId, int FromUserId, string Candidate)>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var endedTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var answeredElsewhereTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var rejectedTcs = new TaskCompletionSource<(string CallId, string Reason)>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            peerHub.On<TestIncomingCallPayload>("IncomingCall", p =>
+            {
+                Console.WriteLine($"[TEST] peerHub received IncomingCall: callId={p.CallId}, callerId={p.CallerId}, isVideo={p.IsVideo}");
+                incomingTcs.TrySetResult((p.CallId, p.CallerId, p.IsVideo));
+            });
+
+            aliceHub.On<string, int>("CallAccepted", (callId, userId) =>
+            {
+                Console.WriteLine($"[TEST] aliceHub received CallAccepted: callId={callId}, userId={userId}");
+                acceptedTcs.TrySetResult((callId, userId));
+            });
+
+            peerHub.On<string>("CallAnsweredElsewhere", callId =>
+            {
+                Console.WriteLine($"[TEST] peerHub received CallAnsweredElsewhere: callId={callId}");
+                answeredElsewhereTcs.TrySetResult(callId);
+            });
+
+            peerHub.On<string, int, string>("SdpOfferReceived", (callId, fromUserId, sdp) =>
+            {
+                Console.WriteLine($"[TEST] peerHub received SdpOfferReceived: callId={callId}");
+                sdpOfferTcs.TrySetResult((callId, fromUserId, sdp));
+            });
+
+            aliceHub.On<string, int, string>("SdpAnswerReceived", (callId, fromUserId, sdp) =>
+            {
+                Console.WriteLine($"[TEST] aliceHub received SdpAnswerReceived: callId={callId}");
+                sdpAnswerTcs.TrySetResult((callId, fromUserId, sdp));
+            });
+
+            peerHub.On<string, int, string, string, int>("IceCandidateReceived", (callId, fromUserId, cand, mid, mLine) =>
+            {
+                Console.WriteLine($"[TEST] peerHub received IceCandidateReceived: callId={callId}");
+                iceTcs.TrySetResult((callId, fromUserId, cand));
+            });
+
+            aliceHub.On<string, int>("CallEnded", (callId, peerId) =>
+            {
+                Console.WriteLine($"[TEST] aliceHub received CallEnded: callId={callId}");
+                endedTcs.TrySetResult(callId);
+            });
+
+            aliceHub.On<string, int, string, string>("CallRejected", (callId, peerId, name, reason) =>
+            {
+                Console.WriteLine($"[TEST] aliceHub received CallRejected: callId={callId}");
+                rejectedTcs.TrySetResult((callId, reason));
+            });
+
+            await aliceHub.StartAsync();
+            await peerHub.StartAsync();
+            Console.WriteLine($"[TEST] Hubs started: aliceHub.State={aliceHub.State}, peerHub.State={peerHub.State}");
+
+            // 1. StartCall with 3 arguments
+            Console.WriteLine("[TEST] Invoking StartCall...");
+            await aliceHub.InvokeAsync("StartCall", charlie.Id, true, testCallId);
+            Console.WriteLine("[TEST] StartCall invoked. Awaiting incomingTcs...");
+            var incoming = await incomingTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(incoming.CallId == testCallId && incoming.CallerId == alice.Id && incoming.IsVideo, "incoming call arrives via SignalR");
+
+            // 2. AcceptCall with 2 arguments (crucial test: SignalR net8 parameter count mismatch bug)
+            await peerHub.InvokeAsync("AcceptCall", testCallId, alice.Id);
+            var accepted = await acceptedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(accepted.CallId == testCallId && accepted.UserId == charlie.Id, "AcceptCall(callId, callerId) 2 arguments delivers CallAccepted to caller");
+            var elsewhere = await answeredElsewhereTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(elsewhere == testCallId, "AcceptCall emits CallAnsweredElsewhere to recipient's group");
+
+            // 3. SdpOffer
+            await aliceHub.InvokeAsync("SendSdpOffer", testCallId, charlie.Id, "offer-sdp-test");
+            var offer = await sdpOfferTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(offer.CallId == testCallId && offer.FromUserId == alice.Id && offer.Sdp == "offer-sdp-test", "SendSdpOffer delivers SDP to callee");
+
+            // 4. SdpAnswer
+            await peerHub.InvokeAsync("SendSdpAnswer", testCallId, alice.Id, "answer-sdp-test");
+            var answer = await sdpAnswerTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(answer.CallId == testCallId && answer.FromUserId == charlie.Id && answer.Sdp == "answer-sdp-test", "SendSdpAnswer delivers SDP to caller");
+
+            // 5. SendIceCandidate
+            await aliceHub.InvokeAsync("SendIceCandidate", testCallId, charlie.Id, "candidate:1", "0", 0);
+            var ice = await iceTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(ice.CallId == testCallId && ice.FromUserId == alice.Id && ice.Candidate == "candidate:1", "SendIceCandidate delivers ICE candidate");
+
+            // 6. EndCall with 2 arguments
+            await peerHub.InvokeAsync("EndCall", testCallId, alice.Id);
+            var ended = await endedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(ended == testCallId, "EndCall delivers CallEnded to peer");
+
+            // 6b. Verify call was saved to ChatMessages
+            using (var checkScope = app.Services.CreateScope())
+            {
+                var checkDb = checkScope.ServiceProvider.GetRequiredService<HelperDb>();
+                var callMsg = await checkDb.ChatMessages.FirstOrDefaultAsync(m => m.ClientId == "call_" + testCallId);
+                Check(callMsg != null && callMsg.Body.Contains("Видеозвонок"), "completed video call saved to chat history");
+            }
+
+            // 7. Test RejectCall with 3 arguments
+            await peerHub.InvokeAsync("RejectCall", "call_reject_test", alice.Id, "busy");
+            var rejected = await rejectedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Check(rejected.CallId == "call_reject_test" && rejected.Reason == "busy", "RejectCall delivers CallRejected with busy");
+
+            await aliceHub.DisposeAsync();
+            await peerHub.DisposeAsync();
+            Console.WriteLine("PASS WebRTC signaling two-way handshakes passed");
+        }
+
         var options = app.Services.GetRequiredService<MessengerSettings>(); options.Save(new(false));
         Check((await a.GetAsync("api/messenger/users")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks chat APIs");
         Check((await windows.GetAsync("api/messenger/windows")).StatusCode == HttpStatusCode.Forbidden, "disabled messenger blocks Windows SSO");

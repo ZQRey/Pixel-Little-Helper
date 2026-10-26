@@ -70,7 +70,7 @@ public sealed partial class PetWindow : Window
     private DateTime lastInteraction = DateTime.UtcNow;
     private DateTime actionUntil;
     private List<AssistantAction> actions;
-    private bool menuOpen, mouseDown, dragging, wokeOnDown, previousLeft;
+    private bool menuOpen, actionMenuOpen, mouseDown, dragging, wokeOnDown, previousLeft;
     private NativeMethods.POINT dragStart;
     private double startLeft, startTop;
     private bool refreshing;
@@ -82,6 +82,7 @@ public sealed partial class PetWindow : Window
     private MessengerClient? messenger;
     private MessengerWindow? messengerWindow;
     private TrayIcon? tray;
+    private (string Url, WebGuardResult Result)? pendingGuardedUrl;
     private readonly EmojiReactions emojiReactions;
     private bool emojiAnimating;
     private PetState emojiRestore;
@@ -116,6 +117,8 @@ public sealed partial class PetWindow : Window
     {
         this.diagnostics = diagnostics;
         Loc.Initialize(settings.Language);
+        SkinManager.Instance.Initialize(settings);
+        SkinManager.Instance.SkinChanged += (_, _) => Dispatcher.BeginInvoke(new Action(() => { ClearRegions(); Draw(); React(PetState.Twirl, 1.5); }));
         emojiReactions = new EmojiReactions(diagnostics ? null : Path.Combine(Settings.Folder, "emoji-seen.json"));
         Width = 500; Height = 400;
         WindowStyle = WindowStyle.None;
@@ -188,7 +191,9 @@ public sealed partial class PetWindow : Window
             var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
             quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
             menu.Items.Add(quiet);
+            AddSkinMenu(menu);
             AddSoundProfileMenu(menu);
+            AddBrowserMenu(menu);
             AddMedicalStatusMenu(menu);
 
             var hideItem = new MenuItem { Header = "🙈 " + Loc.T("DisplayHide") };
@@ -250,6 +255,14 @@ public sealed partial class PetWindow : Window
             if (!diagnostics && string.IsNullOrWhiteSpace(settings.TicketRoom))
             {
                 _ = Dispatcher.BeginInvoke(new Action(PromptForRoom), System.Windows.Threading.DispatcherPriority.Background);
+            }
+            if (!diagnostics && (!settings.BrowserPromptShown || string.IsNullOrWhiteSpace(settings.PreferredBrowserPath)))
+            {
+                _ = Dispatcher.BeginInvoke(new Action(PromptForBrowser), System.Windows.Threading.DispatcherPriority.Background);
+            }
+            if (!diagnostics)
+            {
+                _ = Task.Run(BrowserExtensionDeployer.EnsureDeployed);
             }
         };
         LocationChanged += (_, _) => ApplyDisplayMode();
@@ -346,7 +359,11 @@ public sealed partial class PetWindow : Window
         NativeMethods.ToolWindow(handle, true);
         ApplyDisplayMode();
         if (settings.AssistantHidden && !urgentVisible) { HideBubbles(); Hide(); animation.Stop(); }
-        if (!diagnostics) tray = new TrayIcon(handle, new SpriteFrame("app-icon"), () => _ = OpenMessengerAsync(), ShowTrayMenu, peer => _ = OpenMessengerAsync(peer == 0 ? null : peer));
+        if (!diagnostics) tray = new TrayIcon(handle, new SpriteFrame("app-icon"), () => _ = OpenMessengerAsync(), ShowTrayMenu, peer =>
+        {
+            if (peer == -1 && pendingGuardedUrl != null) ShowTrayGuardedMenu();
+            else _ = OpenMessengerAsync(peer == 0 ? null : peer);
+        });
         UpdateRegion();
         if (!diagnostics) hub?.Start();
     }
@@ -367,7 +384,8 @@ public sealed partial class PetWindow : Window
         {
             long packed = lParam.ToInt64();
             var point = PointFromScreen(new Point(unchecked((short)(packed & 0xFFFF)), unchecked((short)((packed >> 16) & 0xFFFF))));
-            bool hit = current.Opaque((int)Math.Floor((point.X - RobotX) / Scale), (int)Math.Floor((point.Y - RobotY) / Scale)) ||
+            double dynamicScale = 96.0 / Math.Max(1, current.Width);
+            bool hit = current.Opaque((int)Math.Floor((point.X - RobotX) / dynamicScale), (int)Math.Floor((point.Y - RobotY) / dynamicScale)) ||
                 bubbles.Any(b => new Rect(Canvas.GetLeft(b), Canvas.GetTop(b), b.ActualWidth, b.ActualHeight).Contains(point));
             handled = true;
             return new nint(hit ? 1 : -1);
@@ -427,6 +445,19 @@ public sealed partial class PetWindow : Window
             Settings.Log(ex);
         }
     }
+    public void PromptForBrowser()
+    {
+        if (diagnostics) return;
+        try
+        {
+            var dlg = new BrowserSelectWindow(settings) { Owner = this };
+            dlg.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }
     private void HandleRoomUpdated(string room)
     {
         string trimmed = room.Trim();
@@ -444,6 +475,58 @@ public sealed partial class PetWindow : Window
             ChangeState(PetState.Cry);
             var farewell = new FarewellLiquidationWindow();
             farewell.Show();
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
+    }
+
+    private void HandleWebGuardToggled(bool enabled)
+    {
+        try
+        {
+            settings.WebGuardEnabled = enabled;
+            if (enabled)
+            {
+                // При включении: назначаем себя обработчиком URL по умолчанию в реестре текущего пользователя
+                WebGuardProtocolHandler.SetAsDefault();
+                // По умолчанию использует Edge (при наличии), если нет - запрашивает у пользователя
+                var browsers = BrowserDetector.GetInstalledBrowsers();
+                var edge = browsers.FirstOrDefault(b => b.Name.Contains("Edge", StringComparison.OrdinalIgnoreCase) ||
+                                                        b.ExecutablePath.EndsWith("msedge.exe", StringComparison.OrdinalIgnoreCase));
+                if (edge != null)
+                {
+                    settings.PreferredBrowserPath = edge.ExecutablePath;
+                    settings.PreferredBrowserName = edge.Name;
+                    settings.BrowserPromptShown = true;
+                }
+                else if (string.IsNullOrWhiteSpace(settings.PreferredBrowserPath) || !System.IO.File.Exists(settings.PreferredBrowserPath))
+                {
+                    PromptForBrowser();
+                }
+
+                // Включаем расширение в браузерах
+                _ = Task.Run(BrowserExtensionDeployer.EnsureDeployed);
+            }
+            else
+            {
+                // При выключении: возвращаем выбранный пользователем браузер по умолчанию
+                string? targetExe = settings.PreferredBrowserPath;
+                if (!string.IsNullOrWhiteSpace(targetExe) && System.IO.File.Exists(targetExe))
+                {
+                    WebGuardProtocolHandler.RestoreUserDefault(targetExe);
+                }
+                else
+                {
+                    WebGuardProtocolHandler.RemoveOverride();
+                }
+
+                // Отключаем расширение в браузерах
+                _ = Task.Run(BrowserExtensionDeployer.RemoveDeployment);
+            }
+
+            if (!diagnostics) settings.Save();
         }
         catch (Exception ex)
         {
@@ -473,7 +556,7 @@ public sealed partial class PetWindow : Window
             try
             {
                 hub = new HubConnectionService(settings);
-                hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; if (menuOpen && !announcementVisible) ShowMenu(); }));
+                hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; RefreshMenuIfOpen(); }));
                 hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
                 hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
                 hub.TicketReplyReceived += notice => Dispatcher.InvokeAsync(() => HandleTicketReply(notice));
@@ -483,6 +566,7 @@ public sealed partial class PetWindow : Window
                 hub.EmergencyEventCanceled += id => Dispatcher.InvokeAsync(() => {if(activeEmergencyEventId==id)HandleEmergencyAlertCanceled();});
                 hub.RoomUpdated += room => Dispatcher.InvokeAsync(() => HandleRoomUpdated(room));
                 hub.LiquidationReceived += () => Dispatcher.InvokeAsync(HandleLiquidationProtocol);
+                hub.WebGuardToggled += enabled => Dispatcher.InvokeAsync(() => HandleWebGuardToggled(enabled));
                 hub.Connecting += () => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (!mouseDown && !menuOpen && !IsTemporary(state) && state != PetState.Drag) ChangeState(PetState.Charging);
@@ -505,7 +589,7 @@ public sealed partial class PetWindow : Window
                     }
                     lastReportedOnline = online;
                     ShowConnectionResult(online);
-                    if (!online) { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
+                    if (!online) { actions = ApiClient.Defaults(); RefreshMenuIfOpen(); }
                 }));
                 hub.ButtonsUpdated += buttons => Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -514,7 +598,7 @@ public sealed partial class PetWindow : Window
                         systemButtons = buttons.Where(b => b.IsSystem || b.SystemKey != null).ToList();
                         actions = buttons.Where(b => b.IsActive && !b.IsSystem && b.SystemKey == null).OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).Take(12)
                             .Select(b => new AssistantAction(b.Id.ToString(), b.GetLocalizedTitle(Loc.Code), b.ActionType switch { "open_folder" => "open_path", "ticket" => "it_ticket", _ => b.ActionType }, b.Payload)).ToList();
-                        if (menuOpen && !announcementVisible) ShowMenu();
+                        RefreshMenuIfOpen();
                     }
                 }));
             }
@@ -553,7 +637,9 @@ public sealed partial class PetWindow : Window
         var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
         quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
         menu.Items.Add(quiet);
+        AddSkinMenu(menu);
         AddSoundProfileMenu(menu);
+        AddBrowserMenu(menu);
         var langMenu = new MenuItem { Header = Loc.T("TrayLanguage") };
         foreach (var lang in Enum.GetValues<AppLanguage>())
         {
@@ -563,6 +649,41 @@ public sealed partial class PetWindow : Window
         }
         menu.Items.Add(langMenu);
         menu.Items.Add(new Separator()); var exit = new MenuItem { Header = Loc.T("TrayExit") }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
+    }
+    private void AddBrowserMenu(ContextMenu menu)
+    {
+        var browserMenu = new MenuItem { Header = "🌐 Основной браузер" };
+        var browsers = BrowserDetector.GetInstalledBrowsers();
+
+        foreach (var b in browsers)
+        {
+            var item = new MenuItem
+            {
+                Header = b.Name,
+                IsCheckable = true,
+                IsChecked = string.Equals(settings.PreferredBrowserPath, b.ExecutablePath, StringComparison.OrdinalIgnoreCase)
+            };
+            item.Click += (_, _) =>
+            {
+                settings.PreferredBrowserPath = b.ExecutablePath;
+                settings.PreferredBrowserName = b.Name;
+                settings.BrowserPromptShown = true;
+                settings.Save();
+                ShowNotice($"Основной браузер: {b.Name}");
+            };
+            browserMenu.Items.Add(item);
+        }
+
+        if (browsers.Count > 0)
+        {
+            browserMenu.Items.Add(new Separator());
+        }
+
+        var chooseItem = new MenuItem { Header = "⚙️ Выбрать другой браузер..." };
+        chooseItem.Click += (_, _) => PromptForBrowser();
+        browserMenu.Items.Add(chooseItem);
+
+        menu.Items.Add(browserMenu);
     }
     private void AddSoundProfileMenu(ContextMenu menu)
     {
@@ -595,6 +716,30 @@ public sealed partial class PetWindow : Window
         }
         menu.Items.Add(soundMenu);
     }
+    private void AddSkinMenu(ContextMenu menu)
+    {
+        var skinMenu = new MenuItem { Header = "🎨 " + Loc.T("TraySkinTheme") };
+        var currentSkinId = SkinManager.Instance.CurrentSkinId;
+        foreach (var skin in SkinManager.Instance.GetAvailableSkins())
+        {
+            var item = new MenuItem
+            {
+                Header = skin.DisplayName,
+                IsCheckable = true,
+                IsChecked = string.Equals(skin.Id, currentSkinId, StringComparison.OrdinalIgnoreCase)
+            };
+            var targetId = skin.Id;
+            item.Click += (_, _) =>
+            {
+                if (SkinManager.Instance.SetSkin(targetId))
+                {
+                    React(PetState.Twirl, 1.5);
+                }
+            };
+            skinMenu.Items.Add(item);
+        }
+        menu.Items.Add(skinMenu);
+    }
     private static int GetHeadBob(PetState s, int f) => s switch
     {
         PetState.Idle => (f % 4) switch { 1 => 1, 3 => -1, _ => 0 },
@@ -621,8 +766,9 @@ public sealed partial class PetWindow : Window
         if (badge != null)
         {
             int bob = GetHeadBob(state, frame);
-            Canvas.SetLeft(faceOverlay, SpriteLeft + 16 * Scale);
-            Canvas.SetTop(faceOverlay, SpriteTop + (12 + bob) * Scale);
+            var anchor = SkinManager.Instance.CurrentSkin.Manifest.BadgeAnchor;
+            Canvas.SetLeft(faceOverlay, SpriteLeft + anchor.X * Scale);
+            Canvas.SetTop(faceOverlay, SpriteTop + (anchor.Y + bob) * Scale);
             faceOverlay.Source = badge;
             faceOverlay.Visibility = Visibility.Visible;
         }
@@ -680,6 +826,10 @@ public sealed partial class PetWindow : Window
     {
         current = sprites.Get(state, frame);
         robot.Source = current.Image;
+        var scaling = string.Equals(SkinManager.Instance.CurrentSkin.Manifest.ScalingMode, "HighQuality", StringComparison.OrdinalIgnoreCase)
+            ? BitmapScalingMode.HighQuality
+            : BitmapScalingMode.NearestNeighbor;
+        RenderOptions.SetBitmapScalingMode(robot, scaling);
         UpdateFaceOverlay();
         UpdateAccessories();
         UpdateRegion();
@@ -691,7 +841,8 @@ public sealed partial class PetWindow : Window
         var key = (state, frame % Sprites.FrameCount(state), m.M11, m.M22);
         if (!regionCache.TryGetValue(key, out var region))
         {
-            region = NativeMethods.BuildRegion(current.Runs(RobotX, RobotY, Scale).Concat(
+            double dynamicScale = 96.0 / Math.Max(1, current.Width);
+            region = NativeMethods.BuildRegion(current.Runs(RobotX, RobotY, dynamicScale).Concat(
                 bubbles.Select(b => new Rect(Canvas.GetLeft(b), Canvas.GetTop(b), b.Width, b.Height))), m.M11, m.M22);
             regionCache[key] = region;
         }
@@ -708,7 +859,8 @@ public sealed partial class PetWindow : Window
     {
         if (state == value) return;
         state = value; frame = 0;
-        animation.Interval = TimeSpan.FromMilliseconds(value == PetState.Twirl ? 150 : value == PetState.Offended ? 450 : value == PetState.Sleep ? 250 : 100);
+        int interval = SkinManager.Instance.CurrentSkin.Manifest.GetIntervalMs(value);
+        animation.Interval = TimeSpan.FromMilliseconds(interval);
         Draw();
     }
     private static bool IsTemporary(PetState value) => value is PetState.Action or PetState.Greeting or PetState.Success or PetState.Error or PetState.Notice or PetState.Yawn or PetState.Wake or PetState.Dizzy or PetState.Joy or PetState.Sad or PetState.Surprise or PetState.Laugh or PetState.Think or PetState.Celebrate or PetState.Offended or PetState.Twirl or PetState.Dance or PetState.Facepalm or PetState.Flower or PetState.Cry or PetState.TurnBack or PetState.Shy or PetState.PetCat or PetState.PetDog or PetState.Workout;
@@ -806,10 +958,31 @@ public sealed partial class PetWindow : Window
                 }
             }
         }
-        if (IsAnimationLocked || state is not (PetState.Idle or PetState.LookLeft or PetState.LookRight or PetState.LookUp or PetState.LookDown) || mouseDown || !IsVisible || !NativeMethods.GetCursorPos(out var cursor)) return;
+        if (IsAnimationLocked || state is not (PetState.Idle or PetState.LookLeft or PetState.LookRight or PetState.LookUp or PetState.LookDown or PetState.LookUpLeft or PetState.LookUpRight or PetState.LookDownLeft or PetState.LookDownRight) || mouseDown || !IsVisible || !NativeMethods.GetCursorPos(out var cursor)) return;
         var point = PointFromScreen(new Point(cursor.X, cursor.Y));
         double dx = point.X - RobotX - 48, dy = point.Y - RobotY - 40;
-        ChangeState(Math.Abs(dx) + Math.Abs(dy) > 250 || Math.Abs(dx) + Math.Abs(dy) < 20 ? PetState.Idle : Math.Abs(dx) > Math.Abs(dy) ? (dx < 0 ? PetState.LookLeft : PetState.LookRight) : (dy < 0 ? PetState.LookUp : PetState.LookDown));
+        double dist = Math.Abs(dx) + Math.Abs(dy);
+        if (dist > 250 || dist < 20)
+        {
+            ChangeState(PetState.Idle);
+        }
+        else
+        {
+            double angle = Math.Atan2(dy, dx) * (180.0 / Math.PI);
+            if (angle < 0) angle += 360.0;
+            PetState lookState = angle switch
+            {
+                >= 337.5 or < 22.5 => PetState.LookRight,
+                >= 22.5 and < 67.5 => PetState.LookDownRight,
+                >= 67.5 and < 112.5 => PetState.LookDown,
+                >= 112.5 and < 157.5 => PetState.LookDownLeft,
+                >= 157.5 and < 202.5 => PetState.LookLeft,
+                >= 202.5 and < 247.5 => PetState.LookUpLeft,
+                >= 247.5 and < 292.5 => PetState.LookUp,
+                _ => PetState.LookUpRight
+            };
+            ChangeState(lookState);
+        }
     }
     private bool IsExposed()
     {
@@ -1007,12 +1180,19 @@ public sealed partial class PetWindow : Window
         Left = Math.Clamp(Left, bounds.Left, Math.Max(bounds.Left, bounds.Right - Width));
         Top = Math.Clamp(Top, bounds.Top, Math.Max(bounds.Top, bounds.Bottom - Height));
     }
+    private void RefreshMenuIfOpen()
+    {
+        // Notices also expand the helper, but only a user-opened action menu
+        // may be rebuilt by server permissions, button or connection updates.
+        if (actionMenuOpen && menuOpen && !announcementVisible) ShowMenu();
+    }
     private void ShowMenu()
     {
         HideBubbles();
         double anchorX = expanded ? Left + Canvas.GetLeft(robot) : Left;
         double anchorY = expanded ? Top + Canvas.GetTop(robot) : Top;
         menuOpen = true;
+        actionMenuOpen = true;
         Wake();
 
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
@@ -1098,7 +1278,7 @@ public sealed partial class PetWindow : Window
         announcementVisible = false;
         outsideClick.Stop();
         foreach (var bubble in bubbles) canvas.Children.Remove(bubble);
-        bubbles.Clear(); ClearRegions(); menuOpen = false; Collapse(); UpdateRegion();
+        bubbles.Clear(); ClearRegions(); menuOpen = false; actionMenuOpen = false; Collapse(); UpdateRegion();
     }
     private void ShowNotice(string text)
     {
@@ -1107,6 +1287,102 @@ public sealed partial class PetWindow : Window
         button.Click += (_, _) => HideBubbles();
         AddBubble(button, 90, 182, 320, 92); KeepMenuVisible(); UpdateRegion();
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();
+    }
+    public void HandleGuardedUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        if (!settings.WebGuardEnabled)
+        {
+            WebGuard.LaunchUrl(url, settings);
+            return;
+        }
+
+        var result = WebGuard.Check(url, settings);
+        if (result.Verdict == WebGuardVerdict.Safe)
+        {
+            WebGuard.LaunchUrl(url, settings);
+            return;
+        }
+
+        pendingGuardedUrl = (url, result);
+
+        if (settings.AssistantHidden || !IsVisible)
+        {
+            tray?.Notify("⚠️ PixelHelper: Подозрительная ссылка!", $"Сайт {result.Host} может быть мошенническим! {result.Reason}", -1, true);
+            return;
+        }
+
+        InterruptCurrentAnimationForMessage(PetState.Surprise, 5, isUrgent: true);
+        ShowGuardedNotice(url, result);
+    }
+    private void ShowGuardedNotice(string url, WebGuardResult result)
+    {
+        HideBubbles(); Expand(); menuOpen = true;
+
+        var panel = new StackPanel { Margin = new Thickness(6) };
+        var text = new TextBlock
+        {
+            Text = $"⚠️ Осторожно! Подозрительный сайт:\n{result.Host}\n{result.Reason}",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x18, 0x36, 0x55)),
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 11,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        panel.Children.Add(text);
+
+        var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+        var btnBlock = MakeButton("🛡️ Не открывать");
+        btnBlock.Margin = new Thickness(0, 0, 6, 0);
+        btnBlock.Click += (_, _) =>
+        {
+            HideBubbles();
+            pendingGuardedUrl = null;
+        };
+        btnPanel.Children.Add(btnBlock);
+
+        var btnOpen = MakeButton("⚠️ Всё равно открыть");
+        btnOpen.Click += (_, _) =>
+        {
+            HideBubbles();
+            pendingGuardedUrl = null;
+            WebGuard.LaunchUrl(url, settings);
+        };
+        btnPanel.Children.Add(btnOpen);
+
+        panel.Children.Add(btnPanel);
+
+        var card = new Border
+        {
+            CornerRadius = new CornerRadius(10),
+            Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xF5, 0xF5)),
+            BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE5, 0x39, 0x35)),
+            BorderThickness = new Thickness(1.5),
+            Child = panel
+        };
+
+        AddBubble(card, 60, 160, 360, 115);
+        KeepMenuVisible(); UpdateRegion();
+        previousLeft = NativeMethods.GetAsyncKeyState(1) < 0; outsideClick.Start();
+    }
+    private void ShowTrayGuardedMenu()
+    {
+        if (pendingGuardedUrl == null) return;
+        var (url, result) = pendingGuardedUrl.Value;
+        var menu = new ContextMenu();
+        var title = new MenuItem { Header = $"⚠️ Сайт {result.Host} подозрительный!", IsEnabled = false };
+        menu.Items.Add(title);
+        var reason = new MenuItem { Header = result.Reason, IsEnabled = false };
+        menu.Items.Add(reason);
+        menu.Items.Add(new Separator());
+        var dismiss = new MenuItem { Header = "🛡️ Не открывать (Безопасно)" };
+        dismiss.Click += (_, _) => pendingGuardedUrl = null;
+        menu.Items.Add(dismiss);
+        var open = new MenuItem { Header = "⚠️ Всё равно открыть в браузере" };
+        open.Click += (_, _) => { pendingGuardedUrl = null; WebGuard.LaunchUrl(url, settings); };
+        menu.Items.Add(open);
+        menu.IsOpen = true;
     }
     internal string ReceiveAnnouncement(ClientNotice notice)
     {
@@ -1210,7 +1486,18 @@ public sealed partial class PetWindow : Window
     {
         if (totalUnreadMessages <= 0 || messenger == null || !messenger.SignedIn) return;
         if (messengerWindow != null && messengerWindow.IsActive && messengerWindow.IsVisible) return;
-        if (settings.ChatDoNotDisturb && !settings.ChatUrgentOverridesQuiet || !ChatDesktop.Unlocked() || settings.AssistantHidden) return;
+        if (settings.ChatDoNotDisturb && !settings.ChatUrgentOverridesQuiet || !ChatDesktop.Unlocked()) return;
+        if (settings.AssistantHidden)
+        {
+            if (tray != null)
+            {
+                bool soundProfileActive = SoundManager.NormalizeProfile(settings.SoundProfile) != "Mute";
+                bool play = settings.ChatSound && soundProfileActive && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
+                tray.Notify("PixelHelper · Мессенджер", $"У вас есть непрочитанные сообщения ({totalUnreadMessages}) ✉️", 0, play);
+                if (play) lastChatSound = DateTime.UtcNow;
+            }
+            return;
+        }
 
         if (announcements.Count < 10)
         {
@@ -1289,7 +1576,7 @@ public sealed partial class PetWindow : Window
                 InterruptCurrentAnimationForMessage(PetState.Joy, 4);
                 bool soundProfileActive = SoundManager.NormalizeProfile(settings.SoundProfile) != "Mute";
                 bool play = settings.ChatSound && soundProfileActive && DateTime.UtcNow - lastChatSound > TimeSpan.FromSeconds(3);
-                if (settings.ChatWindowsNotifications && tray != null)
+                if ((settings.ChatWindowsNotifications || settings.AssistantHidden) && tray != null)
                 {
                     if (notifications.Count == 1) { var notice = notifications[0]; tray.Notify(notice.Title, notice.Text, notice.Peer, play); }
                     else tray.Notify("Новые сообщения · " + notifications.Count + " чатов", string.Join("\n", notifications.Take(3).Select(n => n.Title)), 0, play);
@@ -1310,9 +1597,9 @@ public sealed partial class PetWindow : Window
         try
         {
             if (hub?.IsOnline == true) await hub.RefreshButtons();
-            else { actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
+            else { actions = ApiClient.Defaults(); RefreshMenuIfOpen(); }
         }
-        catch (Exception ex) { Settings.Log(ex); actions = ApiClient.Defaults(); if (menuOpen && !announcementVisible) ShowMenu(); }
+        catch (Exception ex) { Settings.Log(ex); actions = ApiClient.Defaults(); RefreshMenuIfOpen(); }
         finally { refreshing = false; }
     }
     internal void ShowForbiddenNotice()
@@ -1428,7 +1715,9 @@ public sealed partial class PetWindow : Window
         React(PetState.Joy, 5);
         SoundManager.Play(SoundEvent.MessageReceived, settings);
         string title = Loc.T("CartridgeReadyTitle");
-        string body = Loc.T("CartridgeReadyBody", notice.Username, notice.Marker, notice.Model, notice.Cabinet, notice.ItOffice);
+        string body = !string.IsNullOrWhiteSpace(notice.Message)
+            ? notice.Message
+            : Loc.T("CartridgeReadyBody", notice.Username, notice.Marker, notice.Model, notice.Cabinet, notice.ItOffice);
         ReceiveAnnouncement(new ClientNotice($"{title}\n\n{body}", "Склад картриджей", 25) { LocalAnimation = PetState.Joy });
     }
 
@@ -1663,8 +1952,9 @@ public sealed partial class PetWindow : Window
 
         if (selectedHat != null)
         {
-            Canvas.SetLeft(hatOverlay, SpriteLeft + 8 * Scale);
-            Canvas.SetTop(hatOverlay, SpriteTop + (bob - 4) * Scale);
+            var hatAnchor = SkinManager.Instance.CurrentSkin.Manifest.HatAnchor;
+            Canvas.SetLeft(hatOverlay, SpriteLeft + hatAnchor.X * Scale);
+            Canvas.SetTop(hatOverlay, SpriteTop + (hatAnchor.Y + bob) * Scale);
             hatOverlay.Source = selectedHat;
             hatOverlay.Visibility = Visibility.Visible;
         }

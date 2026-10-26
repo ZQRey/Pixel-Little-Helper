@@ -36,8 +36,8 @@ public static class VideoCallLauncher
     {
         CallRecordingReceiver.Start();
 
-        string host = serverAddress.TrimEnd('/');
-        string url = $"{host}/messenger/call.html?peer={peerId}&video={(isVideo ? 1 : 0)}&caller={(isCaller ? 1 : 0)}&user={currentUserId}&name={Uri.EscapeDataString(targetName)}&port={CallRecordingReceiver.LocalPort}&v=1.2.52";
+        string host = CallServerAddress.Secure(serverAddress);
+        string url = $"{host}/messenger/call.html?peer={peerId}&video={(isVideo ? 1 : 0)}&caller={(isCaller ? 1 : 0)}&user={currentUserId}&name={Uri.EscapeDataString(targetName)}&port={CallRecordingReceiver.LocalPort}&v=1.2.69";
         if (!string.IsNullOrEmpty(callId))
         {
             url += $"&callId={Uri.EscapeDataString(callId)}";

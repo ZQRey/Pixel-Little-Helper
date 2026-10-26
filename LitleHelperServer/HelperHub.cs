@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace LitleHelperServer;
 
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
-public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, IConfiguration configuration, IHttpClientFactory? httpFactory = null) : Hub
+public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, IConfiguration? configuration = null, IHttpClientFactory? httpFactory = null) : Hub
 {
     public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen, c.BranchId, c.Room };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
@@ -107,6 +107,7 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         c.CurrentUserFullName = !string.IsNullOrWhiteSpace(info.UserFullName) ? info.UserFullName.Trim() : "";
         c.DomainName = info.DomainName; c.IpAddress = info.IpAddress;
         c.SupportsSystemButtons = info.SupportsSystemButtons;
+        c.SupportsAiDiagnostics = info.SupportsAiDiagnostics;
         c.OsVersion = info.OsVersion; c.LastSeen = DateTime.UtcNow;
 
         var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
@@ -128,6 +129,7 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
         var buttons = await Buttons(db, c); await Clients.Caller.SendAsync("OnButtonsUpdated", buttons);
         await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName));
+        await Clients.Caller.SendAsync("WebGuardToggled", settings.Security().WebGuardEnabled);
         if (!string.IsNullOrWhiteSpace(c.Room))
             await Clients.Caller.SendAsync("ClientRoomUpdated", c.Room);
         return buttons;
@@ -267,6 +269,26 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
 
             var branch = await Branches.ValidateTicketAsync(db, branchId, room);
             int id = await glpi.CreateTicketAsync(owner, c.MachineName, Branches.Description(description, branch, room), attachments, Context.ConnectionAborted);
+
+            // Атомарно продвигаем курсор импорта GLPI, чтобы фоновый воркер не импортировал повторно созданную помощником заявку
+            try
+            {
+                string stateKey = GlpiTicketImport.StateKey(glpi.ImportSource);
+                var cursor = await db.TelegramBotStates.FindAsync([stateKey], Context.ConnectionAborted);
+                if (cursor != null)
+                {
+                    if (id > cursor.Offset) cursor.Offset = id;
+                }
+                else
+                {
+                    db.TelegramBotStates.Add(new TelegramBotState { Id = stateKey, Offset = id });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[GlpiCursor] Ошибка обновления курсора GLPI: {ex.Message}");
+            }
+
             var ticket = new TicketRecord { GlpiId = id, Username = owner, UserFullName = fullName, MachineName = c.MachineName, Title = title, Description = description, BranchId = branch?.Id, BranchName = branch?.Name ?? "", Room = room.Trim() };
             db.Tickets.Add(ticket);
             await db.SaveChangesAsync(Context.ConnectionAborted);

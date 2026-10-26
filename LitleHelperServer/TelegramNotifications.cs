@@ -30,6 +30,66 @@ public class TelegramClient(HttpClient http, IntegrationSettings settings, IConf
         if(options.ThreadId>0)body["message_thread_id"]=options.ThreadId;if(keyboard!=null)body["reply_markup"]=keyboard;
         var result=await CallAsync("sendMessage",body,token);return result.TryGetProperty("message_id",out var id)?id.GetInt64():0;
     }
+    public async Task<long> SendTicketWithPhotoTrackedAsync(TicketRecord ticket, string fileName, byte[] photoBytes, CancellationToken token)
+    {
+        var options = settings.Telegram();
+        if (string.IsNullOrWhiteSpace(options.BotToken) || string.IsNullOrWhiteSpace(options.ChatId))
+            throw new InvalidOperationException("Сначала укажите токен бота и Chat ID.");
+
+        string text = Message(ticket);
+        if (text.Length > 1000)
+        {
+            int end = char.IsHighSurrogate(text[999]) ? 999 : 1000;
+            text = text[..end] + "\n… Полный текст в веб-панели.";
+        }
+
+        string apiBase = configuration["Telegram:ApiBaseUrl"] ?? "https://api.telegram.org";
+        string url = apiBase.TrimEnd('/') + "/bot" + options.BotToken + "/sendPhoto";
+
+        try
+        {
+            using var form = new MultipartFormDataContent();
+            form.Add(new StringContent(options.ChatId), "chat_id");
+            if (options.ThreadId > 0) form.Add(new StringContent(options.ThreadId.ToString()), "message_thread_id");
+            form.Add(new StringContent(text), "caption");
+
+            if (options.ManagementEnabled)
+            {
+                form.Add(new StringContent(JsonSerializer.Serialize(TicketKeyboard(ticket))), "reply_markup");
+            }
+
+            var fileContent = new ByteArrayContent(photoBytes);
+            string ext = Path.GetExtension(fileName).ToLowerInvariant();
+            string contentType = ext switch
+            {
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".png" => "image/png",
+                ".webp" => "image/webp",
+                _ => "application/octet-stream"
+            };
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+            form.Add(fileContent, "photo", fileName);
+
+            using var response = await http.PostAsync(url, form, token);
+            if (!response.IsSuccessStatusCode)
+            {
+                // Fallback: при ошибке sendPhoto отправляем текстовое сообщение
+                return await SendTicketTrackedAsync(ticket, token);
+            }
+
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
+            if (json.RootElement.TryGetProperty("result", out var res) && res.TryGetProperty("message_id", out var idProp))
+            {
+                return idProp.GetInt64();
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // При сетевой ошибке отправки фото делаем попытку текстовой отправки
+            return await SendTicketTrackedAsync(ticket, token);
+        }
+        return 0;
+    }
     public static string TicketButtonState(TicketRecord ticket)
     {
         if (TicketManagement.Status(ticket.Status) >= 5) return "closed:" + ticket.Id + ":" + ticket.Status;
@@ -187,25 +247,84 @@ public class TelegramWorker(IServiceScopeFactory scopes, IntegrationSettings set
                 if (settings.Telegram().Enabled)
                 {
                     using var scope = scopes.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<HelperDb>();
+                    // Сбрасываем зависшие в Processing более 5 минут назад обратно в Pending
+                    var stale = await db.TelegramDeliveries.Where(x => x.State == "Processing" && x.NextAttemptAt <= DateTime.UtcNow.AddMinutes(-5)).ToListAsync(stoppingToken);
+                    if (stale.Count > 0)
+                    {
+                        foreach (var s in stale) s.State = "Pending";
+                        await db.SaveChangesAsync(stoppingToken);
+                    }
+
                     var due = await db.TelegramDeliveries.Include(x => x.Ticket).Where(x => x.State == "Pending" && x.NextAttemptAt <= DateTime.UtcNow).OrderBy(x => x.NextAttemptAt).Take(20).ToListAsync(stoppingToken);
                     var sender = scope.ServiceProvider.GetRequiredService<TelegramClient>();
                     foreach (var item in due)
                     {
+                        // Дедупликация: проверяем, не было ли уже успешно отправлено сообщение по этому тикету
+                        bool alreadySent = await db.TelegramDeliveries.AnyAsync(d => d.TicketId == item.TicketId && d.State == "Sent" && d.GroupMessageId > 0, stoppingToken);
+                        if (alreadySent)
+                        {
+                            item.State = "DuplicateSkipped";
+                            item.LastError = "Сообщение по этой заявке уже было отправлено ранее.";
+                            await db.SaveChangesAsync(stoppingToken);
+                            continue;
+                        }
+
+                        // Атомарно переводим в Processing
+                        item.State = "Processing";
                         item.Attempts++;
+                        await db.SaveChangesAsync(stoppingToken);
+
                         try
                         {
-                            item.GroupMessageId = await sender.SendTicketTrackedAsync(item.Ticket, stoppingToken);
+                            var attachments = await db.TicketAttachments.AsNoTracking().Where(a => a.TicketId == item.TicketId).ToListAsync(stoppingToken);
+                            TicketAttachment? primaryPhoto = null;
+                            byte[]? primaryPhotoBytes = null;
+
+                            if (attachments.Count > 0)
+                            {
+                                var firstPhoto = attachments.FirstOrDefault(a =>
+                                {
+                                    string ext = Path.GetExtension(a.FileName).ToLowerInvariant();
+                                    return ext is ".jpg" or ".jpeg" or ".png" or ".bmp" or ".webp";
+                                });
+                                if (firstPhoto != null)
+                                {
+                                    string filePath = Path.Combine(TicketAttachments.Folder(configuration), firstPhoto.StorageKey);
+                                    if (File.Exists(filePath))
+                                    {
+                                        try
+                                        {
+                                            primaryPhotoBytes = await File.ReadAllBytesAsync(filePath, stoppingToken);
+                                            primaryPhoto = firstPhoto;
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+
+                            if (primaryPhoto != null && primaryPhotoBytes != null)
+                            {
+                                // Единое сообщение со скриншотом/фото, карточкой заявки в caption и инлайн-кнопками
+                                item.GroupMessageId = await sender.SendTicketWithPhotoTrackedAsync(item.Ticket, primaryPhoto.FileName, primaryPhotoBytes, stoppingToken);
+                            }
+                            else
+                            {
+                                // Текстовое сообщение с инлайн-кнопками
+                                item.GroupMessageId = await sender.SendTicketTrackedAsync(item.Ticket, stoppingToken);
+                            }
+
                             item.GroupChatId = settings.Telegram().ChatId;
                             item.ButtonState = TelegramClient.TicketButtonState(item.Ticket);
                             item.State = "Sent";
                             item.SentAt = DateTime.UtcNow;
                             item.LastError = "";
 
-                            if (item.GroupMessageId > 0)
+                            if (item.GroupMessageId > 0 && attachments.Count > 0)
                             {
-                                var attachments = await db.TicketAttachments.AsNoTracking().Where(a => a.TicketId == item.TicketId).ToListAsync(stoppingToken);
                                 foreach (var att in attachments)
                                 {
+                                    // Пропускаем основное фото, если оно уже отправлено в первом сообщении
+                                    if (primaryPhoto != null && att.Id == primaryPhoto.Id) continue;
                                     string filePath = Path.Combine(TicketAttachments.Folder(configuration), att.StorageKey);
                                     if (File.Exists(filePath))
                                     {

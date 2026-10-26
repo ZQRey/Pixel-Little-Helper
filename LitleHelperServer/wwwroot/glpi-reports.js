@@ -1,6 +1,14 @@
 "use strict";
 let glpiReportData, glpiReportFilters = {}, glpiReportTab = 'tickets', glpiReportPage = 0;
 let surveyRefreshTimer, activeSurveyId = null;
+let reportTimeZone='Asia/Qyzylorda', reportLocale='ru-KZ', reportContextReady=false;
+async function ensureReportContext() {
+  if(reportContextReady)return;
+  const context=await api('/reports/glpi/context');
+  // Validate before applying server configuration to Intl and date presets.
+  new Intl.DateTimeFormat(context.locale,{timeZone:context.timeZone}).format(new Date());
+  reportTimeZone=context.timeZone;reportLocale=context.locale;reportContextReady=true;
+}
 const reportSort = {};
 function reportSortColumns(tab) {
   return tab === 'tickets'
@@ -42,9 +50,18 @@ function bindReportSorting() {
 }
 const reportTime = s => s == null ? 'Нет данных' : s < 60 ? Number(s).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' с' : s < 3600 ? Math.round(s / 60) + ' мин' : (s / 3600).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' ч';
 const reportScore = s => s == null ? 'Нет оценок' : Number(s).toFixed(2) + ' / 5';
-const reportDay = d => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Qyzylorda' }).format(d);
-const reportDate = d => d ? new Date(d).toLocaleString('ru-RU', { timeZone: 'Asia/Qyzylorda' }) : '—';
+const reportDay = d => new Intl.DateTimeFormat('sv-SE', { timeZone: reportTimeZone }).format(d);
+const reportDate = d => d ? new Date(d).toLocaleString(reportLocale, { timeZone: reportTimeZone }) : '—';
 const reportStatus = s => ({ 1: 'Новая', 2: 'В работе', 3: 'Запланирована', 4: 'Ожидание', 5: 'Решена', 6: 'Закрыта' })[s] || s;
+const reportPeriodDate = value => value ? value.split('-').reverse().join('.') : '—';
+function reportComparisonView(data) {
+  const c=data.comparison; if(!c)return '';
+  const period=(a,b)=>reportPeriodDate(a)+' — '+reportPeriodDate(b);
+  const value=(m,v)=>v==null?'Нет данных':m.unit==='seconds'?reportTime(v):m.unit==='score'?reportScore(v):Number(v).toLocaleString('ru-RU');
+  const delta=m=>m.delta==null?'Нет данных':(m.delta>0?'+':m.delta<0?'−':'')+(m.unit==='seconds'?reportTime(Math.abs(m.delta)):Math.abs(m.delta).toLocaleString('ru-RU',{maximumFractionDigits:2}))+(m.unit==='score'?' балл.':'');
+  const change=m=>m.delta==null?'Недостаточно данных':m.unit==='score'?'В баллах':m.percent==null?(m.unit==='count'?'Ранее не было':'База сравнения — 0'):(m.percent>0?'+':'')+m.percent.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%';
+  return `<details class="report-comparison"><summary>Сравнение периодов</summary><div class="report-comparison-body"><p>${escape(c.rule)}</p>${c.warning?`<p class="report-warning">${escape(c.warning)}</p>`:''}${c.metrics?.length?table(['Показатель','Текущий: '+period(c.currentFrom,c.currentTo),'Сравнение: '+period(c.previousFrom,c.previousTo),'Разница','Изменение'],c.metrics.map(m=>`<tr><td>${escape(m.label)}</td><td>${escape(value(m,m.current))}${m.currentSamples!=null?`<small>N=${m.currentSamples}</small>`:''}</td><td>${escape(value(m,m.previous))}${m.previousSamples!=null?`<small>N=${m.previousSamples}</small>`:''}</td><td>${escape(delta(m))}</td><td>${escape(change(m))}</td></tr>`).join('')):''}<p class="report-note">${escape(c.note)}</p></div></details>`;
+}
 const reportHints = {
   'Заявки в выборке': ['total', '<p>Количество заявок, которые соответствуют выбранному периоду и всем фильтрам отчёта.</p><p>Поле «Отбирать по дате» определяет, какое событие должно попасть в период: создание, решение, закрытие или получение оценки.</p><p>Например, при отборе по дате создания учитываются созданные в этот период заявки, даже если их решили позднее. Удалённые заявки в выборку не входят.</p>'],
   'Закрыты сейчас': ['closed', '<p>Количество заявок из текущей выборки, которые на момент последнего обновления данных имеют статус «Закрыта».</p><p>Это не обязательно заявки, закрытые в выбранный период: период применяется к событию, указанному в поле «Отбирать по дате».</p><p>Чтобы увидеть закрытые за период заявки, выберите отбор по дате закрытия. Статус «Решена» ещё не означает «Закрыта».</p>'],
@@ -125,6 +142,7 @@ document.addEventListener('scroll',positionReportColumnHint,{capture:true,passiv
 window.addEventListener('resize',positionReportColumnHint);
 try { if (window.parent !== window) window.parent.addEventListener('scroll',positionReportColumnHint,{passive:true}); } catch (_) {}
 function reportPeriod(kind) {
+  glpiReportFilters.period = kind;
   const today = reportDay(new Date()), end = new Date(today + 'T12:00:00Z'), start = new Date(end);
   if (kind === 'week') start.setUTCDate(start.getUTCDate() - (start.getUTCDay() + 6) % 7);
   if (kind === 'month') start.setUTCDate(1);
@@ -142,6 +160,7 @@ async function selectReportReaction(value) {
   $('#report-rows')?.scrollIntoView({block:'start',behavior:'smooth'});
 }
 async function renderGlpiReports() {
+  await ensureReportContext();
   if (!glpiReportFilters.from) reportPeriod('month');
   const viewGeneration = generation;
   const data = await api('/reports/glpi?' + new URLSearchParams(glpiReportFilters));
@@ -153,23 +172,29 @@ async function renderGlpiReports() {
   $('#stats').hidden = true;
   $('#content').innerHTML = `<div class="report-banner"><div><span class="eyebrow">GLPI / АНАЛИТИКА</span><h2>Как работает поддержка</h2><p>Обращения, время решения и обратная связь пользователей.</p></div><div class="report-freshness">Срез: ${reportDate(data.syncedAt)}<br>История с ${reportDate(data.coverageFrom)}<br>${data.totalAvailable} заявок в доступной области</div></div>
   ${data.error ? `<p class="report-warning">${escape(data.error)}</p>` : ''}
-  <form id="report-filter" class="report-filters"><div class="report-presets">${[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['year', 'Год']].map(([k, v]) => `<button type="button" data-period="${k}">${v}</button>`).join('')}</div>
+  <form id="report-filter" class="report-filters"><input type="hidden" name="period" value="${escape(data.filter.periodKind || 'auto')}"><div class="report-presets">${[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['year', 'Год']].map(([k, v]) => `<button type="button" data-period="${k}">${v}</button>`).join('')}</div>
   <label>С даты<input name="from" type="date" required value="${escape(data.filter.from)}"></label><label>По дату<input name="to" type="date" required value="${escape(data.filter.to)}"></label>
   <label>Отбирать по дате<select name="basis">${[['created', 'Создания'], ['solved', 'Решения'], ['closed', 'Закрытия'], ['answered', 'Оценки']].map(([k, v]) => `<option value="${k}" ${data.filter.basis === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
   <label>Филиал<select name="branchId">${choice(c.branches, glpiReportFilters.branchId)}</select></label><label>Специалист<select name="technician">${choice(c.technicians, glpiReportFilters.technician)}</select></label>
   <label>Заявитель<select name="requester">${choice(c.requesters, glpiReportFilters.requester)}</select></label><label>Статус<select name="status"><option value="">Все</option>${[1,2,3,4,5,6].map(n => `<option value="${n}" ${String(glpiReportFilters.status) === String(n) ? 'selected' : ''}>${reportStatus(n)}</option>`).join('')}</select></label>
-  <label>Номер или тема<input name="search" value="${escape(glpiReportFilters.search || '')}" maxlength="200" placeholder="Найти заявку"></label><button class="primary">Показать</button></form>
+  <label>Номер или тема<input name="search" value="${escape(glpiReportFilters.search || '')}" maxlength="200" placeholder="Найти заявку"></label>
+  <label>Сравнить с<select name="compare" id="report-compare-mode">${[['previous','Предыдущий сопоставимый период'],['custom','Выбрать даты'],['none','Не сравнивать']].map(([k,v])=>`<option value="${k}" ${data.filter.comparison===k?'selected':''}>${v}</option>`).join('')}</select></label>
+  <label data-compare-custom ${data.filter.comparison==='custom'?'':'hidden'}>Сравнение с<input name="compareFrom" type="date" value="${escape(data.filter.compareFrom || data.comparison?.previousFrom || '')}" ${data.filter.comparison==='custom'?'required':'disabled'}></label>
+  <label data-compare-custom ${data.filter.comparison==='custom'?'':'hidden'}>Сравнение по<input name="compareTo" type="date" value="${escape(data.filter.compareTo || data.comparison?.previousTo || '')}" ${data.filter.comparison==='custom'?'required':'disabled'}></label><button class="primary">Показать</button></form>
   <div class="report-kpis">${[
     ['Заявки в выборке', s.total, 'Основа: ' + ({created:'созданы',solved:'решены',closed:'закрыты',answered:'оценены'})[data.filter.basis]],
     ['Закрыты сейчас', s.closed, 'Из выбранных заявок'], ['Среднее исполнения', reportTime(s.meanSeconds), s.executionSamples + ' наблюдений'],
     ['Медиана / P90', reportTime(s.medianSeconds) + ' / ' + reportTime(s.p90Seconds), 'Календарное время'],
     ['Оценка результата', reportScore(s.meanScore), s.rated + ' ответов'], ['Трудозатраты', reportTime(s.effortSeconds), s.effortSamples ? 'Заполнено: ' + s.effortSamples : 'Учёт ещё не вёлся']
   ].map(([a,b,d]) => { const hint=reportHints[a]; return `<div class="report-kpi"><div class="report-kpi-label">${a}${hint ? ` <div class="report-help"><button type="button" class="report-help-button" data-report-help aria-label="Что означает ${a}" aria-expanded="false" aria-controls="report-hint-${hint[0]}">?</button><div id="report-hint-${hint[0]}" class="report-help-popup" role="region" aria-label="Пояснение: ${a}" hidden>${hint[1]}</div></div>` : ''}</div><strong>${b}</strong><span>${d}</span></div>`; }).join('')}</div>
+  ${reportComparisonView(data)}
   <div class="report-charts"><div class="panel report-chart"><h3>Динамика обращений</h3><p><span class="report-dot created"></span> Созданы &nbsp; <span class="report-dot solved"></span> Решены &nbsp; <span class="report-dot closed"></span> Закрыты</p><div id="report-timeline"></div></div><div class="panel report-chart"><h3>Оценки пользователей</h3><div id="report-stars-chart"></div><p class="report-note">Неоценённые заявки не снижают среднюю оценку. При менее 5 ответах сравнивать сотрудников рано.</p></div></div>
   ${reportReactionChart(data)}
   <div class="toolbar"><div class="report-tabs">${[['tickets', 'Заявки'], ['technicians', 'Специалисты'], ['requesters', 'Заявители']].map(([k,v]) => `<button data-report-tab="${k}" class="${glpiReportTab === k ? 'primary' : ''}">${v}</button>`).join('')}</div><span class="report-spacer"></span>${can('reports.glpi.export') ? '<button data-export="xlsx">↓ XLSX</button><button data-export="pdf">↓ PDF</button>' : ''}${can('reports.glpi.settings') ? '<button id="report-sync">Обновить из GLPI</button><button id="report-settings">Опросы</button>' : ''}</div><div id="report-rows"></div>${surveyReportHtml(data.surveyReport)}
-  <p class="report-note">Текущая очередь во всей доступной области: ${data.currentOpen}. Отсутствует заявитель: ${s.missingRequester}; не определён ответственный: ${s.ambiguousResponsible}. Участие нескольких исполнителей может пересекаться. Исторический ответственный восстановлен по данным GLPI. Время исполнения: принята → закрыта; время жизни: создана → закрыта. При отсутствии дат — «Нет данных». Это календарные интервалы, а не личные трудозатраты. Часовой пояс: Asia/Qyzylorda.</p>`;
+  <p class="report-note">Текущая очередь во всей доступной области: ${data.currentOpen}. Отсутствует заявитель: ${s.missingRequester}; не определён ответственный: ${s.ambiguousResponsible}. Участие нескольких исполнителей может пересекаться. Исторический ответственный восстановлен по данным GLPI. Время исполнения: принята → закрыта; время жизни: создана → закрыта. При отсутствии дат — «Нет данных». Это календарные интервалы, а не личные трудозатраты. Часовой пояс: ${escape(reportTimeZone)}.</p>`;
   document.querySelectorAll('[data-report-help]').forEach(button => button.addEventListener('click', () => { const open=button.getAttribute('aria-expanded')!=='true'; closeReportHints(); button.setAttribute('aria-expanded',String(open)); document.getElementById(button.getAttribute('aria-controls')).hidden=!open; }));
+  $('#report-compare-mode').addEventListener('change',e=>{const custom=e.target.value==='custom';document.querySelectorAll('[data-compare-custom]').forEach(label=>{label.hidden=!custom;const input=label.querySelector('input');input.disabled=!custom;input.required=custom;});});
+  $('#report-filter').querySelectorAll('[name=from],[name=to]').forEach(input=>input.addEventListener('change',()=>{$('#report-filter [name=period]').value='custom';}));
   $('#report-filter').addEventListener('submit', e => { e.preventDefault(); const reaction=glpiReportFilters.reaction; glpiReportFilters = Object.fromEntries([...new FormData(e.target)].filter(([, v]) => v !== '')); if(reaction != null)glpiReportFilters.reaction=reaction; glpiReportPage = 0; renderGlpiReports().catch(e => toast(e.message, true)); });
   document.querySelectorAll('[data-reaction]').forEach(b => b.addEventListener('click', () => selectReportReaction(b.dataset.reaction).catch(e => toast(e.message,true))));
   $('#report-reaction-clear')?.addEventListener('click', () => selectReportReaction(null).catch(e => toast(e.message,true)));
@@ -188,9 +213,13 @@ async function renderGlpiReports() {
   } catch (e) { toast(e.message, true); } finally { b.disabled = false; } }));
   $('#report-sync')?.addEventListener('click', async e => { e.target.disabled = true; try { await api('/reports/glpi/sync', 'POST', {}); await renderGlpiReports(); } catch (e) { toast(e.message, true); } finally { if ($('#report-sync')) $('#report-sync').disabled = false; } });
   $('#report-settings')?.addEventListener('click', reportSettings);
+  if(can('reports.glpi.settings')) {
+    const button=document.createElement('button');button.textContent='Организация';button.id='report-organization';
+    button.addEventListener('click',reportOrganizationSettings);$('#report-settings')?.after(button);
+  }
   const points = data.timeline, max = Math.max(1, ...points.flatMap(p => [p.created,p.solved,p.closed]));
   $('#report-timeline').innerHTML = points.length ? `<div class="report-bars">${points.map(p => `<button class="report-bar-day" data-day="${p.day}" title="${p.day}: создано ${p.created}, решено ${p.solved}, закрыто ${p.closed}"><span class="report-bar-group">${['created','solved','closed'].map(k => `<i class="${k}" data-height="${Math.max(p[k] ? 3 : 0, p[k] / max * 105)}"></i>`).join('')}</span><small>${p.day.slice(5)}</small></button>`).join('')}</div><small>Нажмите на дату для детализации. Динамика учитывает даты каждого события.</small>` : '<div class="empty">За этот период событий нет</div>';
-  $('#report-timeline').querySelectorAll('[data-day]').forEach(b => b.addEventListener('click', () => { glpiReportFilters.from = glpiReportFilters.to = b.dataset.day; glpiReportTab = 'tickets'; glpiReportPage = 0; renderGlpiReports().catch(e => toast(e.message,true)); }));
+  $('#report-timeline').querySelectorAll('[data-day]').forEach(b => b.addEventListener('click', () => { glpiReportFilters.from = glpiReportFilters.to = b.dataset.day; glpiReportFilters.period='day'; glpiReportTab = 'tickets'; glpiReportPage = 0; renderGlpiReports().catch(e => toast(e.message,true)); }));
   const scores = [5,4,3,2,1].map(n => ({ n, count: data.tickets.filter(t => t.status === 6 && t.currentScore != null && Math.round(t.currentScore) === n).length })), maxScores = Math.max(1,...scores.map(x => x.count));
   $('#report-stars-chart').innerHTML = scores.map(x => `<div class="report-rating-row"><span>${x.n} ★</span><div><i data-width="${x.count / maxScores * 100}"></i></div><b>${x.count}</b></div>`).join('');
   document.querySelectorAll('[data-height]').forEach(el => { el.style.height=el.dataset.height+'px'; });
@@ -206,14 +235,15 @@ function renderReportRows() {
   bindReportColumnHints();
   bindReportSorting();
   $('#report-prev').addEventListener('click', () => { glpiReportPage--; renderReportRows(); }); $('#report-next').addEventListener('click', () => { glpiReportPage++; renderReportRows(); });
-  document.querySelectorAll('[data-ticket-report]').forEach(b => b.addEventListener('click', () => { const t = rows.find(t => t.id === Number(b.dataset.ticketReport)); modal('Заявка #' + t.id, `<h3>${escape(t.title)}</h3><p>Заявители: ${escape(t.requesters.map(a => a.name).join('; '))}</p><p>Автор регистрации: ${escape(t.registeredBy?.name || 'Не указан')}</p><p>Назначены: ${escape(t.assignees.map(a => a.name).join('; '))}</p><p>Ответственный: ${escape(t.responsible?.name || 'Не определён')}</p><p>${escape(t.attribution)}</p><p>Создана: ${reportDate(t.createdAt)}<br>Принята: ${reportDate(t.acceptedAt)}<br>Решена: ${reportDate(t.solvedAt)}<br>Закрыта: ${reportDate(t.closedAt)}</p><p>До принятия: ${reportTime(t.acceptanceSeconds)}<br>До решения: ${reportTime(t.resolutionSeconds)}<br>Время исполнения (принята → закрыта): ${reportTime(t.executionSeconds)}<br>Время жизни (создана → закрыта): ${reportTime(t.lifetimeSeconds)}<br>Работа: ${reportTime(t.effortSeconds)}</p><p>Оценка: ${t.status === 6 ? reportScore(t.currentScore) : 'Результат не закрыт'}</p><a target="_blank" rel="noopener" href="${escape(t.url)}">Открыть в GLPI →</a>`); }));
+  document.querySelectorAll('[data-ticket-report]').forEach(b => b.addEventListener('click', () => { const t = rows.find(t => t.id === Number(b.dataset.ticketReport)); modal('Заявка #' + t.id, `<h3>${escape(t.title)}</h3><p>Заявители: ${escape(t.requesters.map(a => a.name).join('; '))}</p><p>Регистрация: ${escape(t.registrationDescription || t.registeredBy?.name || 'Не указана')}</p><p>Назначены: ${escape(t.assignees.map(a => a.name).join('; '))}</p><p>Ответственный: ${escape(t.responsible?.name || 'Не определён')}</p><p>${escape(t.attribution)}</p><p>Создана: ${reportDate(t.createdAt)}<br>Принята: ${reportDate(t.acceptedAt)}<br>Решена: ${reportDate(t.solvedAt)}<br>Закрыта: ${reportDate(t.closedAt)}</p><p>До принятия: ${reportTime(t.acceptanceSeconds)}<br>До решения: ${reportTime(t.resolutionSeconds)}<br>Время исполнения (принята → закрыта): ${reportTime(t.executionSeconds)}<br>Время жизни (создана → закрыта): ${reportTime(t.lifetimeSeconds)}<br>Работа: ${reportTime(t.effortSeconds)}</p><p>Оценка: ${t.status === 6 ? reportScore(t.currentScore) : 'Результат не закрыт'}</p><a target="_blank" rel="noopener" href="${escape(t.url)}">Открыть в GLPI →</a>`); }));
 }
 async function reportSettings() {
+  await ensureReportContext();
   const settings = await api('/reports/glpi/settings'), p = settings.policy || {};
   modal('Оценка результата заявки', `<form id="survey-settings"><p>Ответ сохраняется в GLPI. Срок оценки — строго 14 дней после закрытия.</p>
     <label><input type="checkbox" name="enabled" ${settings.surveysEnabled?'checked':''}> Опросы включены</label>
     <label><input type="checkbox" name="mandatory" ${p.mandatory?'checked':''}> Обязательная оценка новых закрытий</label>
-    <p>При включении обязательного режима прежние закрытия остаются добровольными. Отсрочки и сроки считаются по рабочим дням, понедельник–пятница, Asia/Qyzylorda.</p>
+    <p>При включении обязательного режима прежние закрытия остаются добровольными. Отсрочки и сроки считаются по рабочим дням, понедельник–пятница, ${escape(reportTimeZone)}.</p>
     <label>Филиалы пилота (ID через запятую; пусто — все)<input name="branches" value="${escape((p.branchIds||[]).join(','))}"></label>
     <label>Напоминание через рабочих минут<input type="number" name="reminder" min="30" max="1440" value="${p.reminderMinutes||120}" required></label>
     <label>Отсрочек за рабочий день<input type="number" name="deferrals" min="0" max="10" value="${p.dailyDeferrals??2}" required></label>
@@ -231,8 +261,30 @@ async function reportSettings() {
     try { await api('/reports/glpi/settings','POST',{enabled:f.has('enabled'),policy:{mandatory:f.has('mandatory'),branchIds:String(f.get('branches')).split(',').map(v=>v.trim()).filter(Boolean).map(Number),reminderMinutes:Number(f.get('reminder')),dailyDeferrals:Number(f.get('deferrals')),dueBusinessHours:Number(f.get('due')),workStart:Number(f.get('start')),workEnd:Number(f.get('end')),adminAlertsEnabled:f.has('adminAlerts'),adminUserIds:f.getAll('alertRecipients').map(Number),adminRepeatMinutes:Number(f.get('alertRepeat')),undeliveredBusinessHours:Number(f.get('undeliveredHours'))}});closeModal();await renderGlpiReports(); }
     catch(e){$('#survey-error').textContent=e.message;}finally{button.disabled=false;}});
 }
+async function reportOrganizationSettings() {
+  try {
+    const settings=await api('/reports/glpi/organization'),p=settings.pending;
+    modal('Организация отчётности',`<form id="report-organization-form">
+      <p>Настройки действуют для этого backend GLPI. После сохранения требуется плановый перезапуск сервера помощника; текущие отчёты продолжат использовать прежние значения.</p>
+      <label>Название<input name="name" maxlength="255" value="${escape(p.organizationName)}"></label>
+      <label>Часовой пояс IANA<input name="zone" required value="${escape(p.timeZoneId)}"></label>
+      <label>Локаль<input name="locale" required value="${escape(p.locale)}"></label>
+      <label>ID сервисных пользователей (через запятую)<input name="services" value="${escape(p.serviceUserIds.join(','))}"></label>
+      <label>Сервисные логины (через запятую)<input name="logins" value="${escape(p.serviceLogins.join(','))}"></label>
+      <label>ID профилей специалистов (через запятую)<input name="profiles" value="${escape(p.technicianProfileIds.join(','))}"></label>
+      <p>Пустой список профилей сохраняет историческое определение по Technician / Super-Admin. Для новой организации явно укажите профили.</p>
+      <button class="primary">Сохранить для следующего запуска</button></form>`);
+    $('#report-organization-form').addEventListener('submit',async e=>{
+      e.preventDefault();const f=new FormData(e.target);
+      const ids=name=>String(f.get(name)).split(',').map(s=>s.trim()).filter(Boolean).map(Number);
+      try {await api('/reports/glpi/organization','POST',{name:f.get('name'),timeZone:f.get('zone'),locale:f.get('locale'),serviceUserIds:ids('services'),serviceLogins:String(f.get('logins')).split(',').map(s=>s.trim()).filter(Boolean),technicianProfileIds:ids('profiles')});closeModal();toast('Сохранено. Применение — при плановом перезапуске сервера помощника.');}
+      catch(error){toast(error.message,true);}
+    });
+  }catch(error){toast(error.message,true);}
+}
 const surveyState = t => ({Pending:t.dueAt&&new Date(t.dueAt)<new Date()?'Просрочена':'Ожидает оценки',Writing:'Ожидает записи GLPI',Answered:'Оценена',Expired:'Истекли 14 дней',Blocked:'Ошибка записи',Cancelled:'Отменена',Exempt:'Исключена'}[t.state]||t.state);
 async function renderTicketSurveys() {
+  await ensureReportContext();
   if(me.authSource !== 'AD') { $('#content').innerHTML='<div class="empty">Войдите под своей доменной учётной записью.</div>';return; }
   const current=generation,rows=await api('/ticket-surveys/pending');if(generation!==current||page!=='surveys')return;
   $('#content').innerHTML=rows.length?rows.map(t=>`<div class="panel report-survey"><span class="eyebrow">ЗАЯВКА #${t.ticketId} ЗАКРЫТА</span><h3>${escape(t.title)}</h3><p>${escape(t.specialist)}</p><p>${t.mandatory?'Обязательная оценка · ':''}${surveyState(t)}</p><small>Оценить можно до ${reportDate(t.expiresAt)}${t.dueAt?' · Ответ ожидается '+reportDate(t.dueAt):''}</small>${t.error?`<p>${escape(t.error)}</p>`:''}${t.state!=='Writing'?`<button class="primary" data-survey="${escape(t.id)}">Оценить результат ★</button>`:'<p>Ответ принят помощником. Повторно отвечать не нужно.</p>'}</div>`).join(''):'<div class="empty">Нет заявок, ожидающих вашей оценки.</div>';

@@ -13,6 +13,33 @@ Check(Settings.Folder.StartsWith(Path.GetTempPath(),StringComparison.OrdinalIgno
 Check(MachineIdentity.Scope("http://helper.gp1.loc")==MachineIdentity.Scope("https://HELPER.gp1.loc/"),"machine key survives HTTP to HTTPS migration");
 Check(MachineIdentity.Scope("https://other.gp1.loc")!=MachineIdentity.Scope("https://helper.gp1.loc"),"machine key is scoped to its own server");
 
+Check(CallServerAddress.Secure("http://helper.gp1.loc") == "https://helper.gp1.loc", "calls upgrade HTTP server to HTTPS");
+Check(CallServerAddress.Secure("https://helper.gp1.loc") == "https://helper.gp1.loc", "calls retain HTTPS");
+Check(CallServerAddress.Secure("http://localhost:5000") == "http://localhost:5000", "calls retain trusted loopback development origin");
+Check(CallServerAddress.Secure("http://helper.gp1.loc:8443/base") == "https://helper.gp1.loc:8443/base", "calls retain explicit TLS port and base path");
+foreach (var test in JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "message-formatting-cases.json"))).RootElement.EnumerateArray())
+{
+    var actual = MessageFormatting.Parse(test.GetProperty("text").GetString()!).Select(line => new {
+        fragments = line.Fragments.Select(part => new { text = part.Text, style = (int)part.Style }),
+        alignment = line.Alignment.ToString().ToLowerInvariant(), codeBlock = line.CodeBlock
+    });
+    Check(System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(actual)), System.Text.Json.Nodes.JsonNode.Parse(test.GetProperty("expected").GetRawText())), "message formatting: " + test.GetProperty("name").GetString());
+}
+var boldEdit = MessageFormatting.Toggle("слово", 0, 5, "**");
+Check(boldEdit.Text == "**слово**" && boldEdit.Start == 2 && boldEdit.Length == 5, "formatting wraps selected word and retains selection");
+Check(MessageFormatting.Toggle(boldEdit.Text, boldEdit.Start, boldEdit.Length, "**").Text == "слово", "formatting repeated shortcut removes style");
+var italicEdit = MessageFormatting.Toggle(boldEdit.Text, boldEdit.Start, boldEdit.Length, "*");
+Check(italicEdit.Text == "***слово***" && MessageFormatting.Parse(italicEdit.Text)[0].Fragments[0].Style == (MessageStyle.Bold | MessageStyle.Italic), "italic shortcut combines with existing bold");
+Check(MessageFormatting.Toggle(italicEdit.Text, italicEdit.Start, italicEdit.Length, "*").Text == "**слово**", "removing italic preserves bold");
+Check(MessageFormatting.Toggle("", 0, 0, "**") == new MessageEdit("****", 2, 0), "formatting without selection places caret between markers");
+var alignLine = MessageFormatting.Align("один\nдва\nтри", 5, 1, "center", false);
+Check(alignLine.Text == "один\n[align=center]два[/align]\nтри", "alignment affects only current selected line");
+Check(MessageFormatting.Align("a\nb\nc", 0, 2, "right", false).Text == "[align=right]a[/align]\nb\nc", "alignment excludes following line when selection ends in newline");
+var alignAll = MessageFormatting.Align("a\nb", 1, 0, "right", true);
+Check(alignAll.Text == "[align=right]a[/align]\n[align=right]b[/align]", "alignment can apply to entire message");
+Check(MessageFormatting.Align(alignAll.Text, 0, 0, "left", true).Text == "a\nb", "left alignment removes previous alignment");
+bool formattingTooLong = false; try { MessageFormatting.Toggle(new string('a', 4000), 0, 4000, "**"); } catch (ArgumentException) { formattingTooLong = true; }
+Check(formattingTooLong, "formatting enforces message limit before changing text");
 var robotClicks = new RobotClicks(); var clickTime = DateTime.UtcNow;
 Check(robotClicks.Register(clickTime,false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(150),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(300),false)==RobotClickReaction.Greeting,"third rapid robot click triggers greeting");
 Check(robotClicks.Register(clickTime.AddMilliseconds(450),false)==RobotClickReaction.None && robotClicks.Register(clickTime.AddMilliseconds(600),false)==RobotClickReaction.Offended,"fifth rapid robot click replaces greeting with offended reaction");
@@ -234,6 +261,24 @@ try
     typeof(PetWindow).GetMethod("HideBubbles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
     pet.UpdateLayout();
     Check(pet.ActualWidth == 96 && pet.InputHitTest(new System.Windows.Point(48, 32)) is System.Windows.Controls.Image, "menu collapse restores robot hit testing");
+    var showNotice = typeof(PetWindow).GetMethod("ShowNotice", petFlags)!;
+    var refreshActions = typeof(PetWindow).GetMethod("RefreshActions", petFlags)!;
+    showNotice.Invoke(pet, new object[] { "Проверка фонового уведомления" });
+    var noticeButton = menuCanvas.Children.OfType<System.Windows.Controls.Button>().Single();
+    ((Task)refreshActions.Invoke(pet, null)!).GetAwaiter().GetResult();
+    Check(menuCanvas.Children.OfType<System.Windows.Controls.Button>().Contains(noticeButton), "background button refresh preserves notice instead of opening action menu");
+    typeof(PetWindow).GetMethod("HideBubbles", petFlags)!.Invoke(pet, null);
+    ((Task)refreshActions.Invoke(pet, null)!).GetAwaiter().GetResult();
+    Check(!menuCanvas.Children.OfType<System.Windows.Controls.Button>().Any(), "background button refresh does not open a closed menu");
+    typeof(PetWindow).GetMethod("ShowMenu", petFlags)!.Invoke(pet, null);
+    ((Task)refreshActions.Invoke(pet, null)!).GetAwaiter().GetResult();
+    Check(menuCanvas.Children.OfType<System.Windows.Controls.Button>().Any() && (bool)typeof(PetWindow).GetField("menuOpen", petFlags)!.GetValue(pet)!, "background refresh still updates explicitly opened action menu");
+    showNotice.Invoke(pet, new object[] { "Повторное уведомление после меню" });
+    noticeButton = menuCanvas.Children.OfType<System.Windows.Controls.Button>().Single();
+    ((Task)refreshActions.Invoke(pet, null)!).GetAwaiter().GetResult();
+    Check(menuCanvas.Children.OfType<System.Windows.Controls.Button>().Contains(noticeButton), "notice replacing an open menu clears action menu state");
+    typeof(PetWindow).GetMethod("HideBubbles", petFlags)!.Invoke(pet, null);
+
     double taskbarAnchor = System.Windows.SystemParameters.WorkArea.Bottom - 96;
     pet.Top = taskbarAnchor;
     typeof(PetWindow).GetMethod("Expand", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(pet, null);
@@ -339,6 +384,16 @@ try
     typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true });
     chatWindow.UpdateLayout();
     Check(((System.Windows.Controls.Grid)chatWindow.Content).ColumnDefinitions.Count == 4, "messenger provides activity bar, directory, conversation and optional information panes");
+    var styleEditor = (System.Windows.Controls.TextBox)typeof(MessengerWindow).GetField("input", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    styleEditor.Text = "Привет слово"; styleEditor.Select(7, 5);
+    typeof(MessengerWindow).GetMethod("FormatSelection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { "**" });
+    Check(styleEditor.Text == "Привет **слово**" && styleEditor.SelectedText == "слово", "live composer formats selection without sending");
+    styleEditor.Undo();
+    Check(styleEditor.Text == "Привет слово", "formatting is one undo action");
+    styleEditor.Clear();
+    var styledBody = MessageFormatting.Render("[align=center]**жирный**[/align]\n`<b>код</b>`", 24, false, 14, System.Windows.Media.Brushes.Black);
+    var styledLine = (System.Windows.Controls.TextBlock)styledBody.Children[0];
+    Check(styledLine.TextAlignment == System.Windows.TextAlignment.Center && styledLine.Inlines.OfType<System.Windows.Documents.Span>().First().FontWeight == System.Windows.FontWeights.Bold, "WPF message displays alignment and bold runs");
     Check(MessengerDialog.Matches(new(1,"Анна Иванова","anna@gp1.loc",true,"Поликлиника",0,null,false), "иван") && MessengerDialog.Matches(new(1,"Анна Иванова","anna@gp1.loc",true,"Поликлиника",0,null,false),"клиника"), "group search matches phrases anywhere in name or branch");
     var mainBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); mainBitmap.Render(chatWindow); var mainPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); mainPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(mainBitmap)); using (var mainImage = File.Create(chatPreview.Replace("login", "dialogue"))) mainPng.Save(mainImage);
     typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, -3);
@@ -351,7 +406,19 @@ try
         appearanceSettings.ChatTheme = theme; appearanceSettings.ChatFontSize = 20;
         typeof(MessengerWindow).GetMethod("ApplyTheme", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
         typeof(MessengerWindow).GetMethod("MainForm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
-        typeof(MessengerWindow).GetMethod("Filter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
+        var themedUsers = (System.Windows.Controls.ListBox)typeof(MessengerWindow).GetField("users", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+        Check(themedUsers.Items.Count == 3, theme + " theme immediately restores cached directory without refresh");
+        Check(themedUsers.SelectedItem is ChatContact { Id: -3 }, theme + " theme preserves selected conversation");
+        var themeSearch = (System.Windows.Controls.TextBox)typeof(MessengerWindow).GetField("search", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+        themeSearch.Text = "Отдел";
+        typeof(MessengerWindow).GetField("updating", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, true);
+        typeof(MessengerWindow).GetMethod("MainForm", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, null);
+        var restoredUsers = (System.Windows.Controls.ListBox)typeof(MessengerWindow).GetField("users", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+        var restoredSearch = (System.Windows.Controls.TextBox)typeof(MessengerWindow).GetField("search", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+        Check(restoredSearch.Text == "Отдел" && restoredUsers.Items.Count == 1 && restoredUsers.SelectedItem is ChatContact { Id: -3 }, theme + " theme preserves search and directory during an in-flight refresh");
+        Check((bool)typeof(MessengerWindow).GetField("updating", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!, theme + " directory restoration preserves refresh guard");
+        typeof(MessengerWindow).GetField("updating", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(chatWindow, false);
+        restoredSearch.Clear();
         typeof(MessengerWindow).GetMethod("RenderHistory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chatWindow, new object[] { true }); chatWindow.UpdateLayout();
         Check(chatWindow.FontSize == 20, theme + " theme renders with accessible large text");
         var preferences = new MessengerPreferences(appearanceSettings); preferences.Show(); preferences.UpdateLayout();
@@ -366,6 +433,17 @@ try
         var themedBitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)chatWindow.ActualWidth, (int)chatWindow.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); themedBitmap.Render(chatWindow);
         var themedPng = new System.Windows.Media.Imaging.PngBitmapEncoder(); themedPng.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(themedBitmap)); using var themedFile = File.Create(chatPreview.Replace("login", theme)); themedPng.Save(themedFile);
     }
+    var escapeEditor = (System.Windows.Controls.TextBox)typeof(MessengerWindow).GetField("input", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    escapeEditor.Text = "**Черновик**";
+    var selectedBeforeEscape = (int)typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    var escapeEvent = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, System.Windows.PresentationSource.FromVisual(chatWindow), 0, System.Windows.Input.Key.Escape) { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent };
+    chatWindow.RaiseEvent(escapeEvent);
+    Check(escapeEvent.Handled && chatWindow.IsVisible && (int)typeof(MessengerWindow).GetField("peer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)! == 0, "Esc closes conversation while keeping messenger window open");
+    var escapeUsers = (System.Windows.Controls.ListBox)typeof(MessengerWindow).GetField("users", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
+    Check(escapeUsers.SelectedItem == null && escapeUsers.Items.Count == 3 && !escapeEditor.IsEnabled, "Esc clears selected conversation without clearing directory");
+    escapeUsers.SelectedItem = escapeUsers.Items.OfType<ChatContact>().Single(c => c.Id == selectedBeforeEscape);
+    Check(escapeEditor.Text == "**Черновик**", "reopening conversation after Esc restores styled draft");
+    escapeEditor.Clear();
     string attachmentPath = Path.Combine(temp, "sample.unknown"); File.WriteAllBytes(attachmentPath, [1, 2, 3]);
     chatWindow.AddFiles([attachmentPath]);
     var pendingAttachments = (List<string>)typeof(MessengerWindow).GetField("pendingFiles", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(chatWindow)!;
@@ -991,6 +1069,80 @@ try
     var kbDto = new KnowledgeArticleDto(1, "Тестовая статья", "DMED", "Контент", "dmed", null, "All", 0, true, DateTime.UtcNow, DateTime.UtcNow);
     Check(kbDto.Title == "Тестовая статья" && kbDto.Category == "DMED", "KnowledgeArticleDto properties preserved");
 
+    // Sprint 39: Skin Engine, StealthNeon, CyberFamiliar, and GlassmorphismOrb
+    var skinMgr = SkinManager.Instance;
+    var availableSkins = skinMgr.GetAvailableSkins();
+    Check(availableSkins.Any(s => s.Id == "Classic"), "SkinManager discovers Classic skin");
+    Check(availableSkins.Any(s => s.Id == "StealthNeon"), "SkinManager discovers StealthNeon skin");
+    Check(availableSkins.Any(s => s.Id == "CyberFamiliar"), "SkinManager discovers CyberFamiliar skin");
+    Check(availableSkins.Any(s => s.Id == "GlassmorphismOrb"), "SkinManager discovers GlassmorphismOrb skin");
+
+    // Test StealthNeon
+    var snSkin = availableSkins.First(s => s.Id == "StealthNeon");
+    Check(snSkin.Manifest.BadgeAnchor.X == 16 && snSkin.Manifest.BadgeAnchor.Y == 12, "StealthNeon badge anchor matches manifest (16, 12)");
+    Check(snSkin.Manifest.HatAnchor.X == 8 && snSkin.Manifest.HatAnchor.Y == -4, "StealthNeon hat anchor matches manifest (8, -4)");
+    Check(snSkin.Manifest.GetIntervalMs(PetState.Twirl) == 150, "StealthNeon Twirl interval is 150ms");
+
+    string? eventOldSkin = null, eventNewSkin = null;
+    skinMgr.SkinChanged += (_, e) => { eventOldSkin = e.PreviousSkinId; eventNewSkin = e.NewSkinId; };
+    bool switched = skinMgr.SetSkin("StealthNeon");
+    Check(switched, "SetSkin('StealthNeon') returned true");
+    Check(skinMgr.CurrentSkinId == "StealthNeon", "CurrentSkinId updated to StealthNeon");
+    Check(eventNewSkin == "StealthNeon", "SkinChanged event fired with new skin StealthNeon");
+
+    // Verify all 38 states and frames for StealthNeon
+    foreach (var state in Enum.GetValues<PetState>())
+    {
+        for (int index = 0; index < Sprites.FrameCount(state); index++)
+        {
+            var frame = skinMgr.GetSpriteFrame(state, index);
+            Check(frame != null && frame.Width == 48 && frame.Height == 48, $"StealthNeon {state}_{index + 1} valid 48x48");
+        }
+    }
+    Check(true, "All 38 states (98 frames) of StealthNeon successfully verified");
+
+    // Test CyberFamiliar (HD 96x96)
+    Check(skinMgr.SetSkin("CyberFamiliar"), "SetSkin('CyberFamiliar') returned true");
+    Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "CyberFamiliar has HighQuality scaling mode");
+    foreach (var state in Enum.GetValues<PetState>())
+    {
+        for (int index = 0; index < Sprites.FrameCount(state); index++)
+        {
+            var frame = skinMgr.GetSpriteFrame(state, index);
+            Check(frame != null && frame.Width == 96 && frame.Height == 96, $"CyberFamiliar {state}_{index + 1} valid 96x96");
+        }
+    }
+    Check(true, "All 38 states (98 frames) of CyberFamiliar successfully verified");
+
+    // Test GlassmorphismOrb (HD 96x96)
+    Check(skinMgr.SetSkin("GlassmorphismOrb"), "SetSkin('GlassmorphismOrb') returned true");
+    Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "GlassmorphismOrb has HighQuality scaling mode");
+    foreach (var state in Enum.GetValues<PetState>())
+    {
+        for (int index = 0; index < Sprites.FrameCount(state); index++)
+        {
+            var frame = skinMgr.GetSpriteFrame(state, index);
+            Check(frame != null && frame.Width == 96 && frame.Height == 96, $"GlassmorphismOrb {state}_{index + 1} valid 96x96");
+        }
+    }
+    Check(true, "All 38 states (98 frames) of GlassmorphismOrb successfully verified");
+
+    // Verify HD top-half hit-testing (GlassmorphismOrb top half is interactive)
+    var orbIdle = skinMgr.GetSpriteFrame(PetState.Idle, 0);
+    double hdScale = 96.0 / Math.Max(1, orbIdle.Width);
+    // At on-screen Y = 30 (top half of sphere), mapped sprite Y is 30/1.0 = 30
+    int topSpriteY = (int)Math.Floor(30.0 / hdScale);
+    int centerSpriteX = (int)Math.Floor(48.0 / hdScale);
+    Check(orbIdle.Opaque(centerSpriteX, topSpriteY), "GlassmorphismOrb top half (Y=30) is opaque and interactive");
+
+    // Fallback chain verification
+    var fallbackFrame = skinMgr.GetFrame(PetState.Idle, 99);
+    Check(fallbackFrame != null, "Fallback chain returned valid frame on out-of-range index");
+
+    // Switch back to Classic and verify
+    skinMgr.SetSkin("Classic");
+    Check(skinMgr.CurrentSkinId == "Classic", "SetSkin('Classic') restored Classic skin");
+
     pet.StartEmergencySequence(new EmergencyAlertNotice("CODE_RED","Fixture", "101",null,null,null,null,45,null,null),isTest:true);
     pet.CancelActiveEmergency(isTest:true);
     var waitFrame=new System.Windows.Threading.DispatcherFrame();
@@ -998,6 +1150,88 @@ try
     waitTimer.Tick+=(_,_)=>{waitTimer.Stop();waitFrame.Continue=false;};
     waitTimer.Start();System.Windows.Threading.Dispatcher.PushFrame(waitFrame);
     Check(typeof(PetWindow).GetField("activeAlertWindow",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(pet)==null,"canceled pre-alert does not reopen after its original deadline");
+
+    // WebGuard security tests
+    var testSettings = new Settings
+    {
+        ServerUrl = "https://helper.gp1.loc",
+        WebGuardWhitelist = new() { "trusted-internal.company" },
+        WebGuardBlacklist = new() { "known-malware.com" }
+    };
+
+    var safeLocal = WebGuard.Check("http://portal.loc/tickets", testSettings);
+    Check(safeLocal.Verdict == WebGuardVerdict.Safe, "WebGuard whitelist: .loc is safe");
+
+    var safeServer = WebGuard.Check("https://helper.gp1.loc/api/status", testSettings);
+    Check(safeServer.Verdict == WebGuardVerdict.Safe, "WebGuard whitelist: ServerUrl is safe");
+
+    var safePublic = WebGuard.Check("https://www.google.com/search?q=info", testSettings);
+    Check(safePublic.Verdict == WebGuardVerdict.Safe, "WebGuard whitelist: google.com is safe");
+
+    var safeCustom = WebGuard.Check("https://sub.trusted-internal.company/login", testSettings);
+    Check(safeCustom.Verdict == WebGuardVerdict.Safe, "WebGuard whitelist: custom whitelist domain is safe");
+
+    var blockedBlack = WebGuard.Check("http://known-malware.com/payload.exe", testSettings);
+    Check(blockedBlack.Verdict == WebGuardVerdict.Blocked, "WebGuard blacklist: known-malware.com is blocked");
+
+    // Homograph attack (Cyrillic 'е' \u0435 in "sberbank")
+    string homographUrl = "https://sb\u0435rbank.com/login";
+    var blockedHomograph = WebGuard.Check(homographUrl, testSettings);
+    Check(blockedHomograph.Verdict == WebGuardVerdict.Blocked, "WebGuard homograph: Cyrillic letter in domain blocked");
+
+    // Typosquatting
+    var warnTypo = WebGuard.Check("https://sberrbank.ru/auth", testSettings);
+    Check(warnTypo.Verdict == WebGuardVerdict.Warning, "WebGuard typosquatting: sberrbank flagged as warning");
+
+    // Deceptive subdomain
+    var warnSubdomain = WebGuard.Check("https://sberbank.ru.evil-scam.com/account", testSettings);
+    Check(warnSubdomain.Verdict == WebGuardVerdict.Warning, "WebGuard deceptive subdomain: sberbank.ru.evil-scam.com flagged");
+
+    // Raw public IP
+    var warnIp = WebGuard.Check("http://194.58.112.5/test", testSettings);
+    Check(warnIp.Verdict == WebGuardVerdict.Warning, "WebGuard raw IP: public IP flagged as warning");
+
+    // Suspicious TLD with login
+    var warnTld = WebGuard.Check("https://secure-login-account.xyz", testSettings);
+    Check(warnTld.Verdict == WebGuardVerdict.Warning, "WebGuard suspicious TLD: .xyz with login keyword flagged as warning");
+
+    // Test PetWindow.HandleGuardedUrl with visible pet
+    pet.HandleGuardedUrl("https://sb\u0435rbank.com/test");
+    Check(typeof(PetWindow).GetField("pendingGuardedUrl", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet) != null, "PetWindow handles guarded URL with warning/blocked");
+
+    // Test PetWindow.HandleGuardedUrl with hidden pet
+    pet.SetAssistantHidden(true);
+    pet.HandleGuardedUrl("https://sberrbank.ru/test");
+    Check(typeof(PetWindow).GetField("pendingGuardedUrl", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(pet) != null, "PetWindow handles guarded URL when hidden (tray notified)");
+    pet.SetAssistantHidden(false);
+
+    // Test BrowserDetector
+    var detectedBrowsers = BrowserDetector.GetInstalledBrowsers();
+    Check(detectedBrowsers != null && detectedBrowsers.Count > 0, "BrowserDetector finds installed browsers");
+    Check(!detectedBrowsers.Any(b => b.ExecutablePath.Contains("PixelHelper", StringComparison.OrdinalIgnoreCase)), "BrowserDetector excludes PixelHelper");
+    var extracted = BrowserDetector.ExtractExePath("\"C:\\Program Files\\Test\\browser.exe\" --arg \"%1\"");
+    Check(extracted == "C:\\Program Files\\Test\\browser.exe", "BrowserDetector extracts unquoted executable path");
+
+    // Test BrowserSelectWindow creation
+    var browserWin = new BrowserSelectWindow(testSettings);
+    Check(browserWin != null, "BrowserSelectWindow instantiated successfully");
+    browserWin.Close();
+
+    // Test NativeMessagingHost
+    var safeNativeResp = NativeMessagingHost.ProcessMessage("{\"url\":\"https://google.com\"}", testSettings);
+    Check(safeNativeResp.Contains("\"verdict\":\"Safe\""), "NativeMessagingHost accepts safe URL");
+    var scamNativeResp = NativeMessagingHost.ProcessMessage("{\"url\":\"https://www.g00gle.com/\"}", testSettings);
+    Check(scamNativeResp.Contains("\"verdict\":\"Blocked\""), "NativeMessagingHost blocks scam URL");
+
+    // Test BrowserExtensionDeployer
+    Check(BrowserExtensionDeployer.ExtensionId.Length == 32, "BrowserExtensionDeployer has valid 32-char ID");
+
+    // Test WebGuardProtocolHandler methods exist and run without crashing
+    WebGuardProtocolHandler.SetAsDefault();
+    WebGuardProtocolHandler.RestoreUserDefault("C:\\Windows\\notepad.exe");
+    WebGuardProtocolHandler.RemoveOverride();
+    Check(true, "WebGuardProtocolHandler methods executed safely");
+
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

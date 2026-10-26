@@ -1,0 +1,271 @@
+[
+  {
+    "name": "plain HTML remains literal",
+    "text": "<script>alert(1)</script>",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "<script>alert(1)</script>",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "bold",
+    "text": "**жирный**",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "жирный",
+            "style": 1
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "italic",
+    "text": "*курсив*",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "курсив",
+            "style": 2
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "underline",
+    "text": "__слово__",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "слово",
+            "style": 4
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "strike",
+    "text": "~~слово~~",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "слово",
+            "style": 8
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "combined bold italic",
+    "text": "***вместе***",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "вместе",
+            "style": 3
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "nested underline bold",
+    "text": "**__вместе__**",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "вместе",
+            "style": 5
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "code is literal",
+    "text": "`**x** <code> :helper_wave:`",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "**x** <code> :helper_wave:",
+            "style": 16
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "fenced code",
+    "text": "```\n**literal**\n```",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "**literal**",
+            "style": 16
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": true
+      }
+    ]
+  },
+  {
+    "name": "escaped markers",
+    "text": "\\*literal\\*",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "*literal*",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "unclosed marker",
+    "text": "**обычный",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "**обычный",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "mixed alignment",
+    "text": "Слева\n[align=center]**Центр**[/align]\n[align=right]*Справа*[/align]",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "Слева",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      },
+      {
+        "fragments": [
+          {
+            "text": "Центр",
+            "style": 1
+          }
+        ],
+        "alignment": "center",
+        "codeBlock": false
+      },
+      {
+        "fragments": [
+          {
+            "text": "Справа",
+            "style": 2
+          }
+        ],
+        "alignment": "right",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "multiline",
+    "text": "один\r\nдва",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "один",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      },
+      {
+        "fragments": [
+          {
+            "text": "два",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  },
+  {
+    "name": "blank line",
+    "text": "один\n\nдва",
+    "expected": [
+      {
+        "fragments": [
+          {
+            "text": "один",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      },
+      {
+        "fragments": [],
+        "alignment": "left",
+        "codeBlock": false
+      },
+      {
+        "fragments": [
+          {
+            "text": "два",
+            "style": 0
+          }
+        ],
+        "alignment": "left",
+        "codeBlock": false
+      }
+    ]
+  }
+]

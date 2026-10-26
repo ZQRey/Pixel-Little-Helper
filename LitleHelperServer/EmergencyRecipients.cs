@@ -53,12 +53,50 @@ public static class EmergencyRecipients
         if (!branchId.HasValue && !options.BroadcastAllBranches && notice.Code is not ("CODE_WHITE" or "CODE_BLUE" or "SPECIALIST_CALL"))
             throw new HubException("Для массового оповещения требуется действующий филиал.");
     }
+    public static IEnumerable<string> ResolveSpecialistUsers(EmergencyOptions options, SpecialistDepartmentConfig? department, string code, int? branchId)
+    {
+        IEnumerable<string> codeBlueUsers = [];
+        if (code == "CODE_BLUE")
+        {
+            if (branchId.HasValue && options.CodeBlueBranchUsers != null && options.CodeBlueBranchUsers.TryGetValue(branchId.Value.ToString(), out var bUsers))
+            {
+                codeBlueUsers = bUsers;
+            }
+            else if (branchId.HasValue && options.CodeBlueBranchUsers != null && options.CodeBlueBranchUsers.Count > 0)
+            {
+                codeBlueUsers = [];
+            }
+            else
+            {
+                codeBlueUsers = options.CodeBlueResponsibleUsers ?? [];
+            }
+        }
+
+        IEnumerable<string> deptUsers = [];
+        if (department != null)
+        {
+            if (branchId.HasValue && department.BranchResponsibleUsers != null && department.BranchResponsibleUsers.TryGetValue(branchId.Value.ToString(), out var bDeptUsers))
+            {
+                deptUsers = bDeptUsers;
+            }
+            else if (branchId.HasValue && department.BranchResponsibleUsers != null && department.BranchResponsibleUsers.Count > 0)
+            {
+                deptUsers = [];
+            }
+            else
+            {
+                deptUsers = department.ResponsibleUsers ?? [];
+            }
+        }
+
+        return codeBlueUsers.Concat(deptUsers);
+    }
     public static async Task<List<Computer>> TargetMachines(EmergencyAlertNotice notice,int? branchId,HelperDb db,IntegrationSettings settings,CancellationToken token)
     {
         var options=settings.Emergency();
         var department=options.Departments?.FirstOrDefault(d=>d.Name==notice.Department||d.Id.ToString()==notice.Department);
         if(department==null && notice.Code=="CODE_BLUE")department=options.Departments?.FirstOrDefault(d=>d.Name.Contains("Реаним",StringComparison.OrdinalIgnoreCase)||d.Name.Contains("Синий",StringComparison.OrdinalIgnoreCase));
-        var users=(notice.Code=="CODE_BLUE"?options.CodeBlueResponsibleUsers??[]:[]).Concat(department?.ResponsibleUsers??[]);
+        var users=ResolveSpecialistUsers(options, department, notice.Code, branchId);
         var groups=(notice.Code=="CODE_BLUE"?options.CodeBlueResponsibleGroups??[]:[]).Concat(department?.ResponsibleGroups??[]);
         return await ResolveTargetMachines(db,await ResolveUsers(db,settings,users,groups,token),branchId,token);
     }
@@ -75,7 +113,7 @@ public static class EmergencyRecipients
         {
             var department=options.Departments?.FirstOrDefault(d=>d.Name.Equals(notice.Department,StringComparison.OrdinalIgnoreCase)||d.Id.ToString()==notice.Department);
             department??=code=="CODE_BLUE"?options.Departments?.FirstOrDefault(d=>d.Name.Contains("Реаним",StringComparison.OrdinalIgnoreCase)||d.Name.Contains("Синий",StringComparison.OrdinalIgnoreCase)):null;
-            var users=(code=="CODE_BLUE"?options.CodeBlueResponsibleUsers??[]:[]).Concat(department?.ResponsibleUsers??[]);
+            var users=ResolveSpecialistUsers(options, department, code, branchId);
             var groups=(code=="CODE_BLUE"?options.CodeBlueResponsibleGroups??[]:[]).Concat(department?.ResponsibleGroups??[]);
             var targets=await ResolveUsers(db,settings,users,groups,token);
             if(branchId==null)

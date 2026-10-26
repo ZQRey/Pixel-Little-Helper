@@ -1,0 +1,9 @@
+﻿{
+  "name": "com.pixelhelper.webguard",
+  "description": "PixelHelper Web Guard Native Host",
+  "path": "PixelHelper.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://jhmfmcbcjmhpoogeljiailchclchcccp/"
+  ]
+}

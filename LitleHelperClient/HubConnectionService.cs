@@ -43,6 +43,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action<string>? EmergencyEventCanceled;
     public event Action<string>? RoomUpdated;
     public event Action? LiquidationReceived;
+    public event Action<bool>? WebGuardToggled;
     public HubConnectionService(Settings settings)
     {
         this.settings = settings; executor = new(settings);
@@ -86,6 +87,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On<List<MedicalStatusConfig>>("MedicalStatusesUpdated", ApplyMedicalStatuses);
         created.On<string>("ClientRoomUpdated", room => RoomUpdated?.Invoke(room));
         created.On("OnLiquidationProtocol", () => LiquidationReceived?.Invoke());
+        created.On<bool>("WebGuardToggled", enabled => WebGuardToggled?.Invoke(enabled));
         created.Reconnecting += _ => { Offline(); return Task.CompletedTask; };
         created.Closed += _ => { if (ReferenceEquals(connection,created)) Offline(); return Task.CompletedTask; };
 

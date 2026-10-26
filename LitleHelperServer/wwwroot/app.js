@@ -13,14 +13,16 @@ const settingsTabs = [
   { id: 'emergency', title: 'Экстренное оповещение', icon: '🚨', perm: 'settings.manage' },
   { id: 'branches', title: 'Филиалы', icon: '⌂', perm: 'settings.manage' },
   { id: 'messenger', title: 'Мессенджер', icon: '☏', perm: 'settings.manage' },
+  { id: 'security', title: 'Безопасность', icon: '🛡️', perm: 'settings.manage' },
   { id: 'updates', title: 'Обновления клиента', icon: '↻', perm: 'updates.manage' }
 ];
-const titles = { reports:["Статистика GLPI","Заявки, время исполнения и оценки специалистов."], surveys:["Оценить результат","Обратная связь по вашим закрытым заявкам."],
+const titles = { 'ai-chat':['ИИ-помощник','Разговоры, база знаний и разрешённая диагностика.'], reports:["Статистика GLPI","Заявки, время исполнения и оценки специалистов."], surveys:["Оценить результат","Обратная связь по вашим закрытым заявкам."],
   messenger:["Мессенджер","Личная переписка сотрудников и хранение истории."], 
   branches:["Филиалы","Справочник филиалов для заявок и исполнителей."], 
   messages:['Сообщения клиентам','Отправка сообщений в облачке помощника: всем или выбранным ПК.'], 
   'super-buttons':['Кнопки супер админа','Отдельные шаблоны сообщений для привязанного помощника SuperAdmin.'], 
   updates:['Обновления клиента','Подписанные MSI и автоматическая установка новых версий.'], 
+  security:['Безопасность','Защита от фишинга WebGuard и развертывание групповых политик.'],
   telegram:['Telegram','Уведомления о новых заявках в группе.'], 
   ad:['Active Directory','Доменный вход и доступ пользователей к своим заявкам.'], 
   glpi:['Настройки GLPI','Доступ к HelpDesk и проверка подключения с сервера помощника.'],
@@ -46,16 +48,16 @@ $('#password-button').addEventListener('click',()=>passwordForm(false));
 $('#refresh-button').addEventListener('click',()=>loadPage().catch(e=>toast(e.message,true)));
 let robotTimers=[];
 function resetRobot(){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); robotTimers.forEach(clearTimeout); robotTimers=[]; if(face)face.classList.remove('is-error','is-happy','is-lockout'); if(deco)deco.classList.remove('is-cracked'); }
-function playRobot(state){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); if(!face)return; robotTimers.forEach(clearTimeout); robotTimers=[]; face.classList.remove('is-error','is-happy','is-lockout'); if(deco)deco.classList.remove('is-cracked'); void face.offsetWidth; if(state==='error'){ face.classList.add('is-error'); robotTimers.push(setTimeout(()=>face.classList.remove('is-error'),2600)); } else if(state==='happy'){ face.classList.add('is-happy'); robotTimers.push(setTimeout(()=>face.classList.remove('is-happy'),1500)); } else if(state==='lockout'){ face.classList.add('is-lockout'); if(deco)deco.classList.add('is-cracked'); } }
+function playRobot(state){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); if(!face)return; robotTimers.forEach(clearTimeout); robotTimers=[]; face.classList.remove('is-error','is-happy','is-lockout'); if(deco)deco.classList.remove('is-cracked'); void face.offsetWidth; if(state==='error'){ face.classList.add('is-error'); robotTimers.push(setTimeout(()=>face.classList.remove('is-error'),1400)); } else if(state==='happy'){ face.classList.add('is-happy'); robotTimers.push(setTimeout(()=>face.classList.remove('is-happy'),1500)); } else if(state==='lockout'){ face.classList.add('is-lockout'); if(deco)deco.classList.add('is-cracked'); robotTimers.push(setTimeout(()=>{ face.classList.remove('is-lockout'); if(deco)deco.classList.remove('is-cracked'); resetFailedLogins(); },4000)); } }
 let failedLogins=Number(sessionStorage.getItem('helper-failed-logins')||0);
 function resetFailedLogins(){ failedLogins=0; sessionStorage.removeItem('helper-failed-logins'); }
 $('#login-form').addEventListener('submit',async e=>{ e.preventDefault(); const button=e.target.querySelector('button'); button.disabled=true; $('#login-error').textContent=''; resetRobot(); try{ const data=Object.fromEntries(new FormData(e.target)); const login=await api(data.provider==='ad'?'/auth/ad':'/auth/login','POST',data); resetFailedLogins(); playRobot('happy'); acceptLogin(login); await new Promise(resolve=>setTimeout(resolve,900)); await enter(); }catch(error){ if(token){ toast(error.message,true); }else{ $('#login-error').textContent=error.message; failedLogins+=1; sessionStorage.setItem('helper-failed-logins',failedLogins); playRobot(failedLogins>5?'lockout':'error'); } }finally{button.disabled=false;} });
 function acceptLogin(login){ token=login.token; me=login.user; sessionStorage.setItem('helper-token',token); }
-function logout(){ token=null; me=null; generation++; sessionStorage.removeItem('helper-token'); if(hub)hub.stop(); hub=null; $('#workspace').hidden=true; $('#login-screen').hidden=false; resetRobot(); closeModal(); }
-async function enter(){ me=await api('/auth/me'); $('#login-screen').hidden=true; $('#workspace').hidden=false; $('#password-button').hidden=me.authSource==='AD'; $('#identity').innerHTML=`${escape(me.fullName||me.username)}<small>${escape(roleName(me.role))}</small>`; const nav=['computers','buttons','super-buttons','messages','tickets','reports','surveys','knowledge','users','audit','settings'].filter(n=>n==='tickets'||n==='surveys'||(n==='reports'&&can('reports.glpi.view'))||n==='knowledge'||(['messages','super-buttons'].includes(n)&&me.role==='SuperAdmin')||(n==='settings'&&(can('settings.manage')||can('updates.manage')))||can(({computers:'computers.view',buttons:'buttons.manage',users:'users.manage',audit:'audit.view'})[n])); $('#navigation').innerHTML=nav.map(n=>`<button data-page="${n}">${({computers:'▦',buttons:'◇',messages:'✉','super-buttons':'★',users:'♙',audit:'≡',tickets:'▤',reports:'▥',surveys:'☆',knowledge:'📚',settings:'⚙'})[n]} &nbsp; ${titles[n][0]}</button>`).join(''); $('#navigation').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{page=b.dataset.page;loadPage().catch(e=>toast(e.message,true));})); if(me.mustChangePassword){passwordForm(true);return;} if(new URLSearchParams(location.search).get('returnTo')==='/guard-white.html' && can('emergency.manage')){location.replace('/guard-white.html');return;} const requestedPage=new URLSearchParams(location.search).get('page');if(requestedPage&&nav.includes(requestedPage))page=requestedPage;page=nav.includes(page)?page:nav[0]; if(manage())scripts=await api('/scripts'); await connectHub(); startSurveyAdminAlerts(); await loadPage(); }
+function logout(){ token=null; me=null; generation++; sessionStorage.removeItem('helper-token'); if(hub)hub.stop(); hub=null; $('#workspace').hidden=true; $('#login-screen').hidden=false; $('#login-error').textContent=''; resetRobot(); closeModal(); }
+async function enter(){ me=await api('/auth/me'); $('#login-screen').hidden=true; $('#workspace').hidden=false; $('#password-button').hidden=me.authSource==='AD'; $('#identity').innerHTML=`${escape(me.fullName||me.username)}<small>${escape(roleName(me.role))}</small>`; const nav=['computers','buttons','super-buttons','messages','tickets','reports','surveys','knowledge','users','audit','settings'].filter(n=>n==='tickets'||n==='surveys'||(n==='ai-chat'&&can('ai.chat'))||(n==='reports'&&can('reports.glpi.view'))||n==='knowledge'||(['messages','super-buttons'].includes(n)&&me.role==='SuperAdmin')||(n==='settings'&&(can('settings.manage')||can('updates.manage')||can('ai.settings.manage')))||can(({computers:'computers.view',buttons:'buttons.manage',users:'users.manage',audit:'audit.view'})[n])); $('#navigation').innerHTML=nav.map(n=>`<button data-page="${n}">${({computers:'▦',buttons:'◇',messages:'✉','super-buttons':'★',users:'♙',audit:'≡',tickets:'▤',reports:'▥',surveys:'☆',knowledge:'📚','ai-chat':'✦',settings:'⚙'})[n]} &nbsp; ${titles[n][0]}</button>`).join(''); $('#navigation').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{page=b.dataset.page;loadPage().catch(e=>toast(e.message,true));})); if(me.mustChangePassword){passwordForm(true);return;} if(new URLSearchParams(location.search).get('returnTo')==='/guard-white.html' && can('emergency.manage')){location.replace('/guard-white.html');return;} const requestedPage=new URLSearchParams(location.search).get('page');if(requestedPage&&nav.includes(requestedPage))page=requestedPage;page=nav.includes(page)?page:nav[0]; if(manage())scripts=await api('/scripts'); await connectHub(); startSurveyAdminAlerts(); await loadPage(); }
 function passwordForm(required){ modal(required?'Смените начальный пароль':'Смена пароля',`<form id="password-form"><p>Новый пароль: от 8 до 72 символов, до 72 байт UTF-8.</p><label>Текущий пароль<input name="currentPassword" type="password" autocomplete="current-password" required></label><label>Новый пароль<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label><div class="error" id="form-error"></div><button class="primary">Сохранить пароль</button></form>`); $('#password-form').addEventListener('submit',async e=>{ e.preventDefault(); try{ const login=await api('/auth/change-password','POST',Object.fromEntries(new FormData(e.target))); acceptLogin(login); if(hub)await hub.stop(); hub=null; closeModal(); await enter(); toast('Пароль изменён'); }catch(error){$('#form-error').textContent=error.message;} }); }
 async function connectHub(){ if(hub)return; if(!window.signalR){$('#live-status').textContent='● Библиотека SignalR недоступна';return;} hub=new signalR.HubConnectionBuilder().withUrl('/helperHub',{accessTokenFactory:()=>token}).withAutomaticReconnect().build(); const live=online=>{$('#live-status').textContent=online?'● Обновления подключены':'● Соединение потеряно';$('#live-status').className='connection'+(online?' online':'');}; hub.on('ComputerChanged',computer=>{const index=computers.findIndex(c=>c.id===computer.id);if(index<0)computers.push(computer);else computers[index]=computer; if(page==='computers')renderComputers();}); hub.on('ExecutionOutput',e=>{ const task=terminals.get(e.taskId);if(task){task.output+=e.output;renderTerminal();}else{const cached=pendingOutput.get(e.taskId)||{output:''};cached.output=(cached.output+e.output).slice(0,131072);pendingOutput.set(e.taskId,cached);if(pendingOutput.size>256)pendingOutput.delete(pendingOutput.keys().next().value);} }); hub.on('ExecutionResult',e=>{ const task=terminals.get(e.taskId);if(task){task.output=e.result;task.status=e.status;task.exitCode=e.exitCode;renderTerminal();}else{pendingOutput.set(e.taskId,{...e,output:e.result});if(pendingOutput.size>256)pendingOutput.delete(pendingOutput.keys().next().value);} if(page==='audit')loadPage().catch(()=>{}); }); hub.on('TicketCreated',()=>{if(page==='tickets')loadPage().catch(()=>{});}); hub.on('SurveyAttentionChanged',()=>pollSurveyAdminAlerts().catch(()=>{})); hub.onreconnecting(()=>live(false)); hub.onreconnected(()=>live(true)); hub.onclose(()=>live(false)); try{await hub.start();live(true);}catch{live(false);toast('Нет живого соединения. Таблицы можно обновлять вручную.',true);} }
-async function loadPage(){ if(!me||me.mustChangePassword)return; const revision=++generation; if(page==='reports'||page==='surveys') { $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); if(page==='reports')await renderGlpiReports();else await renderTicketSurveys();return; } if(['ad','telegram','glpi','cartridge','emergency','branches','messenger','updates'].includes(page)){settingsTab=page;page='settings';} $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); $('#content').innerHTML='<div class="empty">Загрузка…</div>'; if(page==='settings'){const available=settingsTabs.filter(t=>can(t.perm));if(!available.length){$('#content').innerHTML='<div class="empty">Нет доступных разделов настроек</div>';return;}if(!available.some(t=>t.id===settingsTab))settingsTab=available[0].id;localStorage.setItem('helper-settings-tab',settingsTab);const curTab=available.find(t=>t.id===settingsTab);$('#page-title').textContent='Настройки · '+(curTab?.title||'Система');$('#page-subtitle').textContent=titles[settingsTab] ? titles[settingsTab][1] : titles.settings[1];$('#content').innerHTML=`<div class="settings-tabs">${available.map(t=>`<button type="button" class="settings-tab-btn ${t.id===settingsTab?'active':''}" data-settings-tab="${t.id}"><span class="tab-icon">${t.icon}</span> <span>${escape(t.title)}</span></button>`).join('')}</div><div id="settings-tab-body"><div class="empty">Загрузка…</div></div>`;$('#content').querySelectorAll('[data-settings-tab]').forEach(btn=>btn.addEventListener('click',()=>{settingsTab=btn.dataset.settingsTab;localStorage.setItem('helper-settings-tab',settingsTab);loadPage().catch(e=>toast(e.message,true));}));$('#stats').hidden=true;const rev=generation;try{if(settingsTab==='medical-statuses'){const data=await api('/settings/medical-statuses');if(rev!==generation||!$('#settings-tab-body'))return;renderMedicalStatuses(data);return;}if(settingsTab==='ad'||settingsTab==='telegram'){const data=await api('/settings/'+settingsTab);if(rev!==generation||!$('#settings-tab-body'))return;if(settingsTab==='ad')renderAdSettings(data);else renderTelegramSettings(data);return;}if(settingsTab==='glpi'){const data=await api('/settings/glpi');if(rev!==generation||!$('#settings-tab-body'))return;renderGlpiSettings(data);return;}if(settingsTab==='cartridge'){const data=await api('/settings/cartridge');if(rev!==generation||!$('#settings-tab-body'))return;renderCartridgeSettings(data);return;}if(settingsTab==='emergency'){const data=await api('/settings/emergency');if(rev!==generation||!$('#settings-tab-body'))return;renderEmergencySettings(data);return;}if(settingsTab==='branches'){const data=await api('/branches');if(rev!==generation||!$('#settings-tab-body'))return;renderBranches(data);return;}if(settingsTab==='messenger'){const data=await api('/settings/messenger');if(rev!==generation||!$('#settings-tab-body'))return;renderMessengerSettings(data);return;}if(settingsTab==='updates'){const data=await api('/settings/updates');if(rev!==generation||!$('#settings-tab-body'))return;renderClientUpdates(data);return;}}catch(err){if($('#settings-tab-body'))$('#settings-tab-body').innerHTML=`<div class="error" style="padding:20px">${escape(err.message)}</div>`;}return;} if(page==='computers'){computers=await api('/computers');if(revision!==generation)return;$('#content').innerHTML=`<div class="toolbar"><input id="computer-filter" placeholder="Поиск по имени ПК, домену, кабинету или пользователю"><select id="status-filter"><option value="all">Все статусы</option><option value="online">Онлайн</option><option value="offline">Офлайн</option></select>${can('computers.manage')?'<button id="enroll-button" class="primary">＋ Подключить ПК</button>':''}</div>${manage()?`<div class="bulk"><span id="selection-count">Выбрано: 0</span><select id="bulk-type">${superAdmin()?'<option value="cmd">CMD</option><option value="powershell">PowerShell</option>':''}<option value="script">Предустановленный скрипт</option><option value="reboot">Перезагрузка</option><option value="shutdown">Выключение</option><option value="inventory">Обновить инвентарь</option></select><input id="bulk-payload" placeholder="Введите команду"><select id="bulk-script" hidden>${scripts.map(s=>`<option value="${escape(s.id)}">${escape(s.title)}</option>`).join('')}</select><button id="bulk-send" class="primary">Для выбранных</button><button id="bulk-all">Для всех ПК</button></div>`:''}<div class="panel"><div class="panel-head"><h2>Рабочие станции</h2><span id="computer-count"></span></div><div class="table-wrap"><table><thead><tr>${manage()?'<th><input id="select-visible" type="checkbox" aria-label="Выбрать видимые ПК"></th>':''}<th>КОМПЬЮТЕР</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>КАБИНЕТ</th><th>СТАТУС</th><th>ПОСЛЕДНЯЯ СВЯЗЬ</th>${computerActions()?'<th>ДЕЙСТВИЯ</th>':''}</tr></thead><tbody id="computer-rows"></tbody></table></div></div>`; $('#computer-filter').addEventListener('input',renderComputers);$('#status-filter').addEventListener('change',renderComputers); if(can('computers.manage'))$('#enroll-button').addEventListener('click',enrollForm); if(manage()){ $('#select-visible').addEventListener('change',e=>{filteredComputers().forEach(c=>e.target.checked?selected.add(c.machineName):selected.delete(c.machineName));renderComputers();}); $('#bulk-type').addEventListener('change',bulkFields); $('#bulk-send').addEventListener('click',()=>bulkSend(false));$('#bulk-all').addEventListener('click',()=>bulkSend(true));bulkFields(); }renderComputers();return;} if(page==='messages'){const [pcs,buttons]=await Promise.all([api('/computers'),api('/super-buttons')]);if(revision!==generation)return;$('#stats').hidden=true;renderMessages(pcs,buttons);return;} if(page==='super-buttons'){const buttons=await api('/super-buttons');if(revision!==generation)return;$('#stats').hidden=true;renderSuperButtons(buttons);return;} if(page==='knowledge'){const articles=await api('/knowledge-base');if(revision!==generation)return;$('#stats').hidden=true;renderKnowledgeBase(articles);return;} const items=await api('/'+page+(page==='tickets'?'?status='+encodeURIComponent(ticketStatusFilter)+(ticketBranchFilter?'&branchId='+encodeURIComponent(ticketBranchFilter):''):'')); if(revision!==generation)return; $('#stats').hidden=true; if(page==='buttons')renderButtons(items);if(page==='users'){const definitions=await api('/permissions');if(revision!==generation)return;permissionCatalog=definitions.catalog;rolePermissions=definitions.roles;renderUsers(items,await api("/branches"));}if(page==='audit')renderAudit(items);if(page==='tickets'){const branches=await api('/branches');if(revision!==generation)return;renderTickets(items,branches);} }
+async function loadPage(){ if(!me||me.mustChangePassword)return; const revision=++generation; if(page==='ai-chat'){$('#page-title').textContent=titles[page][0];$('#page-subtitle').textContent=titles[page][1];$('#stats').hidden=true;$('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page));await renderAiChatPage();return;} if(page==='reports'||page==='surveys') { $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); if(page==='reports')await renderGlpiReports();else await renderTicketSurveys();return; } if(['ad','telegram','glpi','cartridge','emergency','branches','messenger','security','updates'].includes(page)){settingsTab=page;page='settings';} $('#page-title').textContent=titles[page][0]; $('#page-subtitle').textContent=titles[page][1]; $('#navigation').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===page)); $('#content').innerHTML='<div class="empty">Загрузка…</div>'; if(page==='settings'){const available=settingsTabs.filter(t=>can(t.perm));if(!available.length){$('#content').innerHTML='<div class="empty">Нет доступных разделов настроек</div>';return;}if(!available.some(t=>t.id===settingsTab))settingsTab=available[0].id;localStorage.setItem('helper-settings-tab',settingsTab);const curTab=available.find(t=>t.id===settingsTab);$('#page-title').textContent='Настройки · '+(curTab?.title||'Система');$('#page-subtitle').textContent=titles[settingsTab] ? titles[settingsTab][1] : titles.settings[1];$('#content').innerHTML=`<div class="settings-tabs">${available.map(t=>`<button type="button" class="settings-tab-btn ${t.id===settingsTab?'active':''}" data-settings-tab="${t.id}"><span class="tab-icon">${t.icon}</span> <span>${escape(t.title)}</span></button>`).join('')}</div><div id="settings-tab-body"><div class="empty">Загрузка…</div></div>`;$('#content').querySelectorAll('[data-settings-tab]').forEach(btn=>btn.addEventListener('click',()=>{settingsTab=btn.dataset.settingsTab;localStorage.setItem('helper-settings-tab',settingsTab);loadPage().catch(e=>toast(e.message,true));}));$('#stats').hidden=true;const rev=generation;try{if(settingsTab==='ai'){await renderAiSettings();}else if(settingsTab==='medical-statuses'){const data=await api('/settings/medical-statuses');if(rev!==generation||!$('#settings-tab-body'))return;renderMedicalStatuses(data);return;}if(settingsTab==='ad'||settingsTab==='telegram'){const data=await api('/settings/'+settingsTab);if(rev!==generation||!$('#settings-tab-body'))return;if(settingsTab==='ad')renderAdSettings(data);else renderTelegramSettings(data);return;}if(settingsTab==='glpi'){const data=await api('/settings/glpi');if(rev!==generation||!$('#settings-tab-body'))return;renderGlpiSettings(data);return;}if(settingsTab==='cartridge'){const data=await api('/settings/cartridge');if(rev!==generation||!$('#settings-tab-body'))return;renderCartridgeSettings(data);return;}if(settingsTab==='emergency'){const [data,branches,recipients]=await Promise.all([api('/settings/emergency'),api('/branches'),api('/settings/emergency/recipients')]);if(rev!==generation||!$('#settings-tab-body'))return;renderEmergencySettings(data,branches,recipients);return;}if(settingsTab==='branches'){const data=await api('/branches');if(rev!==generation||!$('#settings-tab-body'))return;renderBranches(data);return;}if(settingsTab==='messenger'){const data=await api('/settings/messenger');if(rev!==generation||!$('#settings-tab-body'))return;renderMessengerSettings(data);return;}if(settingsTab==='security'){const data=await api('/settings/security');if(rev!==generation||!$('#settings-tab-body'))return;renderSecuritySettings(data);return;}if(settingsTab==='updates'){const data=await api('/settings/updates');if(rev!==generation||!$('#settings-tab-body'))return;renderClientUpdates(data);return;}}catch(err){if($('#settings-tab-body'))$('#settings-tab-body').innerHTML=`<div class="error" style="padding:20px">${escape(err.message)}</div>`;}return;} if(page==='computers'){computers=await api('/computers');if(revision!==generation)return;$('#content').innerHTML=`<div class="toolbar"><input id="computer-filter" placeholder="Поиск по имени ПК, домену, кабинету или пользователю"><select id="status-filter"><option value="all">Все статусы</option><option value="online">Онлайн</option><option value="offline">Офлайн</option></select>${can('computers.manage')?'<button id="enroll-button" class="primary">＋ Подключить ПК</button>':''}</div>${manage()?`<div class="bulk"><span id="selection-count">Выбрано: 0</span><select id="bulk-type">${superAdmin()?'<option value="cmd">CMD</option><option value="powershell">PowerShell</option>':''}<option value="script">Предустановленный скрипт</option><option value="reboot">Перезагрузка</option><option value="shutdown">Выключение</option><option value="inventory">Обновить инвентарь</option></select><input id="bulk-payload" placeholder="Введите команду"><select id="bulk-script" hidden>${scripts.map(s=>`<option value="${escape(s.id)}">${escape(s.title)}</option>`).join('')}</select><button id="bulk-send" class="primary">Для выбранных</button><button id="bulk-all">Для всех ПК</button></div>`:''}<div class="panel"><div class="panel-head"><h2>Рабочие станции</h2><span id="computer-count"></span></div><div class="table-wrap"><table><thead><tr>${manage()?'<th><input id="select-visible" type="checkbox" aria-label="Выбрать видимые ПК"></th>':''}<th>КОМПЬЮТЕР</th><th>ПОЛЬЗОВАТЕЛЬ</th><th>КАБИНЕТ</th><th>СТАТУС</th><th>ПОСЛЕДНЯЯ СВЯЗЬ</th>${computerActions()?'<th>ДЕЙСТВИЯ</th>':''}</tr></thead><tbody id="computer-rows"></tbody></table></div></div>`; $('#computer-filter').addEventListener('input',renderComputers);$('#status-filter').addEventListener('change',renderComputers); if(can('computers.manage'))$('#enroll-button').addEventListener('click',enrollForm); if(manage()){ $('#select-visible').addEventListener('change',e=>{filteredComputers().forEach(c=>e.target.checked?selected.add(c.machineName):selected.delete(c.machineName));renderComputers();}); $('#bulk-type').addEventListener('change',bulkFields); $('#bulk-send').addEventListener('click',()=>bulkSend(false));$('#bulk-all').addEventListener('click',()=>bulkSend(true));bulkFields(); }renderComputers();return;} if(page==='messages'){const [pcs,buttons]=await Promise.all([api('/computers'),api('/super-buttons')]);if(revision!==generation)return;$('#stats').hidden=true;renderMessages(pcs,buttons);return;} if(page==='super-buttons'){const buttons=await api('/super-buttons');if(revision!==generation)return;$('#stats').hidden=true;renderSuperButtons(buttons);return;} if(page==='knowledge'){const articles=await api('/knowledge-base');if(revision!==generation)return;$('#stats').hidden=true;renderKnowledgeBase(articles);return;} const items=await api('/'+page+(page==='tickets'?'?status='+encodeURIComponent(ticketStatusFilter)+(ticketBranchFilter?'&branchId='+encodeURIComponent(ticketBranchFilter):''):'')); if(revision!==generation)return; $('#stats').hidden=true; if(page==='buttons')renderButtons(items);if(page==='users'){const definitions=await api('/permissions');if(revision!==generation)return;permissionCatalog=definitions.catalog;rolePermissions=definitions.roles;renderUsers(items,await api("/branches"));}if(page==='audit')renderAudit(items);if(page==='tickets'){const branches=await api('/branches');if(revision!==generation)return;renderTickets(items,branches);} }
 
 function filteredComputers(){ const q=$('#computer-filter')?.value.toLowerCase()||'',status=$('#status-filter')?.value||'all';return computers.filter(c=>(c.machineName+' '+c.currentUser+' '+(c.room||'')+' '+c.domainName).toLowerCase().includes(q)&&(status==='all'||c.isOnline===(status==='online'))); }
 const computerActions=()=>manage()||can('inventory.view')||can('computers.delete');
@@ -145,11 +147,110 @@ async function processForm(c) {
   await load();
 }
 
+const settingsHelp = {
+  glpi: {
+    baseUrl: 'Полный URL GLPI, включая /apirest.php при нестандартном пути. Сервер обращается к этому адресу из контейнера, поэтому localhost клиента здесь не подходит.',
+    authMode: 'User Token подходит для готового API-токена. Логин и пароль создают сессию GLPI от сервисной учётной записи и требуют прав на поиск пользователей и создание заявок.',
+    appToken: 'Необязательный App Token API-клиента GLPI. Пустое поле сохраняет ранее записанный токен; для удаления отметьте пункт ниже.',
+    clearAppToken: 'Удаляет сохранённый App Token после сохранения формы.',
+    userToken: 'User Token пользователя GLPI для режима токена. Пустое поле сохраняет прежний токен.',
+    clearUserToken: 'Удаляет сохранённый User Token после сохранения формы.',
+    login: 'Логин сервисной учётной записи GLPI для режима логина и пароля.',
+    password: 'Пароль сервисной учётной записи GLPI. Хранится зашифрованным; пустое поле сохраняет прежний пароль.',
+    clearPassword: 'Удаляет сохранённый пароль GLPI после сохранения формы.',
+    serviceUserId: 'ID пользователя GLPI, от имени которого создаётся заявка, если AD-логин заявителя не найден. 0 отключает резервный вариант.'
+  },
+  telegram: {
+    enabled: 'Отправлять карточки новых заявок в выбранную группу Telegram. Сбой Telegram не блокирует создание заявки.',
+    botToken: 'Токен бота из BotFather. Хранится зашифрованным; пустое поле сохраняет прежний токен.',
+    clearBotToken: 'Удаляет сохранённый токен бота. Уведомления перестанут отправляться до указания нового токена.',
+    chatId: 'ID группы или канала Telegram, куда бот отправляет заявки. Для супергруппы обычно начинается с -100.',
+    managementEnabled: 'Разрешает исполнителям брать заявки в работу и менять статус командами бота после входа через AD.',
+    idAttribute: 'LDAP-атрибут, в котором хранится Telegram ID сотрудника. По умолчанию physicalDeliveryOfficeName.',
+    directoryLogin: 'Учётная запись AD только для чтения атрибутов Telegram ID. Укажите UPN или DN.',
+    directoryPassword: 'Пароль учётной записи чтения AD. Хранится зашифрованным; пустое поле сохраняет прежний.',
+    clearDirectoryPassword: 'Удаляет сохранённый пароль учётной записи чтения AD.',
+    threadId: 'ID темы внутри выбранной группы. 0 отправляет в общий чат.'
+  },
+  ad: {
+    enabled: 'Разрешает сотрудникам входить в панель и клиент по логину и паролю Active Directory.',
+    host: 'DNS-имя контроллера домена, например dc01.gp1.loc. Соединение всегда идёт по LDAPS.',
+    port: 'Порт LDAPS контроллера домена. Обычно 636.',
+    domain: 'DNS-имя домена AD, например gp1.loc. Используется для проверки учётных данных.',
+    netbiosDomain: 'Короткое NetBIOS-имя домена, например GP1. Нужно для входа в формате DOMAIN\\логин.',
+    baseDn: 'База поиска пользователей в LDAP, например DC=gp1,DC=loc. Поиск выполняется только внутри этой ветки.',
+    caCertificate: 'PEM-сертификат корневого или промежуточного CA, если он не установлен в доверенные на сервере. Нужен для проверки LDAPS.'
+  },
+  updates: {
+    'updates-enabled': 'Разрешает клиентам скачивать опубликованные подписанные обновления с этого сервера.',
+    'updates-package': 'Подписанный MSI новой версии помощника. Сервер проверит подпись, размер и SHA-256 перед публикацией.',
+    'updates-manifest': 'Подписанный JSON-манифест PixelHelper.update.json с версией, хэшем и метаданными пакета.',
+    package: 'Подписанный MSI новой версии помощника. Сервер проверит подпись, размер и SHA-256 перед публикацией.',
+    manifest: 'Подписанный JSON-манифест PixelHelper.update.json с версией, хэшем и метаданными пакета.'
+  },
+  branches: {
+    name: 'Название филиала, которое видят пользователи в заявках, оповещениях и настройках.',
+    computerPrefixes: 'Первые буквы имён компьютеров этого филиала через запятую или пробел. Используются для автоназначения филиала.',
+    ipSubnets: 'IP-подсети филиала через запятую. Применяются, когда префиксы ПК совпадают у нескольких филиалов.',
+    isActive: 'Отключённый филиал нельзя выбрать для новых заявок, но история и настройки сохраняются.'
+  },
+  messenger: {
+    enabled: 'Включает личную переписку сотрудников в клиенте помощника.',
+    retentionDays: 'Срок хранения сообщений в днях. 0 — хранить без ограничения; иначе допустимо от 30 до 3650 дней.',
+    unreadReminderMinutes: 'Как часто напоминать сотруднику о непрочитанных сообщениях. Допустимо от 1 до 1440 минут.'
+  },
+  cartridge: {
+    enabled: 'Разрешает внешней системе учёта картриджей отправлять уведомления на компьютеры через помощника.',
+    apiKey: 'Необязательный секретный ключ, который внешняя система передаёт в запросе. Пустое значение отключает проверку ключа.'
+  },
+  emergency: {
+    enabled: 'Включает интеграцию экстренных оповещений с сервером AudioRONGTA.',
+    serverUrl: 'Адрес сервера AudioRONGTA, доступный с сервера помощника, например http://172.16.16.63:8085.',
+    apiKey: 'Мастер-ключ или X-Client-Key сервера AudioRONGTA. Пустое значение использует авторизованный токен моста.',
+    allowStandalone: 'Разрешает помощникам показывать тревогу напрямую, если сервер AudioRONGTA недоступен.',
+    allowClientTrigger: 'Позволяет сотрудникам запускать тревогу из меню в трее клиента помощника.',
+    broadcastAllBranches: 'Отправлять массовые экстренные коды во все филиалы, а не только в текущий корпус.',
+    telegramAlertsEnabled: 'Дублировать экстренные коды и вызовы «Код Синий» в Telegram дежурным специалистам.',
+    telegramChatId: 'ID Telegram-чата для экстренных оповещений. Пустое значение использует основной чат техподдержки.',
+    telegramThreadId: 'ID темы внутри Telegram-чата для экстренных сообщений. 0 — общий чат.',
+    'manual-alert-code': 'Тип экстренного кода для ручного запуска с этой страницы.',
+    'manual-alert-branch': 'Филиал, в котором запускается ручное оповещение. Обязателен, если массовая рассылка по филиалам отключена.',
+    'manual-alert-cabinet': 'Кабинет или место происшествия, которое увидят на экранах оповещения.',
+    'manual-alert-notes': 'Дополнительная инструкция или комментарий для отображения на экранах.'
+  },
+  medical: {
+    key: 'Стабильный технический ключ статуса. Используется интеграциями; после создания не меняется.',
+    title: 'Название статуса, которое отображается сотрудникам.',
+    emoji: 'Эмодзи перед названием статуса в интерфейсе клиента.',
+    colorHex: 'Цвет статуса в интерфейсе и на индикаторах.',
+    orderIndex: 'Порядок сортировки в списке. Меньшее значение показывается выше.',
+    description: 'Пояснение для администратора и пользователей о смысле статуса.',
+    muteSounds: 'Отключает звуковые уведомления при переходе в этот статус.',
+    muteTts: 'Отключает голосовое озвучивание этого статуса.',
+    isActive: 'Отключённый статус остаётся в истории, но не предлагается для новых записей.'
+  }
+};
+
+function decorateSettingsHelp(root, scope) {
+  const help = settingsHelp[scope];
+  if (!root || !help || typeof window.fieldHelp !== 'function') return;
+  root.querySelectorAll('input,select,textarea').forEach(field => {
+    if (field.type === 'hidden') return;
+    const key = field.getAttribute('name') || field.id;
+    const text = help[key];
+    if (!text) return;
+    const label = field.closest('label');
+    if (!label || label.querySelector('[data-field-help]')) return;
+    const title = (label.textContent || key).replace(/\s+/g, ' ').trim().slice(0, 100);
+    label.insertAdjacentHTML('beforeend', window.fieldHelp(title, text));
+  });
+}
+
 function renderGlpiSettings(settings) {
   ($('#settings-tab-body')||$('#content')).innerHTML = `<div class="panel glpi-settings-panel"><h2>Подключение к GLPI</h2><p>Настройки применяются сразу, без перезапуска Docker. Сохранённые токены и пароль не возвращаются в браузер.</p><form id="glpi-settings-form"><label>Адрес сайта или REST API<input name="baseUrl" type="url" maxlength="1000" value="${escape(settings.baseUrl)}" placeholder="http://glpi.gp1.loc" required></label><label>Способ API-входа<select name="authMode"><option value="token" ${settings.authMode==='token'?'selected':''}>User Token</option><option value="password" ${settings.authMode==='password'?'selected':''}>Логин и пароль сервисной учётной записи</option></select></label><label>App Token (если требуется API-клиентом GLPI)<input name="appToken" type="password" autocomplete="new-password" placeholder="${settings.hasAppToken?'Сохранён · пустое поле оставляет прежний':'Не задан'}" maxlength="2000"></label><label class="check-label"><input name="clearAppToken" type="checkbox">Удалить сохранённый App Token</label><div id="glpi-token-fields"><label>User Token<input name="userToken" type="password" autocomplete="new-password" placeholder="${settings.hasUserToken?'Сохранён · пустое поле оставляет прежний':'Не задан'}" maxlength="2000"></label><label class="check-label"><input name="clearUserToken" type="checkbox">Удалить сохранённый User Token</label></div><div id="glpi-password-fields"><label>Логин GLPI<input name="login" value="${escape(settings.login)}" maxlength="150" autocomplete="off"></label><label>Пароль GLPI<input name="password" type="password" autocomplete="new-password" placeholder="${settings.hasPassword?'Сохранён · пустое поле оставляет прежний':'Не задан'}" maxlength="2000"></label><label class="check-label"><input name="clearPassword" type="checkbox">Удалить сохранённый пароль</label></div><label>ID заявителя по умолчанию<input name="serviceUserId" type="number" min="0" step="1" value="${settings.serviceUserId}"></label><small>Если AD-логин пользователя не найден в GLPI, заявка создаётся от этого пользователя GLPI. Значение 0 запрещает такой fallback.</small><div class="form-actions"><button class="primary" type="submit">Сохранить</button><button id="glpi-test" type="button">Сохранить и проверить подключение</button></div><p id="glpi-result" role="status"></p></form><h3>Что должно быть включено в GLPI</h3><p>Настройка → Общие → API: REST API, выбранный способ API-входа и API-клиент с разрешённым IP сервера помощника. Для сервисной учётной записи нужны права на поиск пользователей и создание заявок в нужной сущности.</p><p><small>Автовход в браузере не передаёт серверу API-сессию. Проверка подключения не создаёт заявки; права на создание проверяются при настоящей отправке.</small></p></div>`;
   const form=$('#glpi-settings-form'), result=$('#glpi-result');
   const fields=()=>{ $('#glpi-token-fields').hidden=form.elements.authMode.value!=='token'; $('#glpi-password-fields').hidden=form.elements.authMode.value!=='password'; };
-  form.elements.authMode.addEventListener('change',fields); fields();
+  form.elements.authMode.addEventListener('change',fields); fields(); decorateSettingsHelp(form,'glpi');
   async function save(test) {
     if(!form.reportValidity())return;
     const data=Object.fromEntries(new FormData(form)); data.serviceUserId=Number(data.serviceUserId);
@@ -174,6 +275,7 @@ function integrationForm(kind, fields, description, read, extra='') {
   const form=$('#integration-form'), result=$('#integration-result');
   const save=async test=>{if(!form.reportValidity())return;form.querySelectorAll('button').forEach(b=>b.disabled=true);try{await api('/settings/'+kind,'PUT',read(form));const response=test?await api('/settings/'+kind+'/test','POST',{}):{success:true,message:'Настройки сохранены.'};if(form.isConnected){result.textContent=response.message;result.className=response.success?'':'error';if(form.elements.botToken)form.elements.botToken.value='';if(form.elements.clearBotToken)form.elements.clearBotToken.checked=false;}if(kind==='ad')refreshLoginProviders();}catch(e){if(form.isConnected){result.textContent=e.message;result.className='error';}}finally{if(form.isConnected)form.querySelectorAll('button').forEach(b=>b.disabled=false);}};
   form.addEventListener('submit',e=>{e.preventDefault();save(false);});$('#integration-test').addEventListener('click',()=>save(true));
+  decorateSettingsHelp(form,kind);
 }
 function renderSuperButtons(items){
   $('#content').innerHTML=`<div class="toolbar"><button id="new-super-button" class="primary">＋ Новая кнопка супер админа</button><button id="apply-super-buttons">Применить</button></div><p>Эти кнопки доступны только в привязанном помощнике после входа SuperAdmin. Пустой текст позволяет написать сообщение при отправке.</p>${table(['НАЗВАНИЕ','СООБЩЕНИЕ','ПОЛУЧАТЕЛИ','ПОКАЗ',''],items.map(b=>`<tr><td>${escape(b.title)}<small>${b.isActive?'Активна':'Отключена'} · порядок ${b.orderIndex}</small></td><td class="wrap">${escape(b.message||'Ввод при отправке')}</td><td>${b.target==='all'?'Все':'Выбор ПК'}</td><td>${b.durationSeconds} сек.</td><td><button data-edit-super="${b.id}">Изменить</button><button data-delete-super="${b.id}" class="danger">Удалить</button></td></tr>`).join(''))}`;
@@ -215,14 +317,75 @@ function renderClientUpdates(data){
   ($('#settings-tab-body')||$('#content')).innerHTML=`<div class="panel glpi-settings-panel"><h2>Автоматическое обновление помощника</h2><p>Служба обновлений в MSI 1.2.0 и новее проверяет сервер каждый час. Перед установкой она проверяет подпись, размер и SHA-256. Адрес сервера, ключ регистрации и настройки пользователя сохраняются.</p><label class="check-label"><input id="updates-enabled" type="checkbox" ${data.enabled?'checked':''}>Выдавать обновления клиентам</label><button id="save-update-switch" type="button">Сохранить</button><p>Опубликованная версия: <strong>${escape(data.latest?.version||'Нет')}</strong>${data.latest?` · ${(data.latest.size/1048576).toFixed(1)} МБ`:''}</p><form id="client-update-form"><label>MSI клиента<input name="package" type="file" accept=".msi" required></label><label>Подписанный манифест PixelHelper.update.json<input name="manifest" type="file" accept=".json" required></label><button class="primary">Проверить и опубликовать обновление</button><p id="client-update-result" role="status"></p></form><p><small>Сначала установите MSI со службой обновлений на компьютеры. Клиенты 1.1.3 и старше требуют однократной установки новой версии. Будущие версии устанавливаются без участия пользователя. Сборка с ключом подписи создаёт MSI и JSON; закрытый ключ на сервер и в GitHub не загружается.</small></p></div>`;
   $('#save-update-switch').addEventListener('click',async()=>{try{await api('/settings/updates','PUT',{enabled:$('#updates-enabled').checked});toast('Настройка сохранена');}catch(e){toast(e.message,true);}});
   $('#client-update-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.target,button=form.querySelector('button'),result=$('#client-update-result');button.disabled=true;result.textContent='Загрузка и проверка пакета…';try{const response=await fetch('/api/settings/updates/upload',{method:'POST',headers:{Authorization:'Bearer '+token},body:new FormData(form)});const value=await response.json();if(!response.ok)throw new Error(value.error||'Ошибка '+response.status);await loadPage();toast('Опубликована версия '+value.latest.version);}catch(error){if(form.isConnected){result.textContent=error.message;result.className='error';}}finally{if(form.isConnected)button.disabled=false;}});
+  decorateSettingsHelp($('#settings-tab-body'),'updates');
+}
+
+function renderSecuritySettings(data){
+  const host = ($('#settings-tab-body')||$('#content'));
+  host.innerHTML = `<div class="panel glpi-settings-panel">
+    <h2>Безопасность и защита от фишинга (WebGuard)</h2>
+    <p>Централизованное управление защитой рабочих станций от вредоносных и фишинговых ссылок, перехват опасных URL в браузере и автоматическое развертывание групповых политик (GPO) в домене Active Directory.</p>
+    <div style="background:var(--card-bg,#fff);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1.25rem;margin-bottom:1.5rem">
+      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">🛡️ Проверка фишинговых ссылок (WebGuard)</h3>
+      <p style="font-size:0.95rem;color:var(--text-muted,#475569);margin-bottom:1rem">
+        <strong>При включении:</strong> интерактивный помощник назначает себя в качестве обработчика ссылок по умолчанию, использует Microsoft Edge для открытия проверенных ссылок (или запрашивает предпочтительный браузер у пользователя при отсутствии Edge) и активирует расширение браузера.<br>
+        <strong>При выключении:</strong> помощник возвращает системным браузером по умолчанию браузер, выбранный пользователем, и отключает расширение.
+      </p>
+      <label class="check-label" style="font-size:1.05rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px">
+        <input id="webguard-enabled" type="checkbox" ${data.webGuardEnabled !== false ? 'checked' : ''}>
+        Включить проверку фишинговых ссылок на всех ПК
+      </label>
+      <div style="margin-top:1rem">
+        <button id="save-security-switch" class="primary" type="button">Сохранить состояние защиты</button>
+      </div>
+      <p id="security-save-result" style="margin-top:0.5rem;font-size:0.9rem"></p>
+    </div>
+
+    <div style="background:var(--card-bg,#fff);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1.25rem">
+      <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">📜 Автоматическая групповая политика Active Directory (GPO)</h3>
+      <p style="font-size:0.95rem;color:var(--text-muted,#475569);line-height:1.5">
+        Скачайте готовый PowerShell-скрипт <code>Deploy-WebGuardGpo.ps1</code> и запустите его от имени Администратора домена на сервере контроллера домена Active Directory.<br>
+        Скрипт автоматически проверит наличие GPO <strong>«PixelHelper Web Guard Policy»</strong>, создаст её при отсутствии, сконфигурирует принудительную установку защитного расширения для Microsoft Edge, Google Chrome и Яндекс Браузера, свяжет политику с доменом и выведет подробный отчёт с GUID и списком изменённых параметров.
+      </p>
+      <div style="margin-top:1rem;display:flex;gap:1rem;align-items:center">
+        <a id="btn-download-gpo" href="/api/settings/security/gpo-script" download="Deploy-WebGuardGpo.ps1" class="primary" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:600;background:var(--primary,#2563EB);color:#fff">
+          ⬇ Скачать скрипт групповой политики (.ps1)
+        </a>
+      </div>
+      <p style="margin-top:0.75rem;font-size:0.85rem;color:var(--text-muted,#64748B)">
+        После выполнения скрипта на сервере AD изменения вступят в силу на рабочих станциях после следующего автоматического обновления политик либо при выполнении команды <code>gpupdate /force</code>.
+      </p>
+    </div>
+  </div>`;
+
+  $('#save-security-switch').addEventListener('click', async () => {
+    const btn = $('#save-security-switch');
+    const result = $('#security-save-result');
+    btn.disabled = true;
+    result.textContent = 'Применение…';
+    try {
+      const enabled = $('#webguard-enabled').checked;
+      await api('/settings/security', 'PUT', { webGuardEnabled: enabled });
+      result.textContent = enabled ? 'Проверка фишинговых ссылок включена на рабочих станциях.' : 'Проверка ссылок отключена. На ПК восстановлен стандартный браузер пользователя.';
+      result.style.color = 'var(--success,#16a34a)';
+      toast('Настройки безопасности сохранены и отправлены на ПК');
+    } catch (e) {
+      result.textContent = e.message;
+      result.style.color = 'var(--error,#dc2626)';
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }
 
 function renderBranches(items){const host=($('#settings-tab-body')||$('#content'));host.innerHTML='<div class="toolbar"><button id="add-branch" class="primary">＋ Добавить филиал</button><button id="sync-branches-btn" class="secondary" title="Автоматически назначить филиалы ПК и пользователям">🔄 Синхронизировать филиалы ПК и пользователей</button></div>'+table(['ФИЛИАЛ','ПРЕФИКСЫ ПК','IP-ПОДСЕТИ','СТАТУС','ДЕЙСТВИЯ'],items.map(b=>`<tr><td><strong>${escape(b.name)}</strong></td><td><code>${escape(b.computerPrefixes||'—')}</code></td><td><code>${escape(b.ipSubnets||'—')}</code></td><td>${b.isActive?'Активен':'Отключён'}</td><td><button data-edit-branch="${b.id}">Изменить</button> <button data-delete-branch="${b.id}">Удалить</button></td></tr>`).join(''));$('#add-branch').addEventListener('click',()=>branchForm());$('#sync-branches-btn').addEventListener('click',async()=>{try{const res=await api('/branches/sync','POST',{});toast(`Синхронизировано ПК: ${res.updatedComputers}, пользователей: ${res.updatedUsers}`);await loadPage();}catch(e){toast(e.message,true);}});host.querySelectorAll('[data-edit-branch]').forEach(b=>b.addEventListener('click',()=>branchForm(items.find(i=>i.id===Number(b.dataset.editBranch)))));host.querySelectorAll('[data-delete-branch]').forEach(b=>b.addEventListener('click',()=>remove('/branches/'+b.dataset.deleteBranch,'Удалить филиал? Используемый филиал можно только отключить.')));}
-function branchForm(branch={name:'',computerPrefixes:'',ipSubnets:'',isActive:true}){modal(branch.id?'Изменить филиал':'Новый филиал',`<form id="branch-form"><label>Название<input name="name" maxlength="100" value="${escape(branch.name)}" required></label><label>Префиксы ПК (первые буквы имени компьютера через запятую или пробел)<input name="computerPrefixes" maxlength="200" value="${escape(branch.computerPrefixes||'')}" placeholder="N, R, D, B"></label><small>По первой букве имени ПК определяются филиал и экстренные вызовы (N — Поликлиника, R — Роддом, D — Детская больница, B — Больница и любые другие буквы).</small><label>IP-подсети филиала (через запятую)<input name="ipSubnets" maxlength="300" value="${escape(branch.ipSubnets||'')}" placeholder="172.16.10.0/24, 10.20.1.*"></label><small>Если у филиалов совпадают начальные буквы ПК, точное сопоставление выполняется по IP-адресу.</small><label class="check-label"><input name="isActive" type="checkbox" ${branch.isActive?'checked':''}>Активен</label><small>Отключённый филиал недоступен для новых заявок. История сохраняется.</small><div id="form-error" class="error"></div><button class="primary">Сохранить</button></form>`);$('#branch-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/branches'+(branch.id?'/'+branch.id:''),branch.id?'PUT':'POST',{name:e.target.elements.name.value,computerPrefixes:e.target.elements.computerPrefixes.value,ipSubnets:e.target.elements.ipSubnets.value,isActive:e.target.elements.isActive.checked});closeModal();await loadPage();}catch(error){$('#form-error').textContent=error.message;}});}
+function branchForm(branch={name:'',computerPrefixes:'',ipSubnets:'',isActive:true}){modal(branch.id?'Изменить филиал':'Новый филиал',`<form id="branch-form"><label>Название<input name="name" maxlength="100" value="${escape(branch.name)}" required></label><label>Префиксы ПК (первые буквы имени компьютера через запятую или пробел)<input name="computerPrefixes" maxlength="200" value="${escape(branch.computerPrefixes||'')}" placeholder="N, R, D, B"></label><small>По первой букве имени ПК определяются филиал и экстренные вызовы (N — Поликлиника, R — Роддом, D — Детская больница, B — Больница и любые другие буквы).</small><label>IP-подсети филиала (через запятую)<input name="ipSubnets" maxlength="300" value="${escape(branch.ipSubnets||'')}" placeholder="172.16.10.0/24, 10.20.1.*"></label><small>Если у филиалов совпадают начальные буквы ПК, точное сопоставление выполняется по IP-адресу.</small><label class="check-label"><input name="isActive" type="checkbox" ${branch.isActive?'checked':''}>Активен</label><small>Отключённый филиал недоступен для новых заявок. История сохраняется.</small><div id="form-error" class="error"></div><button class="primary">Сохранить</button></form>`);$('#branch-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/branches'+(branch.id?'/'+branch.id:''),branch.id?'PUT':'POST',{name:e.target.elements.name.value,computerPrefixes:e.target.elements.computerPrefixes.value,ipSubnets:e.target.elements.ipSubnets.value,isActive:e.target.elements.isActive.checked});closeModal();await loadPage();}catch(error){$('#form-error').textContent=error.message;}});decorateSettingsHelp($('#branch-form'),'branches');}
 
 function renderMessengerSettings(data){
   ($('#settings-tab-body')||$('#content')).innerHTML=`<form id="messenger-settings" class="settings-card"><h2>Мессенджер сотрудников</h2><label class="check"><input name="enabled" type="checkbox" ${data.enabled?'checked':''}> Включить личную переписку</label><label>Срок хранения сообщений, дней<input name="retentionDays" type="number" min="0" max="3650" value="${Number(data.retentionDays)||0}" required></label><p>0 — без ограничения; иначе от 30 до 3650 дней. Сообщения старше указанного срока удаляются при ежедневной очистке.</p><label>Интервал напоминания о непрочитанных сообщениях (минут)<input name="unreadReminderMinutes" type="number" min="1" max="1440" value="${Number(data.unreadReminderMinutes)||5}" required></label><p>Помощник периодически привлекает внимание пользователя и напоминает о непрочитанных сообщениях, пока они не будут прочитаны.</p><p>Сохранено сообщений: ${Number(data.storedMessages)||0}. Содержание переписки доступно только её участникам. Администраторы не получают доступ к чужим диалогам.</p><p>Сотрудник входит через AD в окне клиента. В списке отображаются AD-пользователи панели, включая вошедших из мессенджера. Обновите клиент до 1.2.11 или новее.</p><div id="form-error" class="error"></div><button class="primary">Сохранить</button></form>`;
   $('#messenger-settings').addEventListener('submit',async e=>{e.preventDefault();const retentionDays=Number(e.target.retentionDays.value);const unreadReminderMinutes=Number(e.target.unreadReminderMinutes.value);if(retentionDays!==0&&(retentionDays<30||retentionDays>3650)){$('#form-error').textContent='Укажите 0 либо от 30 до 3650 дней.';return;}if(unreadReminderMinutes<1||unreadReminderMinutes>1440){$('#form-error').textContent='Интервал напоминания должен быть от 1 до 1440 минут.';return;}if(retentionDays!==0&&retentionDays!==data.retentionDays&&!confirm('Сообщения старше '+retentionDays+' дней будут удаляться. Сохранить срок хранения?'))return;try{await api('/settings/messenger','PUT',{enabled:e.target.enabled.checked,retentionDays,unreadReminderMinutes});toast('Настройки мессенджера сохранены');await loadPage();}catch(error){$('#form-error').textContent=error.message;}});
+  decorateSettingsHelp($('#messenger-settings'),'messenger');
 }
 
 function renderCartridgeSettings(data){
@@ -269,13 +432,24 @@ function renderCartridgeSettings(data){
       result.textContent='Тестовое уведомление отправлено на ваш ПК';result.className='';toast('Тестовое уведомление отправлено');
     }catch(err){result.textContent=err.message;result.className='error';}
   });
+  decorateSettingsHelp($('#cartridge-form'),'cartridge');
 }
 
-function renderEmergencySettings(data){
-  let depts=[...(data.departments||[])];
+function renderEmergencySettings(data, branches=[], recipients={users:[],groups:[]}){
+  if (!data.codeBlueBranchUsers) data.codeBlueBranchUsers = {};
+  let depts = [...(data.departments||[])];
+  depts.forEach(d => { if (!d.branchResponsibleUsers) d.branchResponsibleUsers = {}; });
+
+  const activeBranches = (branches || []).filter(b => b.isActive !== false);
+  const userMap = new Map((recipients.users || []).map(u => [u.value.toLowerCase(), u]));
+  const getUserLabel = (login) => {
+    const u = userMap.get((login||'').toLowerCase());
+    return u ? (u.label ? `${u.label} (${u.login})` : u.login) : login;
+  };
+
   const render=()=>{
     const host=($('#settings-tab-body')||$('#content'));
-    host.innerHTML=`<div class="panel glpi-settings-panel">
+    host.innerHTML=`<div class="panel emergency-settings-panel">
       <h2>Система экстренного оповещения (AudioRONGTA / ROXTON)</h2>
       <p>Интеграция с системой голосового и визуального оповещения ROXTON и службой вызова медицинских специалистов.</p>
       <form id="emergency-form">
@@ -300,29 +474,23 @@ function renderEmergencySettings(data){
 
         <div style="padding:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:1rem">
           <label class="check-label" style="font-weight:600;margin-bottom:0.5rem"><input name="broadcastAllBranches" type="checkbox" ${data.broadcastAllBranches?'checked':''}>Массовые коды во все филиалы (без ограничения текущим корпусом)</label>
-          ${emergencyCodeMatrix(data)}
+          ${emergencyCodeMatrix(data, activeBranches, getUserLabel)}
         </div>
         
-        <h3 style="margin-top:1.5rem">Служба вызова медицинских специалистов</h3>
-        <p style="font-size:0.85rem;color:#64748b">Выберите сотрудников и группы для каждого отделения.</p>
-        <div id="dept-list" style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem">
-          ${depts.map((d,idx)=>`
-            <div style="display:flex;gap:0.5rem;align-items:center;padding:0.5rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff">
-              <input style="width:50px" type="color" value="${escape(d.color||'#2563eb')}" data-dept-color="${idx}">
-              <input style="flex:2" value="${escape(d.name)}" placeholder="Название отделения" data-dept-name="${idx}">
-              <input style="flex:2" value="${escape(d.specialistTitle||'')}" placeholder="Специалист / шаблон вызова" data-dept-title="${idx}">
-              <div style="flex:3" data-dept-selector="${idx}"></div>
-              <button type="button" class="quiet danger" data-dept-remove="${idx}">✕</button>
+        <div style="padding:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:1rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;margin-bottom:0.75rem">
+            <div>
+              <h3 style="margin:0 0 0.25rem 0;font-size:1.05rem;color:#1e293b;display:flex;align-items:center;gap:6px">
+                <span>🩺</span> Служба вызова медицинских специалистов
+              </h3>
+              <p style="margin:0;font-size:0.85rem;color:#64748b">Матрица филиалов и отделений. Назначенные специалисты получают тревожное окно вызова на своих рабочих станциях.</p>
             </div>
-          `).join('')||'<div class="empty">Отделения не настроены. Назначьте ответственных перед вызовом.</div>'}
-        </div>
-        <button type="button" id="add-dept-btn" class="secondary" style="margin-bottom:1rem">＋ Добавить отделение</button>
-
-        <div style="margin-top:1rem;margin-bottom:1rem;padding:0.75rem;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px">
-          <div style="font-weight:600;color:#1e40af">💙 Назначенные специалисты «Код Синий» (Реанимация / СЛР)
-            <div id="code-blue-selector"></div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem">
+              <button type="button" id="btn-add-specialist-user" class="primary" style="font-size:0.85rem">＋ Добавить сотрудника в филиал и отделение</button>
+              <button type="button" id="btn-edit-depts" class="secondary" style="font-size:0.85rem">⚙️ Редактировать отделения</button>
+            </div>
           </div>
-          <small style="color:#3b82f6">При активации вызова «Код Синий» (например, из кабинета 120) тревожный полноэкранный экран со звуком срабатывает только на компьютерах этих специалистов данного филиала.</small>
+          ${renderSpecialistMatrix(depts, activeBranches, getUserLabel)}
         </div>
 
         <div style="margin-top:1rem;margin-bottom:1rem;padding:0.75rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">
@@ -402,30 +570,57 @@ function renderEmergencySettings(data){
       </div>
     </div>`;
 
-    $('#add-dept-btn').addEventListener('click',()=>{
-      depts.push({id:Math.max(0,...depts.map(d=>Number(d.id)||0))+1,name:'',specialistTitle:'',color:'#2563eb',responsibleUsers:[]});
-      render();
+    // Bind removal buttons:
+    host.querySelectorAll('[data-remove-blue-user]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const [bId, login] = btn.dataset.removeBlueUser.split(':');
+        if (data.codeBlueBranchUsers?.[bId]) {
+          data.codeBlueBranchUsers[bId] = data.codeBlueBranchUsers[bId].filter(u => u.toLowerCase() !== login.toLowerCase());
+          render();
+        }
+      });
     });
-    host.querySelectorAll('[data-dept-remove]').forEach(b=>b.addEventListener('click',()=>{
-      depts.splice(Number(b.dataset.deptRemove),1);
-      render();
-    }));
-    host.querySelectorAll('[data-dept-color]').forEach(input=>input.addEventListener('input',e=>{
-      depts[Number(e.target.dataset.deptColor)].color=e.target.value;
-    }));
-    host.querySelectorAll('[data-dept-name]').forEach(input=>input.addEventListener('input',e=>{
-      depts[Number(e.target.dataset.deptName)].name=e.target.value;
-    }));
-    host.querySelectorAll('[data-dept-title]').forEach(input=>input.addEventListener('input',e=>{
-      depts[Number(e.target.dataset.deptTitle)].specialistTitle=e.target.value;
-    }));
+
+    host.querySelectorAll('[data-remove-dept-user]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const parts = btn.dataset.removeDeptUser.split(':');
+        const deptId = parts[0], bId = parts[1], login = parts.slice(2).join(':');
+        const dept = depts.find(d => String(d.id) === String(deptId));
+        if (dept?.branchResponsibleUsers?.[bId]) {
+          dept.branchResponsibleUsers[bId] = dept.branchResponsibleUsers[bId].filter(u => u.toLowerCase() !== login.toLowerCase());
+          render();
+        }
+      });
+    });
+
+    // Code blue add user modal:
+    const btnAddBlue = $('#btn-add-code-blue-user');
+    if (btnAddBlue) {
+      btnAddBlue.addEventListener('click', () => {
+        openAddCodeBlueModal(data, activeBranches, recipients, getUserLabel, () => render());
+      });
+    }
+
+    // Specialist add user modal:
+    const btnAddSpec = $('#btn-add-specialist-user');
+    if (btnAddSpec) {
+      btnAddSpec.addEventListener('click', () => {
+        if (!depts.length) { toast('Сначала создайте отделения в разделе «Редактировать отделения»', true); return; }
+        openAddSpecialistModal(depts, activeBranches, recipients, getUserLabel, () => render());
+      });
+    }
+
+    // Edit departments modal:
+    const btnEditDepts = $('#btn-edit-depts');
+    if (btnEditDepts) {
+      btnEditDepts.addEventListener('click', () => {
+        openEditDepartmentsModal(depts, () => render());
+      });
+    }
 
     const form=$('#emergency-form'), result=$('#emergency-result');
-    mountUserGroupSelector($('#code-blue-selector'),data.codeBlueResponsibleUsers,data.codeBlueResponsibleGroups,(users,groups)=>{data.codeBlueResponsibleUsers=users;data.codeBlueResponsibleGroups=groups;});
-    host.querySelectorAll('[data-dept-selector]').forEach(root=>{
-        const department=depts[Number(root.dataset.deptSelector)];
-        mountUserGroupSelector(root,department.responsibleUsers,department.responsibleGroups,(users,groups)=>{department.responsibleUsers=users;department.responsibleGroups=groups;});
-    });
 
     form.addEventListener('submit',async e=>{
       e.preventDefault();
@@ -436,7 +631,8 @@ function renderEmergencySettings(data){
           apiKey:form.elements.apiKey.value.trim(),
           allowStandalone:form.elements.allowStandalone.checked,
           allowClientTrigger:form.elements.allowClientTrigger.checked,
-          codeBlueResponsibleUsers:data.codeBlueResponsibleUsers||[],
+          codeBlueBranchUsers:data.codeBlueBranchUsers||{},
+          codeBlueResponsibleUsers:Object.values(data.codeBlueBranchUsers||{}).flat(),
           codeBlueResponsibleGroups:data.codeBlueResponsibleGroups||[],
           broadcastAllBranches:form.elements.broadcastAllBranches.checked,
           allowedCodes:[...form.querySelectorAll('[data-code-enabled]:checked')].map(c=>c.dataset.codeEnabled).concat(['SPECIALIST_CALL']),
@@ -445,7 +641,11 @@ function renderEmergencySettings(data){
           telegramAlertsEnabled:form.elements.telegramAlertsEnabled?form.elements.telegramAlertsEnabled.checked:true,
           telegramChatId:form.elements.telegramChatId?form.elements.telegramChatId.value.trim():'',
           telegramThreadId:form.elements.telegramThreadId&&form.elements.telegramThreadId.value?parseInt(form.elements.telegramThreadId.value,10)||0:0,
-          departments:depts
+          departments:depts.map(d=>({
+            ...d,
+            branchResponsibleUsers:d.branchResponsibleUsers||{},
+            responsibleUsers:Object.values(d.branchResponsibleUsers||{}).flat()
+          }))
         };
         await api('/settings/emergency','PUT',update);
         data=update;
@@ -498,7 +698,7 @@ function renderEmergencySettings(data){
       });
     }
 
-    api('/branches').then(branches=>{const select=$('#manual-alert-branch');if(select)select.innerHTML='<option value="">Выберите филиал</option>'+branches.filter(b=>b.isActive).map(b=>'<option value="'+b.id+'">'+escape(b.name)+'</option>').join('');}).catch(()=>{});
+    api('/branches').then(branchesList=>{const select=$('#manual-alert-branch');if(select)select.innerHTML='<option value="">Выберите филиал</option>'+branchesList.filter(b=>b.isActive).map(b=>'<option value="'+b.id+'">'+escape(b.name)+'</option>').join('');}).catch(()=>{});
     $('#manual-alert-trigger').addEventListener('click',async()=>{
       const code=$('#manual-alert-code').value;
       const cab=$('#manual-alert-cabinet').value.trim();
@@ -511,8 +711,339 @@ function renderEmergencySettings(data){
         toast('Экстренное оповещение запущено!');
       }catch(err){toast(err.message,true);}
     });
+    decorateSettingsHelp(host,'emergency');
   };
   render();
+}
+
+function renderSpecialistMatrix(depts, activeBranches, getUserLabel) {
+  if (!depts.length) {
+    return `<div class="empty" style="padding:1.5rem;background:#fff;border-radius:8px;border:1px dashed #cbd5e1;text-align:center">
+      Отделения не настроены. Нажмите <strong>«Редактировать отделения»</strong>, чтобы добавить отделения или выполнить синхронизацию с AudioRONGTA.
+    </div>`;
+  }
+  const minTableWidth = Math.max(800, 180 + depts.length * 200);
+  return `<div style="overflow-x:auto;width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;box-sizing:border-box">
+    <table class="table" style="width:100%;min-width:${minTableWidth}px;font-size:0.85rem;border-collapse:collapse;background:#fff">
+      <thead>
+        <tr style="background:#f1f5f9;color:#475569;text-align:left;border-bottom:2px solid #e2e8f0">
+          <th style="padding:10px 12px;min-width:160px;font-weight:700;white-space:nowrap">Филиал</th>
+          ${depts.map((d, idx) => `
+            <th style="padding:10px 12px;min-width:180px;border-left:1px solid #e2e8f0;white-space:nowrap">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${escape(d.color||'#2563eb')};flex-shrink:0"></span>
+                <strong style="color:#1e293b">${escape(d.name || ('Отделение #' + (d.id || idx+1)))}</strong>
+              </div>
+              <small style="color:#64748b;font-size:0.75rem;display:block">${escape(d.specialistTitle || 'Специалист')}</small>
+            </th>
+          `).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${activeBranches.map(branch => `
+          <tr style="border-bottom:1px solid #f1f5f9">
+            <td style="padding:10px 12px;vertical-align:top;font-weight:600;color:#334155;background:#f8fafc;white-space:nowrap">
+              🏢 ${escape(branch.name)}
+            </td>
+            ${depts.map(d => {
+              const uList = d.branchResponsibleUsers?.[branch.id] || [];
+              return `<td style="padding:10px 12px;vertical-align:top;border-left:1px solid #f1f5f9">
+                <div style="display:flex;flex-wrap:wrap;gap:4px">
+                  ${uList.map(login => `
+                    <span class="badge" style="background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:4px;padding:2px 6px;font-size:0.75rem;display:inline-flex;align-items:center;gap:4px;white-space:nowrap">
+                      👤 ${escape(getUserLabel(login))}
+                      <button type="button" data-remove-dept-user="${d.id}:${branch.id}:${escape(login)}" style="border:none;background:none;color:#dc2626;cursor:pointer;padding:0 2px;font-weight:bold;line-height:1" title="Удалить">✕</button>
+                    </span>
+                  `).join('') || '<span style="color:#94a3b8;font-size:0.75rem">—</span>'}
+                </div>
+              </td>`;
+            }).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function openAddCodeBlueModal(data, activeBranches, recipients, getUserLabel, onUpdate) {
+  const users = recipients.users || [];
+  modal('Добавить сотрудника в филиал · Код Синий (СЛР)', `
+    <form id="modal-blue-form">
+      <label style="margin-bottom:0.75rem;display:block">
+        <strong>Выберите филиал:</strong>
+        <select id="modal-blue-branch-select" style="width:100%;margin-top:4px" required>
+          ${activeBranches.map(b => `<option value="${b.id}">${escape(b.name)}</option>`).join('')}
+        </select>
+      </label>
+      <label style="margin-bottom:0.5rem;display:block">
+        <strong>Поиск сотрудника:</strong>
+        <input type="search" id="modal-blue-search-input" placeholder="Поиск по ФИО, логину, кабинету..." style="width:100%;margin-top:4px">
+      </label>
+      <div id="modal-blue-user-results" style="max-height:220px;overflow-y:auto;border:1px solid #cbd5e1;border-radius:6px;background:#fff;margin-bottom:1rem">
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:0.5rem">
+        <button type="button" id="modal-blue-cancel" class="secondary">Закрыть</button>
+      </div>
+    </form>
+  `);
+
+  const branchSelect = $('#modal-blue-branch-select');
+  const searchInput = $('#modal-blue-search-input');
+  const resultsDiv = $('#modal-blue-user-results');
+  $('#modal-blue-cancel').addEventListener('click', closeModal);
+
+  const refreshList = () => {
+    const q = (searchInput.value || '').trim().toLowerCase();
+    const branchId = branchSelect.value;
+    const currentBranchUsers = new Set((data.codeBlueBranchUsers?.[branchId] || []).map(u => u.toLowerCase()));
+
+    const filtered = users.filter(u => {
+      return (u.label || '').toLowerCase().includes(q) || (u.login || '').toLowerCase().includes(q) || (u.room || '').toLowerCase().includes(q);
+    });
+
+    if (!filtered.length) {
+      resultsDiv.innerHTML = '<div style="padding:12px;color:#94a3b8;text-align:center">Сотрудники не найдены</div>';
+      return;
+    }
+
+    resultsDiv.innerHTML = filtered.map(u => {
+      const isAlready = currentBranchUsers.has(u.value.toLowerCase());
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #f1f5f9;gap:8px">
+        <div>
+          <div style="font-weight:600;color:#1e293b;font-size:0.88rem">${escape(u.label || u.login)}</div>
+          <small style="color:#64748b">${escape(u.login)}${u.room ? ` · Кабинет ${escape(u.room)}` : ''}</small>
+        </div>
+        <div>
+          ${isAlready ? `
+            <span style="font-size:0.8rem;color:#16a34a;font-weight:600">✓ Назначен</span>
+          ` : `
+            <button type="button" class="primary" data-add-user-login="${escape(u.value)}" style="padding:4px 10px;font-size:0.8rem">
+              ＋ Добавить
+            </button>
+          `}
+        </div>
+      </div>`;
+    }).join('');
+
+    resultsDiv.querySelectorAll('[data-add-user-login]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const login = btn.dataset.addUserLogin;
+        const bId = branchSelect.value;
+        if (!data.codeBlueBranchUsers) data.codeBlueBranchUsers = {};
+        if (!data.codeBlueBranchUsers[bId]) data.codeBlueBranchUsers[bId] = [];
+        if (!data.codeBlueBranchUsers[bId].some(u => u.toLowerCase() === login.toLowerCase())) {
+          data.codeBlueBranchUsers[bId].push(login);
+          toast(`Сотрудник ${login} добавлен в филиал`);
+          refreshList();
+          onUpdate();
+        }
+      });
+    });
+  };
+
+  branchSelect.addEventListener('change', refreshList);
+  searchInput.addEventListener('input', refreshList);
+  refreshList();
+}
+
+function openAddSpecialistModal(depts, activeBranches, recipients, getUserLabel, onUpdate) {
+  const users = recipients.users || [];
+  modal('Добавить сотрудника в филиал и отделение', `
+    <form id="modal-spec-form">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem">
+        <label>
+          <strong>Филиал:</strong>
+          <select id="modal-spec-branch-select" style="width:100%;margin-top:4px" required>
+            ${activeBranches.map(b => `<option value="${b.id}">${escape(b.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label>
+          <strong>Отделение:</strong>
+          <select id="modal-spec-dept-select" style="width:100%;margin-top:4px" required>
+            ${depts.map(d => `<option value="${d.id}">${escape(d.name || ('Отделение #' + d.id))}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <label style="margin-bottom:0.5rem;display:block">
+        <strong>Поиск сотрудника:</strong>
+        <input type="search" id="modal-spec-search-input" placeholder="Поиск по ФИО, логину, кабинету..." style="width:100%;margin-top:4px">
+      </label>
+      <div id="modal-spec-user-results" style="max-height:220px;overflow-y:auto;border:1px solid #cbd5e1;border-radius:6px;background:#fff;margin-bottom:1rem">
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:0.5rem">
+        <button type="button" id="modal-spec-cancel" class="secondary">Закрыть</button>
+      </div>
+    </form>
+  `);
+
+  const branchSelect = $('#modal-spec-branch-select');
+  const deptSelect = $('#modal-spec-dept-select');
+  const searchInput = $('#modal-spec-search-input');
+  const resultsDiv = $('#modal-spec-user-results');
+  $('#modal-spec-cancel').addEventListener('click', closeModal);
+
+  const refreshList = () => {
+    const q = (searchInput.value || '').trim().toLowerCase();
+    const branchId = branchSelect.value;
+    const deptId = deptSelect.value;
+    const dept = depts.find(d => String(d.id) === String(deptId));
+    const currentUsers = new Set((dept?.branchResponsibleUsers?.[branchId] || []).map(u => u.toLowerCase()));
+
+    const filtered = users.filter(u => {
+      return (u.label || '').toLowerCase().includes(q) || (u.login || '').toLowerCase().includes(q) || (u.room || '').toLowerCase().includes(q);
+    });
+
+    if (!filtered.length) {
+      resultsDiv.innerHTML = '<div style="padding:12px;color:#94a3b8;text-align:center">Сотрудники не найдены</div>';
+      return;
+    }
+
+    resultsDiv.innerHTML = filtered.map(u => {
+      const isAlready = currentUsers.has(u.value.toLowerCase());
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #f1f5f9;gap:8px">
+        <div>
+          <div style="font-weight:600;color:#1e293b;font-size:0.88rem">${escape(u.label || u.login)}</div>
+          <small style="color:#64748b">${escape(u.login)}${u.room ? ` · Кабинет ${escape(u.room)}` : ''}</small>
+        </div>
+        <div>
+          ${isAlready ? `
+            <span style="font-size:0.8rem;color:#16a34a;font-weight:600">✓ Назначен</span>
+          ` : `
+            <button type="button" class="primary" data-add-dept-user-login="${escape(u.value)}" style="padding:4px 10px;font-size:0.8rem">
+              ＋ Добавить
+            </button>
+          `}
+        </div>
+      </div>`;
+    }).join('');
+
+    resultsDiv.querySelectorAll('[data-add-dept-user-login]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const login = btn.dataset.addDeptUserLogin;
+        const bId = branchSelect.value;
+        const curDept = depts.find(d => String(d.id) === String(deptSelect.value));
+        if (curDept) {
+          if (!curDept.branchResponsibleUsers) curDept.branchResponsibleUsers = {};
+          if (!curDept.branchResponsibleUsers[bId]) curDept.branchResponsibleUsers[bId] = [];
+          if (!curDept.branchResponsibleUsers[bId].some(u => u.toLowerCase() === login.toLowerCase())) {
+            curDept.branchResponsibleUsers[bId].push(login);
+            toast(`Сотрудник ${login} добавлен в отделение`);
+            refreshList();
+            onUpdate();
+          }
+        }
+      });
+    });
+  };
+
+  branchSelect.addEventListener('change', refreshList);
+  deptSelect.addEventListener('change', refreshList);
+  searchInput.addEventListener('input', refreshList);
+  refreshList();
+}
+
+function openEditDepartmentsModal(depts, onUpdate) {
+  const renderModalContent = () => {
+    modal('Редактировать отделения службы вызова', `
+      <div style="margin-bottom:1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.5rem">
+          <p style="margin:0;font-size:0.85rem;color:#64748b">
+            Настройте список отделений, цвета и шаблоны должностей специалистов.
+          </p>
+          <div style="display:flex;gap:0.5rem">
+            <button type="button" id="mdept-add-btn" class="primary" style="font-size:0.8rem">＋ Добавить отделение</button>
+            <button type="button" id="mdept-sync-btn" class="secondary" style="font-size:0.8rem">🔄 Синхронизировать отделения по филиалам с системы экстренного оповещения</button>
+          </div>
+        </div>
+        <div id="mdept-sync-result" style="font-size:0.85rem;margin-bottom:0.5rem"></div>
+        <div id="mdept-list-container" style="display:flex;flex-direction:column;gap:0.5rem;max-height:360px;overflow-y:auto;padding-right:4px">
+          ${depts.map((d, idx) => `
+            <div style="display:flex;gap:0.5rem;align-items:center;padding:0.6rem;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc">
+              <input type="color" value="${escape(d.color||'#2563eb')}" data-mdept-color="${idx}" style="width:42px;height:36px;border:none;cursor:pointer;background:none" title="Цвет отделения">
+              <input value="${escape(d.name)}" placeholder="Название отделения" data-mdept-name="${idx}" style="flex:2" required>
+              <input value="${escape(d.specialistTitle||'')}" placeholder="Специалист / шаблон вызова" data-mdept-title="${idx}" style="flex:2">
+              <button type="button" class="quiet danger" data-mdept-remove="${idx}" title="Удалить отделение" style="padding:6px 10px;font-size:0.85rem">✕ Удалить</button>
+            </div>
+          `).join('') || '<div class="empty" style="padding:1rem;background:#fff;border-radius:6px;border:1px dashed #cbd5e1">Отделения пока не созданы.</div>'}
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:0.5rem">
+        <button type="button" id="mdept-close-btn" class="primary">Готово</button>
+      </div>
+    `);
+
+    $('#mdept-close-btn').addEventListener('click', () => {
+      closeModal();
+      onUpdate();
+    });
+
+    $('#mdept-add-btn').addEventListener('click', () => {
+      const nextId = Math.max(0, ...depts.map(d => Number(d.id) || 0)) + 1;
+      depts.push({
+        id: nextId,
+        name: '',
+        specialistTitle: '',
+        color: '#2563eb',
+        responsibleUsers: [],
+        responsibleGroups: [],
+        branchResponsibleUsers: {}
+      });
+      renderModalContent();
+    });
+
+    $('#mdept-sync-btn').addEventListener('click', async () => {
+      const statusEl = $('#mdept-sync-result');
+      statusEl.textContent = 'Синхронизация…';
+      statusEl.className = '';
+      try {
+        const res = await api('/settings/emergency/sync-all', 'POST', {});
+        statusEl.textContent = 'Успешно синхронизировано. Обновлено рабочих мест: ' + (res.clients ?? 0);
+        statusEl.style.color = '#16a34a';
+        toast('Отделения и филиалы синхронизированы');
+        const fresh = await api('/settings/emergency');
+        if (fresh && fresh.departments) {
+          depts.length = 0;
+          fresh.departments.forEach(d => {
+            if (!d.branchResponsibleUsers) d.branchResponsibleUsers = {};
+            depts.push(d);
+          });
+          renderModalContent();
+        }
+      } catch (err) {
+        statusEl.textContent = err.message;
+        statusEl.style.color = '#dc2626';
+        toast(err.message, true);
+      }
+    });
+
+    const host = $('#modal-content');
+    host.querySelectorAll('[data-mdept-color]').forEach(input => {
+      input.addEventListener('input', e => {
+        depts[Number(e.target.dataset.mdeptColor)].color = e.target.value;
+      });
+    });
+    host.querySelectorAll('[data-mdept-name]').forEach(input => {
+      input.addEventListener('input', e => {
+        depts[Number(e.target.dataset.mdeptName)].name = e.target.value;
+      });
+    });
+    host.querySelectorAll('[data-mdept-title]').forEach(input => {
+      input.addEventListener('input', e => {
+        depts[Number(e.target.dataset.mdeptTitle)].specialistTitle = e.target.value;
+      });
+    });
+    host.querySelectorAll('[data-mdept-remove]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.mdeptRemove);
+        if (confirm(`Удалить отделение «${depts[idx].name || 'Без названия'}»?`)) {
+          depts.splice(idx, 1);
+          renderModalContent();
+        }
+      });
+    });
+  };
+
+  renderModalContent();
 }
 
 function renderKnowledgeBase(articles) {
@@ -645,6 +1176,7 @@ function medicalStatusForm(s={key:'',title:'',emoji:'🟢',colorHex:'#16A34A',mu
     try {await api('/settings/medical-statuses'+(s.id?'/'+s.id:''),s.id?'PUT':'POST',data);closeModal();await loadPage();}
     catch(error){$('#medical-error').textContent=error.message;}
   };
+  decorateSettingsHelp($('#medical-form'),'medical');
 }
 let emergencyRecipientCatalog;
 async function mountUserGroupSelector(root, users, groups, changed) {
@@ -686,9 +1218,10 @@ const emergencyCodeMeta = {
   CODE_BLUE: { label: 'Синий код', desc: 'Реанимация / СЛР', color: '#2563eb', icon: '🔵' }
 };
 
-function emergencyCodeMatrix(data) {
+function emergencyCodeMatrix(data, activeBranches=[], getUserLabel=login=>login) {
   const roles=['SuperAdmin','Admin','Operator','Psychologist','User'];
   const langLabels = { ru: 'RU', kk: 'KZ', en: 'EN', zh: 'ZH' };
+  const minTableWidth = Math.max(1250, 720 + activeBranches.length * 150);
   return `<div class="emergency-matrix-card" style="margin:0.75rem 0;padding:1rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
     <div style="margin-bottom:0.75rem">
       <h3 style="margin:0 0 0.25rem 0;font-size:1.05rem;color:#1e293b;display:flex;align-items:center;gap:6px">
@@ -698,14 +1231,16 @@ function emergencyCodeMatrix(data) {
         Укажите, какие тревожные коды включены в учреждении, каким ролям пользователей разрешён их запуск и на каких языках воспроизводится оповещение.
       </p>
     </div>
-    <div style="overflow-x:auto">
-      <table class="table" style="width:100%;font-size:0.85rem;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.05)">
+    <div style="overflow-x:auto;width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;box-sizing:border-box">
+      <table class="table" style="width:100%;min-width:${minTableWidth}px;font-size:0.85rem;border-collapse:collapse;background:#fff">
         <thead>
           <tr style="background:#f1f5f9;color:#475569;text-align:left;border-bottom:2px solid #e2e8f0">
             <th style="padding:10px 12px;width:40px;text-align:center">Вкл</th>
-            <th style="padding:10px 12px;min-width:210px">Тревожный код</th>
-            <th style="padding:10px 12px">Роли с правом запуска</th>
-            <th style="padding:10px 12px;min-width:140px">Языки вещания</th>
+            <th style="padding:10px 12px;min-width:200px;white-space:nowrap">Тревожный код</th>
+            <th style="padding:10px 12px;min-width:280px">Роли с правом запуска</th>
+            <th style="padding:10px 12px;min-width:130px">Языки вещания</th>
+            <th style="padding:10px 12px;min-width:180px;text-align:center">Назначение в филиалы</th>
+            ${activeBranches.map(b => `<th style="padding:10px 12px;min-width:150px;border-left:1px solid #e2e8f0;text-align:center;white-space:nowrap">${escape(b.name)}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -713,13 +1248,14 @@ function emergencyCodeMatrix(data) {
             const meta = emergencyCodeMeta[code] || { label: code, desc: '', color: '#2563eb', icon: '⚠️' };
             const isEnabled = !data.allowedCodes || data.allowedCodes.includes(code);
             const langs = ['CODE_WHITE','CODE_BLUE'].includes(code) ? ['ru','kk'] : ['ru','kk','en','zh'];
+            const isBlue = code === 'CODE_BLUE';
             return `<tr style="border-bottom:1px solid #f1f5f9">
               <td style="padding:10px 12px;text-align:center;vertical-align:middle">
                 <input type="checkbox" data-code-enabled="${code}" ${isEnabled?'checked':''} title="Включить код в организации" style="width:17px;height:17px;cursor:pointer">
               </td>
-              <td style="padding:10px 12px;vertical-align:middle">
+              <td style="padding:10px 12px;vertical-align:middle;white-space:nowrap">
                 <div style="display:flex;align-items:center;gap:8px">
-                  <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${meta.color}18;border:1px solid ${meta.color}44;font-size:12px">${meta.icon}</span>
+                  <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${meta.color}18;border:1px solid ${meta.color}44;font-size:12px;flex-shrink:0">${meta.icon}</span>
                   <div>
                     <strong style="color:${meta.color};display:block;line-height:1.2">${escape(meta.label)}</strong>
                     <small style="color:#64748b;font-size:0.75rem">${escape(meta.desc)}</small>
@@ -730,7 +1266,7 @@ function emergencyCodeMatrix(data) {
                 <div style="display:flex;flex-wrap:wrap;gap:6px">
                   ${roles.map(role => {
                     const checked = !data.codeLaunchRoles?.[code] || data.codeLaunchRoles[code].includes(role);
-                    return `<label class="check-label" style="display:inline-flex;align-items:center;gap:4px;padding:3px 7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;font-size:0.78rem;cursor:pointer;margin:0">
+                    return `<label class="check-label" style="display:inline-flex;align-items:center;gap:4px;padding:3px 7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;font-size:0.78rem;cursor:pointer;margin:0;white-space:nowrap">
                       <input type="checkbox" data-code-role="${code}" value="${role}" ${checked?'checked':''}>
                       <span>${escape(roleName(role))}</span>
                     </label>`;
@@ -741,13 +1277,36 @@ function emergencyCodeMatrix(data) {
                 <div style="display:flex;flex-wrap:wrap;gap:5px">
                   ${langs.map(lang => {
                     const checked = !data.emergencyCodeLanguages?.[code] || data.emergencyCodeLanguages[code].includes(lang);
-                    return `<label class="check-label" style="display:inline-flex;align-items:center;gap:3px;padding:3px 6px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;font-size:0.75rem;cursor:pointer;color:#1e40af;font-weight:600;margin:0">
+                    return `<label class="check-label" style="display:inline-flex;align-items:center;gap:3px;padding:3px 6px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;font-size:0.75rem;cursor:pointer;color:#1e40af;font-weight:600;margin:0;white-space:nowrap">
                       <input type="checkbox" data-code-language="${code}" value="${lang}" ${checked?'checked':''}>
                       <span>${langLabels[lang]||lang.toUpperCase()}</span>
                     </label>`;
                   }).join('')}
                 </div>
               </td>
+              <td style="padding:10px 12px;vertical-align:middle;text-align:center">
+                ${isBlue ? `
+                  <button type="button" id="btn-add-code-blue-user" class="secondary" style="font-size:0.8rem;padding:4px 8px;white-space:nowrap">
+                    ＋ Добавить сотрудника в филиал
+                  </button>
+                ` : `<span style="color:#94a3b8;font-size:0.8rem">—</span>`}
+              </td>
+              ${activeBranches.map(b => {
+                if (!isBlue) {
+                  return `<td style="padding:10px 12px;vertical-align:middle;border-left:1px solid #f1f5f9;color:#94a3b8;font-size:0.8rem;text-align:center">—</td>`;
+                }
+                const bUsers = data.codeBlueBranchUsers?.[b.id] || [];
+                return `<td style="padding:10px 12px;vertical-align:middle;border-left:1px solid #f1f5f9;text-align:center">
+                  <div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:center">
+                    ${bUsers.map(login => `
+                      <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;border-radius:4px;padding:2px 6px;font-size:0.75rem;display:inline-flex;align-items:center;gap:4px;white-space:nowrap">
+                        👤 ${escape(getUserLabel(login))}
+                        <button type="button" data-remove-blue-user="${b.id}:${escape(login)}" style="border:none;background:none;color:#dc2626;cursor:pointer;padding:0 2px;font-weight:bold;line-height:1" title="Удалить">✕</button>
+                      </span>
+                    `).join('') || '<span style="color:#94a3b8;font-size:0.75rem">Не назначены</span>'}
+                  </div>
+                </td>`;
+              }).join('')}
             </tr>`;
           }).join('')}
         </tbody>

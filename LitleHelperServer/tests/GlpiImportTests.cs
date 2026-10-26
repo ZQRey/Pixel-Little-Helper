@@ -13,7 +13,7 @@ public static class GlpiImportTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token)
         {
             string path=request.RequestUri!.AbsolutePath;object result=new {};string body=request.Content==null?"":await request.Content.ReadAsStringAsync(token);LastBody=body;
-            if(path.Contains("/bot")){if(path.EndsWith("sendMessage"))Sent++;if(path.EndsWith("editMessageReplyMarkup"))Edited++;return new(HttpStatusCode.OK){Content=JsonContent.Create(new {ok=true,result=new {message_id=999}})};}
+            if(path.Contains("/bot")){if(path.EndsWith("sendMessage")||path.EndsWith("sendPhoto"))Sent++;if(path.EndsWith("editMessageReplyMarkup"))Edited++;return new(HttpStatusCode.OK){Content=JsonContent.Create(new {ok=true,result=new {message_id=999}})};}
             if(path.EndsWith("initSession"))result=new {session_token="test"};
             else if(path.EndsWith("killSession"))result=true;
             else if(path.EndsWith("search/Ticket"))

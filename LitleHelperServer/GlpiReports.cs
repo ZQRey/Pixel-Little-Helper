@@ -49,7 +49,7 @@ public class TicketSurveyInvitation
     public int WriteAttempts { get; set; }
     public string LastError { get; set; } = "";
 }
-public record ReportActor(int Id, string Login, string Name, string Profile = "", bool IsService = false);
+public record ReportActor(int Id, string Login, string Name, string Profile = "", bool IsService = false, bool? IsTechnicianProfile = null);
 public record ReportTicket
 {
     public int Id { get; init; }
@@ -71,6 +71,7 @@ public record ReportTicket
     public ReportActor[] Requesters { get; init; } = [];
     public ReportActor[] Assignees { get; init; } = [];
     public ReportActor? RegisteredBy { get; init; }
+    public string RegistrationDescription { get; init; } = "";
     public ReportActor? Responsible { get; init; }
     public string Attribution { get; init; } = "Не определён";
     public double? Score { get; init; }
@@ -88,6 +89,10 @@ public sealed class ReportHealth { public DateTime? LastAttempt { get; set; } pu
 public record ReportFilter(DateOnly From, DateOnly To, string Basis, int? BranchId, int? Technician, int? Requester, int? Status, string Search, string? Snapshot)
 {
     public int? Reaction { get; init; }
+    public string Comparison { get; init; } = "previous";
+    public DateOnly? CompareFrom { get; init; }
+    public DateOnly? CompareTo { get; init; }
+    public string PeriodKind { get; init; } = "auto";
     public static ReportFilter Parse(IQueryCollection q)
     {
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, ReportMath.Zone));
@@ -98,7 +103,17 @@ public record ReportFilter(DateOnly From, DateOnly To, string Basis, int? Branch
         if (to < from || to == DateOnly.MaxValue || to.DayNumber - from.DayNumber > 3660 || basis is not ("created" or "solved" or "closed" or "answered")) throw new ArgumentException("Неверный период или основа даты");
         var status = Number("status"); if (status is not null && status is < 1 or > 6) throw new ArgumentException("Неверный статус");
         var reaction = Number("reaction"); if (reaction is < 0 or > 5) throw new ArgumentException("Неверный интервал времени реакции");
-        return new(from, to, basis, Number("branchId"), Number("technician"), Number("requester"), status, q["search"].ToString().Trim()[..Math.Min(q["search"].ToString().Trim().Length, 200)], q["snapshot"].FirstOrDefault()) { Reaction = reaction };
+        string comparison = q["compare"].FirstOrDefault() ?? "previous";
+        string periodKind = q["period"].FirstOrDefault() ?? "auto";
+        if (periodKind is not ("auto" or "day" or "week" or "month" or "year" or "custom")) throw new ArgumentException("Неверный тип периода");
+        if (comparison is not ("none" or "previous" or "custom")) throw new ArgumentException("Неверный режим сравнения");
+        DateOnly? compareFrom=null,compareTo=null;
+        if (comparison == "custom") {
+            if (string.IsNullOrEmpty(q["compareFrom"]) || string.IsNullOrEmpty(q["compareTo"])) throw new ArgumentException("Укажите обе даты сравнения");
+            compareFrom=Read("compareFrom",from); compareTo=Read("compareTo",to);
+            if (compareTo < compareFrom || compareTo == DateOnly.MaxValue || compareTo.Value.DayNumber-compareFrom.Value.DayNumber>3660) throw new ArgumentException("Неверный период сравнения");
+        }
+        return new(from, to, basis, Number("branchId"), Number("technician"), Number("requester"), status, q["search"].ToString().Trim()[..Math.Min(q["search"].ToString().Trim().Length, 200)], q["snapshot"].FirstOrDefault()) { Reaction = reaction, Comparison=comparison,CompareFrom=compareFrom,CompareTo=compareTo,PeriodKind=periodKind };
     }
     public DateTime Start => TimeZoneInfo.ConvertTimeToUtc(From.ToDateTime(TimeOnly.MinValue), ReportMath.Zone);
     public DateTime End => TimeZoneInfo.ConvertTimeToUtc(To.AddDays(1).ToDateTime(TimeOnly.MinValue), ReportMath.Zone);
@@ -110,7 +125,7 @@ public record ReportFilter(DateOnly From, DateOnly To, string Basis, int? Branch
 }
 public static class ReportMath
 {
-    public static readonly TimeZoneInfo Zone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Qyzylorda");
+    public static TimeZoneInfo Zone => ReportDeployment.Current.Zone;
     public static DateTime? ParseSourceDate(string? value, TimeZoneInfo sourceZone)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
@@ -133,8 +148,21 @@ public static class ReportMath
         effortSamples = rows.Count(t => t.EffortSeconds.HasValue), meanScore = Mean(rows.Where(t => t.Status == 6).Select(t => t.CurrentScore)), rated = rows.Count(t => t.Status == 6 && t.CurrentScore != null),
         missingRequester = rows.Count(t => t.Requesters.Length == 0), ambiguousResponsible = rows.Count(t => t.Responsible == null), missingCreated = rows.Count(t => t.CreatedAt == null)
     };
-    public static bool IsTechnician(ReportActor a) => !a.IsService && !a.Login.Equals("Telegram", StringComparison.OrdinalIgnoreCase) && a.Profile.Split(", ").Any(p => p is "Technician" or "Super-Admin");
-    public static object[] People(ReportTicket[] rows, bool technicians) => rows.SelectMany(t => (technicians ? t.Assignees.Concat(t.Responsible is null ? [] : new[] { t.Responsible! }).Where(IsTechnician) : t.Requesters.Take(1)).DistinctBy(a => a.Id).Select(a => (Actor: a, Ticket: t)))
+    public static bool IsPerson(ReportActor a) => !a.IsService && !ReportDeployment.Current.IsService(a.Id,a.Login);
+    public static IEnumerable<ReportActor> Actors(ReportTicket t) => t.Requesters.Concat(t.Assignees)
+        .Concat(t.RegisteredBy == null ? [] : new[] { t.RegisteredBy }).Concat(t.Responsible == null ? [] : new[] { t.Responsible });
+    // Keep the imported/audited identities intact. Exclude service actors only at
+    // the reporting boundary, before filters, aggregates, comparison and exports.
+    public static ReportTicket ForPresentation(ReportTicket t) => t with {
+        Requesters = t.Requesters.Where(IsPerson).ToArray(), Assignees = t.Assignees.Where(IsPerson).ToArray(),
+        Responsible = t.Responsible != null && IsPerson(t.Responsible) ? t.Responsible : null,
+        RegisteredBy = t.RegisteredBy != null && IsPerson(t.RegisteredBy) ? t.RegisteredBy : null,
+        RegistrationDescription = t.RegisteredBy != null && !IsPerson(t.RegisteredBy)
+            ? "Через интеграцию (служебная регистрация)" : t.RegistrationDescription
+    };
+    public static bool IsTechnician(ReportActor a) => IsPerson(a)
+        && (a.IsTechnicianProfile ?? a.Profile.Split(", ").Any(p => p is "Technician" or "Super-Admin"));
+    public static object[] People(ReportTicket[] rows, bool technicians) => rows.SelectMany(t => (technicians ? t.Assignees.Concat(t.Responsible is null ? [] : new[] { t.Responsible! }).Where(IsTechnician) : t.Requesters.Where(IsPerson).Take(1)).DistinctBy(a => a.Id).Select(a => (Actor: a, Ticket: t)))
         .GroupBy(x => x.Actor.Id).Select(g => {
             var actor = g.First().Actor; var tickets = g.Select(x => x.Ticket).DistinctBy(t => t.Id).ToArray();
             var results = technicians ? tickets.Where(t => t.Responsible?.Id == actor.Id).ToArray() : tickets;
@@ -149,10 +177,18 @@ public static class ReportMath
 public sealed class GlpiReports(HelperDb db, GlpiService glpi, IntegrationSettings settings, ReportGate gate, ReportHealth health)
 {
     public string Source => glpi.ImportSource;
+    public async Task<object> CardContext(CancellationToken ct)
+    {
+        var state = await State(ct);
+        var actors = (JsonSerializer.Deserialize<ReportTicket[]>(state.Payload) ?? []).SelectMany(ReportMath.Actors);
+        return new { timeZone=ReportMath.Zone.Id, locale=ReportDeployment.Current.Locale, organizationName=ReportDeployment.Current.OrganizationName,
+            serviceUserIds=actors.Where(a=>!ReportMath.IsPerson(a)).Select(a=>a.Id).Concat(ReportDeployment.Current.ServiceUserIds).Distinct().ToArray(),
+            serviceLogins=ReportDeployment.Current.ServiceLogins };
+    }
     public async Task<GlpiReportState> State(CancellationToken ct)
     {
         var state = await db.GlpiReportStates.SingleOrDefaultAsync(x => x.Id == Source, ct);
-        if (state == null) { await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"GlpiReportStates\" (\"Id\", \"Payload\", \"SurveysEnabled\") VALUES ({Source}, '[]', FALSE) ON CONFLICT (\"Id\") DO NOTHING", ct); state = await db.GlpiReportStates.SingleAsync(x => x.Id == Source, ct); }
+        if (state == null) { string emptyPolicy = "{}"; await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO \"GlpiReportStates\" (\"Id\", \"Payload\", \"SurveysEnabled\", \"SurveyPolicyJson\") VALUES ({Source}, '[]', FALSE, {emptyPolicy}) ON CONFLICT (\"Id\") DO NOTHING", ct); state = await db.GlpiReportStates.SingleAsync(x => x.Id == Source, ct); }
         return state;
     }
     public async Task Sync(CancellationToken ct)
@@ -193,7 +229,8 @@ public sealed class GlpiReports(HelperDb db, GlpiService glpi, IntegrationSettin
                 if (!SurveyPolicy.Active(invite)) invite.PendingComment="";
             }
             if (state.SurveysEnabled && state.SurveysFrom != null)
-                foreach (var t in rows.Where(t => !t.Deleted && t.Status == 6 && t.ClosedAt >= state.SurveysFrom && t.Score == null && t.Requesters.Length > 0))
+                foreach (var t in rows.Where(t => !t.Deleted && t.Status == 6 && t.ClosedAt >= state.SurveysFrom && t.Score == null && t.Requesters.Length > 0
+                    && t.Responsible != null && ReportMath.IsTechnician(t.Responsible)))
                 {
                     // GLPI has one survey per ticket. Never invite a second cycle automatically.
                     if (invitations.Any(i => i.TicketId == t.Id)) continue;
@@ -223,14 +260,20 @@ public sealed class GlpiReports(HelperDb db, GlpiService glpi, IntegrationSettin
     {
         var state = await State(ct);
         if (filter.Snapshot != null && filter.Snapshot != state.SyncedAt?.ToString("O")) throw new ArgumentException("Данные обновились. Обновите отчёт перед выгрузкой.");
-        var visible = await Visible(user, state, ct);
+        var rawVisible = await Visible(user, state, ct);
+        var serviceIds = rawVisible.SelectMany(ReportMath.Actors).Where(a=>!ReportMath.IsPerson(a)).Select(a=>a.Id).ToHashSet();
+        var visible = rawVisible.Select(ReportMath.ForPresentation).ToArray();
         if (entities != null) visible = visible.Where(t => entities.Contains(t.EntityId)).ToArray();
         var reactionScope = visible.Where((filter with { Reaction = null }).Matches).ToArray();
         var rows = reactionScope.Where(filter.Matches).OrderByDescending(t => filter.Date(t)).ToArray();
-        var surveyReport = SurveyReportData.Build(await db.TicketSurveyInvitations.AsNoTracking().Where(i=>i.Source==Source).ToListAsync(ct),rows,DateTime.UtcNow);
-        return new { filter, syncedAt = state.SyncedAt, snapshot = state.SyncedAt?.ToString("O"), error = health.Error,
+        var invitations = await db.TicketSurveyInvitations.AsNoTracking().Where(i=>i.Source==Source).ToListAsync(ct);
+        var surveyReport = SurveyReportData.Build(invitations.Where(i=>!serviceIds.Contains(i.RequesterId)
+            && !ReportDeployment.Current.IsService(i.RequesterId,i.Owner)),rows,DateTime.UtcNow);
+        return new { filter, timeZone=ReportMath.Zone.Id, locale=ReportDeployment.Current.Locale, organizationName=ReportDeployment.Current.OrganizationName,
+            syncedAt = state.SyncedAt, snapshot = state.SyncedAt?.ToString("O"), error = health.Error,
             surveysEnabled = state.SurveysEnabled, surveysFrom = state.SurveysFrom, totalAvailable = visible.Count(t => !t.Deleted), deleted = visible.Count(t => t.Deleted),
             coverageFrom = visible.Where(t => !t.Deleted).Select(t => t.CreatedAt).Min(), currentOpen = visible.Count(t => !t.Deleted && t.Status < 5),
+            comparison = GlpiReportComparison.Build(visible,filter,DateTime.UtcNow),
             surveyReport, summary = ReportMath.Summary(rows), technicians = ReportMath.People(rows, true), requesters = ReportMath.People(rows, false), tickets = rows,
             reaction = GlpiReportReaction.Distribution(reactionScope), reactionMissing = reactionScope.Count(t => GlpiReportReaction.Bucket(t.AcceptanceSeconds) == null),
             choices = new { branches = visible.Where(t => t.BranchId != null).DistinctBy(t => t.BranchId).Select(t => new { id = t.BranchId, name = t.Branch }),

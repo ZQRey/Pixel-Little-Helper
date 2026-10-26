@@ -2013,4 +2013,96 @@ dialog header strong {
   100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
+/* Microphone settings test meter */
+.mic-test-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  margin-bottom: 10px;
+}
 
+.mic-meter-track {
+  width: 100%;
+  height: 8px;
+  background: var(--line, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.mic-meter-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #10b981 0%, #6366f1 70%, #ef4444 100%);
+  border-radius: 4px;
+  transition: width 0.05s ease-out;
+}
+
+/* Group Call Late Join Banner */
+.group-call-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  background: rgba(16, 185, 129, 0.15);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 5;
+}
+
+.group-call-banner[hidden] {
+  display: none !important;
+}
+
+.group-call-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.group-call-pulse {
+  display: inline-block;
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(1.15); }
+}
+
+#group-call-join-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  background: #10B981;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+#group-call-join-btn:hover {
+  background: #059669;
+  transform: translateY(-1px);
+}
+
+
+
+
+/* Message styling and line alignment. Values are assigned from a fixed allowlist. */
+.formatting-toolbar{display:flex;flex-wrap:wrap;gap:4px;margin:0 0 6px}
+.formatting-toolbar button{padding:4px 8px;min-width:30px}
+.formatting-toolbar select{max-width:180px;padding:4px}
+.formatting-preview{max-height:110px;overflow:auto;border:1px solid var(--line,#586174);border-radius:8px;padding:8px;margin-bottom:6px}
+.formatting-preview[hidden]{display:none}
+.formatted-line{min-height:1.25em;overflow-wrap:anywhere;white-space:pre-wrap}
+.formatted-message.has-alignment{min-width:min(260px,55vw)}
+.formatted-message code{font-family:Consolas,monospace;background:rgba(128,128,128,.18);padding:1px 3px;border-radius:3px;color:inherit;white-space:pre-wrap}
+.formatted-code-line{background:rgba(128,128,128,.12)}

@@ -160,8 +160,13 @@ public static class IntegrationApi
                 if (string.IsNullOrWhiteSpace(office)) office = "Кабинет IT";
 
                 string message = el.TryGetProperty("message", out var msg) ? (msg.GetString() ?? "") : "";
+                string displayName = "";
+                if (el.TryGetProperty("userName", out var un)) displayName = un.GetString() ?? "";
+                else if (el.TryGetProperty("user_name", out var un2)) displayName = un2.GetString() ?? "";
+                else if (el.TryGetProperty("displayName", out var un3)) displayName = un3.GetString() ?? "";
+                string displayOrUser = !string.IsNullOrWhiteSpace(displayName) ? displayName : user;
 
-                var notice = new CartridgeReadyNotice(user, marker, model, cabinet, office, message);
+                var notice = new CartridgeReadyNotice(displayOrUser, marker, model, cabinet, office, message);
                 string cleanUser = Security.TicketUser(user).ToLowerInvariant();
                 await hub.Clients.Group("AgentUser:" + cleanUser).SendAsync("CartridgeReadyNotice", notice);
                 count++;
@@ -408,6 +413,63 @@ public static class IntegrationApi
                 heartbeatStop.Cancel();await heartbeat;
             }
         });
+
+        app.MapGet("/api/internal/resolve-client", async (string? ip, string? machine, HelperDb db, CancellationToken token) =>
+        {
+            if (string.IsNullOrWhiteSpace(ip) && string.IsNullOrWhiteSpace(machine))
+                return Results.BadRequest(new { error = "IP or machine is required" });
+
+            ip = ip?.Trim();
+            machine = machine?.Trim();
+            var query = db.Computers.AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(machine))
+            {
+                string m = machine.ToLower();
+                query = query.Where(c => c.MachineName.ToLower() == m);
+            }
+            else if (!string.IsNullOrWhiteSpace(ip))
+            {
+                query = query.Where(c => c.IpAddress == ip || c.IpAddress.Contains(ip));
+            }
+
+            var computer = await query
+                .OrderByDescending(c => c.IsOnline)
+                .ThenByDescending(c => c.LastSeen)
+                .FirstOrDefaultAsync(token);
+
+            if (computer == null) return Results.NotFound(new { error = "Not found", ip, machine });
+            return Results.Ok(new
+            {
+                ip = computer.IpAddress,
+                machineName = computer.MachineName,
+                domain = computer.DomainName,
+                username = computer.CurrentUser,
+                fullName = computer.CurrentUserFullName,
+                room = computer.Room,
+                branchId = computer.BranchId,
+                isOnline = computer.IsOnline,
+                lastSeen = computer.LastSeen
+            });
+        });
+
+        app.MapGet("/api/settings/security", (IntegrationSettings settings) => Results.Ok(settings.Security())).RequireAuthorization("settings.manage");
+
+        app.MapPut("/api/settings/security", async (SecurityOptions request, IntegrationSettings settings, IHubContext<HelperHub> hub) =>
+        {
+            settings.SaveSecurity(request);
+            await hub.Clients.Group("AllAgents").SendAsync("WebGuardToggled", request.WebGuardEnabled);
+            return Results.Ok(settings.Security());
+        }).RequireAuthorization("settings.manage");
+
+        app.MapGet("/api/settings/security/gpo-script", (HttpRequest req) =>
+        {
+            string host = req.Host.Value;
+            if (string.IsNullOrWhiteSpace(host)) host = "helper.gp1.loc";
+            string script = WebGuardGpoGenerator.GenerateScript(host);
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(script);
+            return Results.File(bytes, "application/octet-stream", "Deploy-WebGuardGpo.ps1");
+        }).RequireAuthorization("settings.manage");
     }
     public record UpdateSwitch(bool Enabled);
     public record TelegramDirectoryProbe(long TelegramId);

@@ -48,6 +48,11 @@ const I18N = {
     settings_title: 'Настройки',
     lang_label: 'Язык интерфейса',
     theme_label: 'Тема',
+    mic_label: 'Устройство ввода (микрофон)',
+    mic_default: 'По умолчанию (системный)',
+    mic_test_btn: '▶ Проверить микрофон',
+    mic_stop_btn: '⏹ Остановить проверку',
+    mic_level: 'Громкость микрофона',
     theme_dark: 'Тёмная',
     theme_light: 'Светлая',
     theme_contrast: 'Высокая контрастность',
@@ -146,6 +151,11 @@ const I18N = {
     settings_title: 'Баптаулар',
     lang_label: 'Интерфейс тілі',
     theme_label: 'Тақырып',
+    mic_label: 'Енгізу құрылғысы (микрофон)',
+    mic_default: 'Әдепкі (жүйелік)',
+    mic_test_btn: '▶ Микрофонды тексеру',
+    mic_stop_btn: '⏹ Тоқтату',
+    mic_level: 'Микрофон деңгейі',
     theme_dark: 'Күңгірт',
     theme_light: 'Ашық',
     theme_contrast: 'Жоғары контраст',
@@ -244,6 +254,11 @@ const I18N = {
     settings_title: 'Settings',
     lang_label: 'Language',
     theme_label: 'Theme',
+    mic_label: 'Input device (microphone)',
+    mic_default: 'Default (system)',
+    mic_test_btn: '▶ Test microphone',
+    mic_stop_btn: '⏹ Stop testing',
+    mic_level: 'Microphone level',
     theme_dark: 'Dark',
     theme_light: 'Light',
     theme_contrast: 'High Contrast',
@@ -342,6 +357,11 @@ const I18N = {
     settings_title: '设置',
     lang_label: '界面语言',
     theme_label: '主题风格',
+    mic_label: '输入设备 (麦克风)',
+    mic_default: '默认 (系统)',
+    mic_test_btn: '▶ 测试麦克风',
+    mic_stop_btn: '⏹ 停止测试',
+    mic_level: '麦克风音量',
     theme_dark: '深色',
     theme_light: '浅色',
     theme_contrast: '高对比度',
@@ -482,13 +502,78 @@ function setTheme(theme){document.documentElement.dataset.theme=theme;localStora
 document.querySelectorAll('[data-filter]').forEach(n=>n.onclick=()=>{state.filter=n.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>b.classList.toggle('selected',b.dataset.filter===state.filter));renderContacts();});$('search').oninput=renderContacts;$('clear-search').onclick=()=>{$('search').value='';renderContacts();};
 function renderContacts(){const term=$('search').value.trim().toLocaleLowerCase();$('contacts').replaceChildren();state.contacts.filter(c=>(c.fullName+' '+c.username+' '+(c.branch||'')).toLocaleLowerCase().includes(term)&&(state.filter==='all'||state.filter==='unread'&&c.unread>0||state.filter==='groups'&&c.isGroup||state.filter==='personal'&&!c.isGroup||state.filter==='favourite'&&c.favourite)).sort((a,b)=>Number(b.pinned)-Number(a.pinned)||Number(b.unread>0)-Number(a.unread>0)||new Date(b.lastAt||0)-new Date(a.lastAt||0)||a.fullName.localeCompare(b.fullName)).forEach(c=>{const row=button('',()=>openChat(c.id),'contact'+(c.id===state.peer?' active':''));row.setAttribute('role','listitem');row.append(avatar(c.fullName,c.isGroup?undefined:c.status||(c.isOnline?'online':'offline')));const content=element('div','contact-content'),top=element('div','contact-top'),bottom=element('div','contact-bottom');top.append(element('strong','',(c.pinned?'📌 ':'')+c.fullName+(c.muted?' · ◌':'')),element('time','',c.lastAt?new Date(c.lastAt).toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'}):''));bottom.append(element('span','',c.lastText?plainEmoji(c.lastText):c.isGroup?t('workgroup'):(c.status==='online'?t('online'):c.status==='available'?t('available'):t('offline'))+(c.branch?' · '+c.branch:'')));if(c.unread)bottom.append(element('b','badge',c.unread));content.append(top,bottom);row.append(content);row.oncontextmenu=e=>{e.preventDefault();contactActions(c);};$('contacts').append(row);});}
 async function refresh(){if(!state.me||state.refreshing)return;state.refreshing=true;try{const [contacts,prefs]=await Promise.all([api('users'),api('preferences')]);state.contacts=contacts.map(c=>Object.assign(c,(()=>{const p=prefs.find(p=>p.peer===c.id);return {pinned:!!p?.pinned,favourite:!!p?.favourite,muted:!!p?.muted};})()));renderContacts();if(state.peer<0&&!state.contacts.some(c=>c.id===state.peer)){state.peer=0;state.messages=[];state.groupEvents=[];state.extras=[];state.pending=null;$('input').value='';$('input').disabled=$('send').disabled=true;$('chat-title').textContent=t('group_unavailable');$('close-info').click();renderFeed(false);}if(state.peer)await loadHistory();}catch(e){showError(e);}finally{state.refreshing=false;}}
-async function openChat(peer){if(state.busy)return;state.peer=peer;state.messages=[];state.files=[];state.pending=null;$('input').value='';renderFiles();$('app').classList.add('chat-open');$('error').textContent='';renderContacts();await loadHistory();if(!$('drawer').hidden)await info();}
-async function loadHistory(before){const peer=state.peer;if(!peer)return;const c=state.contacts.find(c=>c.id===peer);$('chat-title').textContent=c?.fullName||'Диалог';$('chat-status').textContent=c?.isGroup?t('workgroup'):c?.status==='online'?t('online'):c?.status==='available'?t('available'):t('offline');$('chat-avatar').replaceWith(Object.assign(avatar(c?.fullName||'PH',c?.isGroup?undefined:c?.status||(c?.isOnline?'online':'offline')),{id:'chat-avatar'}));$('input').disabled=$('send').disabled=!c?.isActive||state.busy;if(c?.suspendedUntil&&new Date(c.suspendedUntil)>new Date()){state.messages=[];renderFeed(false);throw Error('Доступ отключён до '+new Date(c.suspendedUntil).toLocaleString(getLocale()));}const rows=await api('history/'+peer+(before?'?before='+before:''));const events=peer<0?(await api('groups/'+(-peer))).events||[]:[];if(peer!==state.peer)return;state.groupEvents=events;const atBottom=$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<90, oldHeight=$('feed').scrollHeight, oldTop=$('feed').scrollTop;const previousIds=new Set(state.messages.map(m=>m.id));state.messages=before?[...rows,...state.messages]:[...state.messages,...rows];state.messages=[...new Map(state.messages.map(m=>[m.id,m])).values()].sort((a,b)=>a.id-b.id);state.extras=await api("extras/"+peer+"?ids="+state.messages.slice(-100).map(m=>m.id).join(","));if(peer!==state.peer)return;renderFeed(atBottom&&!before);if(before)$('feed').scrollTop=oldTop+$('feed').scrollHeight-oldHeight;else if(!atBottom&&rows.some(m=>!previousIds.has(m.id)))$('new-messages').hidden=false;await markRead();}
+const chatDrafts = new Map();
+function saveConversationDraft(){if(state.peer)chatDrafts.set(state.peer,{text:$('input').value,files:[...state.files]});}
+function closeConversation(){
+  if(!state.peer)return;
+  saveConversationDraft();
+  if(voiceRecorder)stopVoiceRecording(true);
+  if(videoRecorder)stopVideoRecording(true);
+  state.peer=0;state.messages=[];state.groupEvents=[];
+  if(!state.busy){state.pending=null;state.files=[];}
+  $('input').value='';$('input').disabled=$('send').disabled=true;
+  $('input').dispatchEvent(new Event('input',{bubbles:true}));
+  $('chat-title').textContent='Выберите сотрудника';
+  $('chat-status').textContent='Сообщения, файлы и рабочие группы';
+  $('chat-avatar').replaceChildren();
+  $('close-info').click();$('app').classList.remove('chat-open');
+  $('group-call-banner').hidden=true;$('new-messages').hidden=true;
+  renderFiles();renderContacts();renderFeed(false);$('search').focus();
+}
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Escape'||e.defaultPrevented||document.querySelector('dialog[open]'))return;
+  if(!$('emoji-picker').hidden){$('emoji-picker').hidden=true;e.preventDefault();return;}
+  if(state.peer){closeConversation();e.preventDefault();}
+});
+async function openChat(peer){if(state.busy)return;saveConversationDraft();state.peer=peer;state.messages=[];state.files=chatDrafts.get(peer)?.files||[];state.pending=null;$('input').value=chatDrafts.get(peer)?.text||'';$('input').dispatchEvent(new Event('input',{bubbles:true}));renderFiles();$('app').classList.add('chat-open');$('error').textContent='';renderContacts();checkGroupCallState();await loadHistory();if(!$('drawer').hidden)await info();}
+async function loadHistory(before){const peer=state.peer;if(!peer)return;checkGroupCallState();const c=state.contacts.find(c=>c.id===peer);$('chat-title').textContent=c?.fullName||'Диалог';$('chat-status').textContent=c?.isGroup?t('workgroup'):c?.status==='online'?t('online'):c?.status==='available'?t('available'):t('offline');$('chat-avatar').replaceWith(Object.assign(avatar(c?.fullName||'PH',c?.isGroup?undefined:c?.status||(c?.isOnline?'online':'offline')),{id:'chat-avatar'}));$('input').disabled=$('send').disabled=!c?.isActive||state.busy;if(c?.suspendedUntil&&new Date(c.suspendedUntil)>new Date()){state.messages=[];renderFeed(false);throw Error('Доступ отключён до '+new Date(c.suspendedUntil).toLocaleString(getLocale()));}const rows=await api('history/'+peer+(before?'?before='+before:''));const events=peer<0?(await api('groups/'+(-peer))).events||[]:[];if(peer!==state.peer)return;state.groupEvents=events;const atBottom=$('feed').scrollHeight-$('feed').scrollTop-$('feed').clientHeight<90, oldHeight=$('feed').scrollHeight, oldTop=$('feed').scrollTop;const previousIds=new Set(state.messages.map(m=>m.id));state.messages=before?[...rows,...state.messages]:[...state.messages,...rows];state.messages=[...new Map(state.messages.map(m=>[m.id,m])).values()].sort((a,b)=>a.id-b.id);state.extras=await api("extras/"+peer+"?ids="+state.messages.slice(-100).map(m=>m.id).join(","));if(peer!==state.peer)return;renderFeed(atBottom&&!before);if(before)$('feed').scrollTop=oldTop+$('feed').scrollHeight-oldHeight;else if(!atBottom&&rows.some(m=>!previousIds.has(m.id)))$('new-messages').hidden=false;await markRead();}
 function robotEmoji(key){const frames={helper_wave:'greeting',helper_joy:'joy',helper_thanks:'success',helper_sad:'sad',helper_surprise:'surprise',helper_laugh:'laugh',helper_sleep:'sleep',helper_think:'think',helper_party:'celebrate',helper_dizzy:'dizzy'},span=element('span','helper-emoji');span.title=emojis[key][1];for(let i=1;i<=2;i++){const img=element('img');img.src='/messenger/emoji/'+frames[key]+'_'+i+'.png';img.alt=i===1?emojis[key][1]:'';span.append(img);}return span;}
+function richText(text){
+  const n=element('div','message-text formatted-message');
+  for(const line of HelperFormatting.parse(text)){
+    const row=element('div','formatted-line');row.style.textAlign=line.alignment;
+    if(line.codeBlock)row.classList.add('formatted-code-line');
+    if(line.alignment!=='left')n.classList.add('has-alignment');
+    for(const part of line.fragments){
+      const span=element(part.style&16?'code':'span');
+      if(part.style&1)span.style.fontWeight='bold';
+      if(part.style&2)span.style.fontStyle='italic';
+      const decoration=[];if(part.style&4)decoration.push('underline');if(part.style&8)decoration.push('line-through');
+      span.style.textDecoration=decoration.join(' ');
+      if(part.style&16)span.textContent=part.text;
+      else span.append(...richPlain(part.text).childNodes);
+      row.append(span);
+    }
+    if(!row.childNodes.length)row.append(document.createElement('br'));
+    n.append(row);
+  }
+  return n;
+}
+function setupFormatting(){
+  const input=$('input'),preview=element('div','formatting-preview');
+preview.hidden=true;preview.setAttribute('aria-label','Предпросмотр сообщения');
+  input.closest('.composer').insertBefore(preview,input.closest('.composer-row'));
+  function apply(edit){
+    input.focus();input.setSelectionRange(0,input.value.length);
+    // Chromium's editing command keeps the change in the textarea undo history.
+    if(!document.execCommand('insertText',false,edit.text))input.value=edit.text;
+    input.setSelectionRange(edit.start,edit.start+edit.length);
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  }
+  input.addEventListener('keydown',e=>{
+    if(e.isComposing)return;
+    const key=(e.code?.startsWith('Key')?e.code.slice(3):e.key).toLowerCase();
+    const alignment=(e.ctrlKey||e.metaKey)&&e.altKey?{l:'left',e:'center',r:'right'}[key]:null;
+    if(alignment){e.preventDefault();try{apply(HelperFormatting.align(input.value,input.selectionStart,input.selectionEnd-input.selectionStart,alignment,e.shiftKey));}catch(error){showError(error);}return;}
+    const mark=HelperFormatting.shortcut(e.code?.startsWith('Key')?e.code.slice(3):e.key,e.ctrlKey||e.metaKey,e.shiftKey,e.altKey);
+    if(mark){e.preventDefault();try{apply(HelperFormatting.toggle(input.value,input.selectionStart,input.selectionEnd-input.selectionStart,mark));}catch(error){showError(error);}}
+  });
+  input.addEventListener('input',()=>{preview.hidden=!input.value;preview.replaceChildren(richText(input.value));});
+}
 function plainEmoji(text){return text.replace(/:(helper_\w+):/g,(match,key)=>emojis[key]?.[0]||match);}
-function richText(text){const n=element('div','message-text');for(const part of text.split(/(https?:\/\/[^\s<>]+|:helper_\w+:)/g)){if(/^https?:\/\//.test(part)){const a=element('a','',part);a.href=part;a.target='_blank';a.rel='noopener noreferrer';n.append(a);}else if(emojis[part.slice(1,-1)]){n.append(robotEmoji(part.slice(1,-1)));}else n.append(document.createTextNode(part));}return n;}
+function richPlain(text){const n=element('span');for(const part of text.split(/(https?:\/\/[^\s<>]+|:helper_\w+:)/g)){if(/^https?:\/\//.test(part)){const a=element('a','',part);a.href=part;a.target='_blank';a.rel='noopener noreferrer';n.append(a);}else if(emojis[part.slice(1,-1)]){n.append(robotEmoji(part.slice(1,-1)));}else n.append(document.createTextNode(part));}return n;}
 function formatSec(s){const m=Math.floor(s/60),sec=Math.floor(s%60);return m+':'+(sec<10?'0':'')+sec;}
-function renderFeed(bottom){state.urls.forEach(URL.revokeObjectURL);state.urls=[];const feed=$('feed');feed.replaceChildren();if(!state.messages.length&&!state.pending){const empty=element('div','empty');empty.append(element('h2','',t('empty_history')),element('p','',t('empty_history_sub')));feed.append(empty);}if(state.messages.length>=50)feed.append(button(t('prev_messages'),()=>loadHistory(state.messages[0].id),'date'));let lastDate='';for(const m of [...state.messages.filter(m=>m.body.trim()||m.attachments?.length),...(state.peer<0?state.groupEvents.filter(e=>!state.messages.length||new Date(e.sentAt)>=new Date(state.messages[0].sentAt)).map(e=>({...e,isSystem:true})):[])].sort((a,b)=>new Date(a.sentAt)-new Date(b.sentAt))){const date=new Date(m.sentAt),day=date.toLocaleDateString(getLocale());if(day!==lastDate){lastDate=day;feed.append(element('div','date',day===new Date().toLocaleDateString(getLocale())?t('today'):day));}if(m.isSystem){feed.append(element('div','date',date.toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'})+' · '+m.body));continue;}const mine=m.senderId===state.me.id,bubble=element('article','bubble'+(mine?' mine':''));if(state.peer<0&&!mine)bubble.append(element('div','sender',m.senderName||''));if(m.isUrgent)bubble.append(element('strong','',t('urgent_badge')));bubble.append(richText(m.body));bubble.oncontextmenu=e=>{e.preventDefault();const body=modal(t('reaction_title'));for(const emoji of ['👍','❤️','😊','🎉','😔','👋'])body.append(button(emoji,async()=>{await api('reaction/'+state.peer+'/'+m.id,{emoji});$('modal').close();await loadHistory();},'secondary'));};for(const file of m.attachments||[]){
+function renderFeed(bottom){if(!state.peer){state.urls.forEach(URL.revokeObjectURL);state.urls=[];const empty=element('div','empty');empty.append(element('h2','','Выберите сотрудника'),element('p','','Выберите диалог в списке слева.'));$('feed').replaceChildren(empty);return;}state.urls.forEach(URL.revokeObjectURL);state.urls=[];const feed=$('feed');feed.replaceChildren();if(!state.messages.length&&!state.pending){const empty=element('div','empty');empty.append(element('h2','',t('empty_history')),element('p','',t('empty_history_sub')));feed.append(empty);}if(state.messages.length>=50)feed.append(button(t('prev_messages'),()=>loadHistory(state.messages[0].id),'date'));let lastDate='';for(const m of [...state.messages.filter(m=>m.body.trim()||m.attachments?.length),...(state.peer<0?state.groupEvents.filter(e=>!state.messages.length||new Date(e.sentAt)>=new Date(state.messages[0].sentAt)).map(e=>({...e,isSystem:true})):[])].sort((a,b)=>new Date(a.sentAt)-new Date(b.sentAt))){const date=new Date(m.sentAt),day=date.toLocaleDateString(getLocale());if(day!==lastDate){lastDate=day;feed.append(element('div','date',day===new Date().toLocaleDateString(getLocale())?t('today'):day));}if(m.isSystem){feed.append(element('div','date',date.toLocaleTimeString(getLocale(),{hour:'2-digit',minute:'2-digit'})+' · '+m.body));continue;}const mine=m.senderId===state.me.id,bubble=element('article','bubble'+(mine?' mine':''));if(state.peer<0&&!mine)bubble.append(element('div','sender',m.senderName||''));if(m.isUrgent)bubble.append(element('strong','',t('urgent_badge')));bubble.append(richText(m.body));bubble.oncontextmenu=e=>{e.preventDefault();const body=modal(t('reaction_title'));for(const emoji of ['👍','❤️','😊','🎉','😔','👋'])body.append(button(emoji,async()=>{await api('reaction/'+state.peer+'/'+m.id,{emoji});$('modal').close();await loadHistory();},'secondary'));};for(const file of m.attachments||[]){
   if(file.isVoice){
     const voiceWrap=element('div','voice-bubble');
     const playBtn=element('button','voice-play-btn','▶');
@@ -564,8 +649,8 @@ $('new-messages').onclick=()=>{$('feed').scrollTop=$('feed').scrollHeight;$('new
 function addFiles(files){const all=[...state.files,...files];if(all.length>10||all.some(f=>f.size>50*1024*1024)||all.reduce((n,f)=>n+f.size,0)>100*1024*1024)throw Error('До 10 файлов: 50 МБ каждый, 100 МБ всего.');state.files=all;renderFiles();}
 function renderFiles(){$('pending-files').replaceChildren();state.files.forEach((f,i)=>$('pending-files').append(button(f.name+' ×',()=>{state.files.splice(i,1);renderFiles();})));}
 $('attach').onclick=()=>$('file-input').click();$('file-input').onchange=e=>{try{addFiles(Array.from(e.target.files));}catch(e){showError(e);}e.target.value='';};$('input').onpaste=e=>{const files=Array.from(e.clipboardData?.files||[]);if(files.length){e.preventDefault();try{addFiles(files);}catch(e){showError(e);}}};$('input').oninput=()=>{if(state.peer&&state.ws?.readyState===WebSocket.OPEN&&Date.now()-state.typingSent>2000){state.typingSent=Date.now();state.ws.send(JSON.stringify({type:1,target:'Typing',arguments:[state.peer]})+'\u001e');}$('input').style.height='auto';$('input').style.height=Math.min(140,$('input').scrollHeight)+'px';};$('input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send().catch(showError);}};$('send').onclick=()=>send().catch(showError);
-async function send(){if(state.busy||!state.peer)return;const body=$('input').value.trim();if(!body&&!state.files.length)return;const signature=JSON.stringify([state.peer,body,state.files.map(f=>[f.name,f.size,f.lastModified])]);if(state.pending?.signature!==signature)state.pending={id:crypto.randomUUID(),peer:state.peer,body,signature};state.pending.failed=false;state.busy=true;const peer=state.peer;$('send').disabled=true;renderFeed(true);try{let message;if(state.files.length){const form=new FormData();form.append('peer',peer);form.append('body',body);form.append('clientId',state.pending.id);state.files.forEach(f=>form.append('files',f,f.name));message=await api('files/send',form);}else message=await api('send',{recipientId:peer,body,clientId:state.pending.id});state.messages.push(message);state.pending=null;state.files=[];$('input').value='';$('input').style.height='auto';renderFiles();$('error').textContent='';renderFeed(true);await refresh();}catch(e){if(state.pending)state.pending.failed=true;renderFeed(true);throw e;}finally{state.busy=false;$('send').disabled=!state.contacts.find(c=>c.id===state.peer)?.isActive;}}
-$('emoji').onclick=()=>{$('emoji-picker').hidden=!$('emoji-picker').hidden;};for(const [key,[icon,label]]of Object.entries(emojis))$('emoji-picker').append(button(icon,()=>{const input=$('input');input.setRangeText(':'+key+':',input.selectionStart,input.selectionEnd,'end');input.focus();$('emoji-picker').hidden=true;},'emoji-choice')); $("emoji-picker").querySelectorAll('button').forEach((b,i)=>{b.replaceChildren(robotEmoji(Object.keys(emojis)[i]));});
+async function send(){if(state.busy||!state.peer)return;const body=$('input').value.trim();if(!body&&!state.files.length)return;const signature=JSON.stringify([state.peer,body,state.files.map(f=>[f.name,f.size,f.lastModified])]);if(state.pending?.signature!==signature)state.pending={id:crypto.randomUUID(),peer:state.peer,body,signature};state.pending.failed=false;state.busy=true;const peer=state.peer;$('send').disabled=true;renderFeed(true);try{let message;if(state.files.length){const form=new FormData();form.append('peer',peer);form.append('body',body);form.append('clientId',state.pending.id);state.files.forEach(f=>form.append('files',f,f.name));message=await api('files/send',form);}else message=await api('send',{recipientId:peer,body,clientId:state.pending.id});if(peer===state.peer)state.messages.push(message);chatDrafts.delete(peer);state.pending=null;state.files=[];if(peer===state.peer)$('input').value='';$('input').dispatchEvent(new Event('input',{bubbles:true}));$('input').style.height='auto';renderFiles();$('error').textContent='';renderFeed(true);await refresh();}catch(e){if(state.pending)state.pending.failed=true;renderFeed(true);throw e;}finally{state.busy=false;$('send').disabled=!state.contacts.find(c=>c.id===state.peer)?.isActive;}}
+$('emoji').onclick=()=>{$('emoji-picker').hidden=!$('emoji-picker').hidden;};for(const [key,[icon,label]]of Object.entries(emojis))$('emoji-picker').append(button(icon,()=>{const input=$('input');input.setRangeText(':'+key+':',input.selectionStart,input.selectionEnd,'end');input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();$('emoji-picker').hidden=true;},'emoji-choice')); $("emoji-picker").querySelectorAll('button').forEach((b,i)=>{b.replaceChildren(robotEmoji(Object.keys(emojis)[i]));});
 async function download(file){const response=await fetch('/api/messenger/files/'+file.id,{credentials:'same-origin'});if(!response.ok)throw Error('Файл недоступен');const url=URL.createObjectURL(await response.blob()),link=element('a');link.href=url;link.download=file.name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function viewImage(file){const body=modal(file.name),image=element('img');image.src='/api/messenger/files/'+file.id;image.alt=file.name;body.append(image,button(t('download_image'),()=>download(file),'primary'));}
 $('info').onclick=()=>info().catch(showError);$('close-info').onclick=()=>{$('drawer').hidden=true;$('app').classList.remove('has-info');};$('close-modal').onclick=()=>$('modal').close();
@@ -604,12 +689,128 @@ $('settings').onclick=async()=>{
   quietBox.type='checkbox';quietBox.checked=localStorage.getItem('helper.chat.quiet')==='true';
   quietBox.onchange=()=>localStorage.setItem('helper.chat.quiet',String(quietBox.checked));
   quiet.append(quietBox,document.createTextNode(t('dnd_label')));
+
+  // --- Микрофон (устройство ввода) ---
+  const micLabel = element('p', '', t('mic_label'));
+  const micSel = element('select');
+  const defaultOpt = element('option', '', t('mic_default'));
+  defaultOpt.value = '';
+  micSel.append(defaultOpt);
+
+  let testStream = null;
+  let testAudioCtx = null;
+  let testAnimId = null;
+
+  function stopMicTest() {
+    if (testAnimId) { cancelAnimationFrame(testAnimId); testAnimId = null; }
+    if (testAudioCtx) { testAudioCtx.close().catch(()=>{}); testAudioCtx = null; }
+    if (testStream) { testStream.getTracks().forEach(t => t.stop()); testStream = null; }
+    testMeterFill.style.width = '0%';
+    testBtn.textContent = t('mic_test_btn');
+  }
+
+  async function populateMics() {
+    try {
+      const audioInputs = await HelperMedia.inputs();
+      const savedMic = localStorage.getItem('helper.chat.mic_id') || '';
+      micSel.replaceChildren(defaultOpt);
+      audioInputs.forEach((d, idx) => {
+        const opt = element('option', '', '🎤 ' + (d.label || `Микрофон ${idx + 1}`));
+        opt.value = d.deviceId;
+        micSel.append(opt);
+      });
+      micSel.value = savedMic;
+      if (micSel.value !== savedMic) {
+        micSel.value = '';
+        localStorage.removeItem('helper.chat.mic_id');
+      }
+    } catch (e) {
+      notify({ body: HelperMedia.explain(e, 'Микрофон') });
+    }
+  }
+
+  micSel.onchange = () => {
+    localStorage.setItem('helper.chat.mic_id', micSel.value);
+    if (testStream) {
+      stopMicTest();
+      startMicTest();
+    }
+  };
+
+  const testMeterTrack = element('div', 'mic-meter-track');
+  const testMeterFill = element('div', 'mic-meter-fill');
+  testMeterTrack.append(testMeterFill);
+  const testMeterWrap = element('div', 'mic-test-wrap');
+  const testMeterTitle = element('small', 'muted', t('mic_level'));
+  testMeterWrap.append(testMeterTitle, testMeterTrack);
+
+  const testBtn = button(t('mic_test_btn'), () => {
+    if (testStream) {
+      stopMicTest();
+    } else {
+      startMicTest();
+    }
+  }, 'secondary');
+
+  async function startMicTest() {
+    stopMicTest();
+    try {
+      const selectedId = micSel.value;
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      };
+      if (selectedId) {
+        constraints.audio.deviceId = { exact: selectedId };
+      }
+      testStream = await navigator.mediaDevices.getUserMedia(constraints);
+      testAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = testAudioCtx.createMediaStreamSource(testStream);
+      const analyser = testAudioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      source.connect(analyser);
+
+      const buffer = new Uint8Array(analyser.frequencyBinCount);
+      testBtn.textContent = t('mic_stop_btn');
+
+      function updateMeter() {
+        if (!testStream) return;
+        analyser.getByteFrequencyData(buffer);
+        let sum = 0;
+        for (let i = 0; i < buffer.length; i++) {
+          sum += buffer[i];
+        }
+        const avg = sum / buffer.length;
+        const pct = Math.min(100, Math.round((avg / 128) * 100 * 1.5));
+        testMeterFill.style.width = pct + '%';
+        testAnimId = requestAnimationFrame(updateMeter);
+      }
+      updateMeter();
+    } catch (err) {
+      toast('Ошибка доступа к микрофону: ' + err.message, true);
+      stopMicTest();
+    }
+  }
+
+  const origClose = $('modal').onclose;
+  $('modal').onclose = () => {
+    stopMicTest();
+    if (typeof origClose === 'function') origClose();
+  };
+
+  populateMics();
+
   body.append(
     element('p','',t('lang_label')),langSel,
     element('p','',t('theme_label')),themes,
+    micLabel, micSel, testBtn, testMeterWrap,
     quiet,
     element('p','',t('font_size')),font,
     button(t('browser_notif'),async()=>{if(!('Notification'in window))return toast('Браузер не поддерживает уведомления');toast('Разрешение: '+await Notification.requestPermission());}),
+    button('Помощь стилизации',()=>{const help=modal('Помощь стилизации');const text=element('p','',HelperFormatting.help);text.style.whiteSpace='pre-wrap';help.append(text);}),
     button(t('help_cmd'),()=>{
       const help=modal(t('help_cmd'));
       help.append(
@@ -629,6 +830,19 @@ $('chat-search').onclick=()=>{const body=modal(t('search_full_history')),input=e
 function contactActions(c){const body=modal(c.fullName);for(const [label,key]of[[t('pin_toggle'),'pinned'],[t('fav_toggle'),'favourite'],[t('mute_toggle'),'muted']])body.append(button(label,async()=>{const next={pinned:!!c.pinned,favourite:!!c.favourite,muted:!!c.muted};next[key]=!next[key];await api('preferences/'+c.id,next);$('modal').close();await refresh();},'secondary'));if(!c.isGroup)body.append(button(t('add_to_group'),()=>inviteToGroup(c),'secondary'));else{body.append(button(t('group_settings_btn'),async()=>{const group=await api('groups/'+(-c.id));const body=modal(c.fullName);groupActions(body,group);},'secondary'));}}
 function playChatTone(urgent){try{const ctx=new(window.AudioContext||window.webkitAudioContext)();const now=ctx.currentTime;if(urgent){[0,0.15,0.3].forEach(offset=>{const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='triangle';osc.frequency.setValueAtTime(880,now+offset);gain.gain.setValueAtTime(0.3,now+offset);gain.gain.exponentialRampToValueAtTime(0.01,now+offset+0.1);osc.connect(gain);gain.connect(ctx.destination);osc.start(now+offset);osc.stop(now+offset+0.1);});}else{const osc1=ctx.createOscillator(),osc2=ctx.createOscillator();const gain=ctx.createGain();osc1.type='sine';osc2.type='sine';osc1.frequency.setValueAtTime(587.33,now);osc2.frequency.setValueAtTime(880,now+0.08);gain.gain.setValueAtTime(0.18,now);gain.gain.exponentialRampToValueAtTime(0.001,now+0.35);osc1.connect(gain);osc2.connect(gain);gain.connect(ctx.destination);osc1.start(now);osc1.stop(now+0.1);osc2.start(now+0.08);osc2.stop(now+0.35);}}catch(e){}}
 function notify(message){if(!message.body.trim()&&!message.attachments?.length)return;if(message.senderId===state.me?.id)return;if(document.hasFocus()&&!document.hidden&&state.peer===(message.recipientId<0?message.recipientId:message.senderId))return;const quiet=localStorage.getItem('helper.chat.quiet')==='true';if(quiet||state.contacts.find(c=>c.id===(message.recipientId<0?message.recipientId:message.senderId))?.muted)return;playChatTone(message.isUrgent);if('Notification'in window&&Notification.permission==='granted'){const notification=new Notification(message.isUrgent?'СРОЧНО · PixelHelper':'PixelHelper',{body:plainEmoji(message.body).slice(0,200),tag:'helper-'+message.id});notification.onclick=()=>{window.focus();openChat(message.recipientId<0?message.recipientId:message.senderId).catch(showError);};}}
+function getAudioConstraints() {
+  const micId = localStorage.getItem('helper.chat.mic_id');
+  const audio = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true
+  };
+  if (micId) {
+    audio.deviceId = { ideal: micId };
+  }
+  return audio;
+}
+
 // --- Voice Recording ---
 let voiceRecorder = null, voiceStream = null, voiceTimer = null, voiceStartTime = 0;
 let voiceAudioCtx = null, voiceAnalyser = null, voiceWaveSamples = [];
@@ -636,7 +850,7 @@ let voiceAudioCtx = null, voiceAnalyser = null, voiceWaveSamples = [];
 $('record-voice').onclick = async () => {
   if (voiceRecorder || videoRecorder || !state.peer) return;
   try {
-    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: getAudioConstraints() });
     voiceAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = voiceAudioCtx.createMediaStreamSource(voiceStream);
     voiceAnalyser = voiceAudioCtx.createAnalyser();
@@ -724,8 +938,8 @@ $('record-video').onclick = async () => {
   try {
     videoStream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 480 }, height: { ideal: 480 }, aspectRatio: 1 },
-      audio: true
-    }).catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: true }));
+      audio: getAudioConstraints()
+    }).catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: getAudioConstraints() }));
 
     $('video-recorder-preview').srcObject = videoStream;
     $('video-preview-card').hidden = false;
@@ -841,16 +1055,20 @@ function stopRingtone() {
 }
 
 async function safeGetUserMedia(isVideo) {
+  HelperMedia.requireDevices();
+  let audioError = null;
+  let videoError = null;
   let audioTrack = null;
   let videoTrack = null;
 
   // 1. Попытка получить микрофон
   try {
     if (navigator.mediaDevices?.getUserMedia) {
-      const aStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const aStream = await navigator.mediaDevices.getUserMedia({ audio: getAudioConstraints() });
       audioTrack = aStream.getAudioTracks()[0] || null;
     }
   } catch (e) {
+    audioError = e;
     console.warn('Микрофон недоступен:', e);
   }
 
@@ -869,12 +1087,14 @@ async function safeGetUserMedia(isVideo) {
         const vStream2 = await navigator.mediaDevices.getUserMedia({ video: true });
         videoTrack = vStream2.getVideoTracks()[0] || null;
       } catch (e2) {
+        videoError = e2;
         console.warn('Камера не найдена на устройстве:', e2);
       }
     }
   }
 
   // 3. Если нет физического микрофона, генерируем беззвучный аудиопоток для работы WebRTC
+  const hasMicrophone = !!audioTrack;
   if (!audioTrack) {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -896,10 +1116,10 @@ async function safeGetUserMedia(isVideo) {
   if (videoTrack) tracks.push(videoTrack);
 
   if (isVideo && !videoTrack) {
-    notify({ body: 'Веб-камера не найдена. Звонок переключен в аудио-режим.' });
+    notify({ body: HelperMedia.explain(videoError, 'Камера') });
   }
-  if (!audioTrack) {
-    notify({ body: 'Микрофон не обнаружен. Вы сможете только слушать собеседника.' });
+  if (!hasMicrophone) {
+    notify({ body: HelperMedia.explain(audioError, 'Микрофон') });
   }
 
   return new MediaStream(tracks);
@@ -922,6 +1142,8 @@ async function startCall(isVideo) {
     $('web-record-indicator').hidden = true;
     $('call-record').classList.remove('active');
 
+    const callId = 'call_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    currentCall.id = callId;
     currentCall.isCaller = true;
     currentCall.isVideo = isVideo;
     currentCall.peerId = state.peer;
@@ -929,17 +1151,70 @@ async function startCall(isVideo) {
     playRingtone();
 
     if (isGroup) {
-      state.ws.send(JSON.stringify({ type: 1, target: 'StartGroupCall', arguments: [-state.peer, isVideo] }) + '\u001e');
+      state.ws.send(JSON.stringify({ type: 1, target: 'StartGroupCall', arguments: [-state.peer, isVideo, callId] }) + '\u001e');
     } else {
-      state.ws.send(JSON.stringify({ type: 1, target: 'StartCall', arguments: [state.peer, isVideo] }) + '\u001e');
+      state.ws.send(JSON.stringify({ type: 1, target: 'StartCall', arguments: [state.peer, isVideo, callId] }) + '\u001e');
     }
   } catch (err) {
     showError(new Error('Не удалось запустить звонок: ' + err.message));
   }
 }
 
-$('call-audio').onclick = () => startCall(false);
-$('call-video').onclick = () => startCall(true);
+async function checkGroupCallState() {
+  const banner = $('group-call-banner');
+  if (!banner) return;
+  if (!state.peer || state.peer >= 0) {
+    banner.hidden = true;
+    state.activeGroupCall = null;
+    return;
+  }
+  try {
+    const data = await api('groups/' + (-state.peer) + '/call-state');
+    if (data && data.active && data.callId) {
+      state.activeGroupCall = data;
+      const textEl = $('group-call-text');
+      if (textEl) {
+        textEl.textContent = `🟢 Идёт ${data.isVideo ? 'видеозвонок' : 'звонок'} · ${data.participantCount || 1} участников`;
+      }
+      banner.hidden = false;
+      return;
+    }
+  } catch {}
+  banner.hidden = true;
+  state.activeGroupCall = null;
+}
+
+if ($('group-call-join-btn')) {
+  $('group-call-join-btn').onclick = () => {
+    if (!state.activeGroupCall || !state.activeGroupCall.callId || state.peer >= 0) return;
+    const c = state.contacts.find(x => x.id === state.peer);
+    const name = c ? c.fullName : 'Групповой звонок';
+    const callUrl = `/messenger/call.html?peer=${state.peer}&callId=${encodeURIComponent(state.activeGroupCall.callId)}&caller=0&video=${state.activeGroupCall.isVideo ? '1' : '0'}&name=${encodeURIComponent(name)}`;
+    window.open(callUrl, 'call_' + state.activeGroupCall.callId, 'width=980,height=720,menubar=no,toolbar=no,location=no,status=no');
+  };
+}
+
+$('call-audio').onclick = () => {
+  if (state.peer < 0) {
+    const c = state.contacts.find(x => x.id === state.peer);
+    const name = c ? c.fullName : 'Групповой звонок';
+    const callUrl = `/messenger/call.html?peer=${state.peer}&video=0&caller=1&name=${encodeURIComponent(name)}`;
+    window.open(callUrl, 'call_' + Date.now(), 'width=980,height=720,menubar=no,toolbar=no,location=no,status=no');
+  } else {
+    startCall(false);
+  }
+};
+
+$('call-video').onclick = () => {
+  if (state.peer < 0) {
+    const c = state.contacts.find(x => x.id === state.peer);
+    const name = c ? c.fullName : 'Групповой звонок';
+    const callUrl = `/messenger/call.html?peer=${state.peer}&video=1&caller=1&name=${encodeURIComponent(name)}`;
+    window.open(callUrl, 'call_' + Date.now(), 'width=980,height=720,menubar=no,toolbar=no,location=no,status=no');
+  } else {
+    startCall(true);
+  }
+};
 
 async function setupPeerConnection(callId, targetUserId) {
   const cfg = await getRtcConfig();
@@ -952,9 +1227,17 @@ async function setupPeerConnection(callId, targetUserId) {
   }
 
   pc.ontrack = e => {
-    if (e.streams && e.streams[0]) {
-      $('remote-video').srcObject = e.streams[0];
+    const remoteVid = $('remote-video');
+    if (!remoteVid) return;
+    let stream = (e.streams && e.streams[0]) ? e.streams[0] : remoteVid.srcObject;
+    if (!stream) {
+      stream = new MediaStream();
+      remoteVid.srcObject = stream;
     }
+    if (e.track && !stream.getTracks().some(t => t.id === e.track.id)) {
+      stream.addTrack(e.track);
+    }
+    remoteVid.play().catch(() => {});
   };
 
   pc.onicecandidate = e => {
@@ -1077,7 +1360,7 @@ $('call-record').onclick = () => {
 
 $('call-hangup').onclick = () => {
   if (currentCall.id && state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 1, target: 'EndCall', arguments: [currentCall.id] }) + '\u001e');
+    state.ws.send(JSON.stringify({ type: 1, target: 'EndCall', arguments: [currentCall.id, currentCall.peerId || 0] }) + '\u001e');
   }
   endCallCleanUp();
 };
@@ -1123,7 +1406,17 @@ $('incoming-accept').onclick = async () => {
   if (!incomingCallState) return;
   stopRingtone();
   $('incoming-call-banner').hidden = true;
-  const { callId, callerId, callerName, isVideo } = incomingCallState;
+  const { callId, callerId, callerName, isVideo, isGroup, groupId } = incomingCallState;
+
+  if (isGroup || incomingCallState.isAdHoc) {
+    const peerVal = (groupId && groupId > 0) ? -groupId : -1;
+    const gName = incomingCallState.groupName || callerName || 'Групповой звонок';
+    const adHocParam = incomingCallState.isAdHoc ? '&adHoc=1' : '';
+    const callUrl = `/messenger/call.html?peer=${peerVal}&callId=${encodeURIComponent(callId)}&caller=0&video=${isVideo ? '1' : '0'}&name=${encodeURIComponent(gName)}${adHocParam}`;
+    window.open(callUrl, 'call_' + callId, 'width=980,height=720,menubar=no,toolbar=no,location=no,status=no');
+    incomingCallState = null;
+    return;
+  }
 
   try {
     const stream = await safeGetUserMedia(isVideo);
@@ -1154,13 +1447,30 @@ $('incoming-accept').onclick = async () => {
 $('incoming-reject').onclick = () => {
   stopRingtone();
   $('incoming-call-banner').hidden = true;
-  if (incomingCallState && state.ws?.readyState === WebSocket.OPEN) {
-    state.ws.send(JSON.stringify({ type: 1, target: 'RejectCall', arguments: [incomingCallState.callId, incomingCallState.callerId || 0] }) + '\u001e');
+  if (incomingCallState && !incomingCallState.isGroup && state.ws?.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 1, target: 'RejectCall', arguments: [incomingCallState.callId, incomingCallState.callerId || 0, 'busy'] }) + '\u001e');
   }
   incomingCallState = null;
 };
 
 async function connect(){const generation=++state.generation;state.ws?.close();try{const response=await fetch('/messengerHub/negotiate?negotiateVersion=1',{method:'POST',credentials:'same-origin',headers:{'X-Messenger-Web':'1'}});if(!response.ok)throw Error('Не удалось подключить уведомления');const negotiation=await response.json();if(generation!==state.generation||!state.me)return;const ws=new WebSocket(location.origin.replace(/^http/,'ws')+'/messengerHub?id='+encodeURIComponent(negotiation.connectionToken));state.ws=ws;let handshake=false,buffer='',last=Date.now();const timer=setInterval(()=>{if(Date.now()-last>45000)ws.close();else if(ws.readyState===WebSocket.OPEN)ws.send('{"type":6}\u001e');},15000);const timeout=setTimeout(()=>{if(!handshake)ws.close();},10000);ws.onopen=()=>ws.send('{"protocol":"json","version":1}\u001e');ws.onmessage=async e=>{last=Date.now();buffer+=e.data;let split;while((split=buffer.indexOf('\u001e'))>=0){const raw=buffer.slice(0,split);buffer=buffer.slice(split+1);if(!raw)continue;const packet=JSON.parse(raw);if(!handshake){if(packet.error){ws.close();return;}handshake=true;ws.send('{"type":1,"target":"SetMessengerOpen","arguments":[true]}\u001e');$('connection').textContent=t('connected_as')+state.me.fullName;clearTimeout(timeout);refresh();}else if(packet.type===1){
+  if(packet.target==='GroupCallStateChanged'){
+    const raw = (packet.arguments && typeof packet.arguments[0] === 'object' && packet.arguments[0] !== null) ? packet.arguments[0] : {};
+    const groupId = raw.groupId;
+    if(state.peer < 0 && -state.peer === groupId){
+      const banner = $('group-call-banner');
+      if(raw.active && raw.callId){
+        state.activeGroupCall = raw;
+        const textEl = $('group-call-text');
+        if(textEl) textEl.textContent = `🟢 Идёт ${raw.isVideo ? 'видеозвонок' : 'звонок'} · ${raw.participantCount || 1} участников`;
+        if(banner) banner.hidden = false;
+      } else {
+        state.activeGroupCall = null;
+        if(banner) banner.hidden = true;
+      }
+    }
+    continue;
+  }
   if(packet.target==='Typing'){const t=packet.arguments[0];if(t.peer===state.peer){const isPeerPsychologist=t.isPsychologist||state.contacts.find(c=>c.id===t.peer)?.position?.toLowerCase().includes('психолог')||state.contacts.find(c=>c.id===t.peer)?.role==='Psychologist';const amIPsychologist=state.me?.position?.toLowerCase().includes('психолог')||state.me?.role==='Psychologist';let label=isPeerPsychologist?t('typing_psychologist'):(amIPsychologist?t('typing_employee'):t.fullName+t('typing'));$('chat-status').textContent=label;setTimeout(()=>{if(state.peer===t.peer)$('chat-status').textContent=state.contacts.find(c=>c.id===t.peer)?.isOnline?'В сети':'Рабочий чат';},5000);}continue;}
   if(packet.target==='ChatMessage'){const msg=packet.arguments[0];if(msg&&(msg.body?.trim()||msg.attachments?.length)){notify(msg);refresh();}}
   if(packet.target==='IncomingCall'){
@@ -1171,11 +1481,13 @@ async function connect(){const generation=++state.generation;state.ws?.close();t
     const callerId = raw.callerId !== undefined ? raw.callerId : packet.arguments[1];
     const callerName = raw.callerName || packet.arguments[2] || 'Собеседник';
     const isVideo = raw.isVideo !== undefined ? !!raw.isVideo : (packet.arguments[3] !== undefined ? !!packet.arguments[3] : true);
-    const isGroup = raw.isGroup !== undefined ? !!raw.isGroup : (raw.groupId !== undefined || !!packet.arguments[4]);
-    const groupId = raw.groupId || packet.arguments[5];
+    const isAdHoc = !!raw.isAdHoc;
+    const isGroup = raw.isGroup !== undefined ? !!raw.isGroup : (raw.groupId !== undefined || isAdHoc || !!packet.arguments[4]);
+    const groupId = raw.groupId || packet.arguments[5] || 0;
+    const groupName = raw.groupName || '';
 
-    incomingCallState = { callId, callerId, callerName, isVideo, isGroup, groupId };
-    $('incoming-caller-name').textContent = callerName + (isGroup ? ' (Группа)' : '');
+    incomingCallState = { callId, callerId, callerName, isVideo, isGroup, groupId, isAdHoc, groupName };
+    $('incoming-caller-name').textContent = (groupName || callerName) + (isGroup ? ' (Группа)' : '');
     $('incoming-call-type').textContent = isVideo ? 'Входящий видеозвонок…' : 'Входящий аудиозвонок…';
     $('incoming-call-banner').hidden = false;
     playRingtone();
@@ -1188,11 +1500,20 @@ async function connect(){const generation=++state.generation;state.ws?.close();t
       n.onclick = () => { window.focus(); };
     }
   }
+  if(packet.target==='CallAnsweredElsewhere'){
+    const callId = packet.arguments?.[0];
+    if(incomingCallState && (!callId || incomingCallState.callId === callId)){
+      stopRingtone();
+      $('incoming-call-banner').hidden = true;
+      incomingCallState = null;
+    }
+  }
   if(packet.target==='CallAccepted'){
     const [callId, byUserId] = packet.arguments;
+    if(!currentCall.id || currentCall.id !== callId) return;
     stopRingtone();
     startCallTimer();
-    if(currentCall.isCaller && currentCall.id === callId) {
+    if(currentCall.isCaller) {
       const pc = await setupPeerConnection(callId, byUserId);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -1201,6 +1522,7 @@ async function connect(){const generation=++state.generation;state.ws?.close();t
   }
   if(packet.target==='SdpOfferReceived'){
     const [callId, fromUserId, sdp] = packet.arguments;
+    if(!currentCall.id || currentCall.id !== callId) return;
     let pc = currentCall.pc;
     if(!pc) pc = await setupPeerConnection(callId, fromUserId);
     await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
@@ -1211,12 +1533,14 @@ async function connect(){const generation=++state.generation;state.ws?.close();t
   }
   if(packet.target==='SdpAnswerReceived'){
     const [callId, fromUserId, sdp] = packet.arguments;
+    if(!currentCall.id || currentCall.id !== callId) return;
     if(currentCall.pc) {
       await currentCall.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
     }
   }
   if(packet.target==='IceCandidateReceived'){
     const [callId, fromUserId, candidate, sdpMid, sdpMLineIndex] = packet.arguments;
+    if(!currentCall.id || currentCall.id !== callId) return;
     if(currentCall.pc && candidate) {
       try {
         await currentCall.pc.addIceCandidate(new RTCIceCandidate({ candidate, sdpMid, sdpMLineIndex }));
@@ -1224,10 +1548,20 @@ async function connect(){const generation=++state.generation;state.ws?.close();t
     }
   }
   if(packet.target==='CallRejected'||packet.target==='CallEnded'){
-    endCallCleanUp();
-    toast('Звонок завершен');
+    const callId = packet.arguments?.[0];
+    const reason = packet.arguments?.[3];
+    if(incomingCallState && (!callId || incomingCallState.callId === callId)){
+      stopRingtone();
+      $('incoming-call-banner').hidden = true;
+      incomingCallState = null;
+    }
+    if(currentCall.id && (!callId || currentCall.id === callId)){
+      endCallCleanUp();
+      toast(packet.target === 'CallRejected' && reason === 'busy' ? 'Абонент занят' : 'Звонок завершен');
+    }
   }
 }else if(packet.type===7)ws.close();}};ws.onclose=()=>{clearInterval(timer);clearTimeout(timeout);if(generation===state.generation&&state.me){$('connection').textContent=t('reconnecting');setTimeout(()=>{if(generation===state.generation&&state.me)connect();},5000);}};ws.onerror=()=>ws.close();}catch(e){$('connection').textContent=t('no_connection');if(state.me&&generation===state.generation)setTimeout(()=>{if(generation===state.generation&&state.me)connect();},10000);}}
 setInterval(()=>{if(state.me&&!document.hidden)refresh();},30000);$('me').onclick=()=>toast(state.me?.fullName||'');if($('login-lang')) $('login-lang').onclick=()=>$('lang').onclick();applyTranslations();(async()=>{if(location.protocol!=='https:'){$('login-error').textContent='Для входа откройте эту страницу через HTTPS.';return;}try{await start();}catch(e){logoutLocal();if(e.status===401)await signIn('web/windows');else $('login-error').textContent=e.message;}})();
 
 fetch("/messenger/design-tokens.json").then(r=>r.json()).then(tokens=>{designTokens=tokens;applyTokens();}).catch(()=>{});function applyTokens(){if(!designTokens)return;for(const [key,value]of Object.entries(designTokens[document.documentElement.dataset.theme]||designTokens.dark))document.documentElement.style.setProperty("--"+key,value);}
+setupFormatting();

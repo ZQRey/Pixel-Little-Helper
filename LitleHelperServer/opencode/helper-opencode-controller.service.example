@@ -1,0 +1,28 @@
+[Unit]
+Description=LitleHelper personal OpenCode worker controller
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+User=helper-opencode
+Group=helper-opencode
+SupplementaryGroups=docker
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+EnvironmentFile=/etc/helper-opencode/controller.env
+ExecStart=/usr/bin/python3 /opt/helper-opencode/worker-controller.py --directory ${WORKER_POOL_DIRECTORY} --token-file /etc/helper-opencode/controller.token --bind ${CONTROLLER_BIND} --port 4097 --idle-seconds 600 --max-running 4
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

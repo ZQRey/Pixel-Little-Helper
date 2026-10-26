@@ -1,0 +1,56 @@
+# Optional: docker compose -f docker-compose.yml -f docker-compose.ai.yml --profile ai-opencode up -d opencode
+name: pixel-little-helper
+services:
+  opencode-init:
+    image: ghcr.io/anomalyco/opencode@sha256:543fe6b18470c9e4787e9be9813c4d340fba5738085b833ea76fb330ddff514a
+    profiles: [ai-opencode]
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["mkdir -p /state/data /state/config /state/cache /state/home; chown -R 10001:10001 /state; chmod 700 /state /state/data /state/config /state/cache /state/home"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    volumes: [opencode-state:/state]
+    restart: "no"
+  opencode:
+    image: ghcr.io/anomalyco/opencode@sha256:543fe6b18470c9e4787e9be9813c4d340fba5738085b833ea76fb330ddff514a
+    profiles: [ai-opencode]
+    user: "10001:10001"
+    entrypoint: ["/bin/sh", "-ec"]
+    command: [": \"$${OPENCODE_SERVER_PASSWORD:?Set OPENCODE_SERVER_PASSWORD}\"; umask 077; exec opencode serve --hostname 0.0.0.0 --port 4096"]
+    working_dir: /state/home
+    environment:
+      HOME: /state/home
+      XDG_CONFIG_HOME: /state/config
+      XDG_DATA_HOME: /state/data
+      XDG_CACHE_HOME: /state/cache
+      OPENCODE_CONFIG: /etc/helper-opencode.json
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-}
+      OPENCODE_DISABLE_DEFAULT_PLUGINS: "true"
+      OPENCODE_DISABLE_MODELS_FETCH: "true"
+    volumes:
+      - opencode-state:/state
+      - ./opencode/opencode.json:/etc/helper-opencode.json:ro
+    # Intentionally no host ports, Docker socket or application-data mounts.
+    expose: ["4096"]
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=128m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 96
+    restart: unless-stopped
+    depends_on:
+      opencode-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "auth=$$(printf 'opencode:%s' \"$${OPENCODE_SERVER_PASSWORD}\" | base64 | tr -d '\\n'); wget -T 3 -t 1 -q -O /dev/null --header=\"Authorization: Basic $$auth\" http://127.0.0.1:4096/global/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+volumes:
+  opencode-state:

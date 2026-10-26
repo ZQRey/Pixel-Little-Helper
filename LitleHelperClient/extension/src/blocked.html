@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Защита PixelHelper — Переход заблокирован</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0F172A;
+      color: #F8FAFC;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background-color: #1E293B;
+      border: 2px solid #EF4444;
+      border-radius: 16px;
+      max-width: 560px;
+      width: 100%;
+      padding: 32px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+      text-align: center;
+    }
+    .icon {
+      font-size: 54px;
+      margin-bottom: 16px;
+      display: inline-block;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #F8FAFC;
+      margin-bottom: 12px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #94A3B8;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .details {
+      background-color: #0F172A;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 24px;
+      text-align: left;
+    }
+    .details-row {
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .details-row:last-child {
+      margin-bottom: 0;
+    }
+    .label {
+      color: #64748B;
+      font-weight: 600;
+      display: inline-block;
+      width: 80px;
+    }
+    .value {
+      color: #F1F5F9;
+      word-break: break-all;
+    }
+    .reason {
+      color: #F87171;
+      font-weight: 600;
+    }
+    .btn-group {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .btn-safe {
+      background-color: #2563EB;
+      color: #FFFFFF;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 12px 24px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .btn-safe:hover {
+      background-color: #1D4ED8;
+    }
+    .btn-danger {
+      background: transparent;
+      color: #94A3B8;
+      font-size: 12px;
+      padding: 8px;
+      border: none;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .btn-danger:hover {
+      color: #EF4444;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🛡️</div>
+    <h1>Переход заблокирован помощником PixelHelper</h1>
+    <p class="subtitle">
+      Интерактивный помощник обнаружил признаки фишинга или мошенничества на запрашиваемой веб-странице.
+    </p>
+
+    <div class="details">
+      <div class="details-row">
+        <span class="label">Узел:</span>
+        <span id="targetHost" class="value">—</span>
+      </div>
+      <div class="details-row">
+        <span class="label">Причина:</span>
+        <span id="targetReason" class="value reason">—</span>
+      </div>
+      <div class="details-row">
+        <span class="label">Ссылка:</span>
+        <span id="targetUrl" class="value">—</span>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn-safe" id="btnBack">🛡️ Вернуться назад в безопасность</button>
+      <button class="btn-danger" id="btnContinue">Я понимаю риски и хочу всё равно перейти на сайт</button>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const url = params.get('url') || '';
+    const host = params.get('host') || '';
+    const reason = params.get('reason') || 'Обнаружены подозрительные параметры';
+
+    document.getElementById('targetHost').textContent = host || (url ? new URL(url).hostname : 'Неизвестно');
+    document.getElementById('targetReason').textContent = reason;
+    document.getElementById('targetUrl').textContent = url;
+
+    document.getElementById('btnBack').addEventListener('click', () => {
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = 'about:blank';
+      }
+    });
+
+    document.getElementById('btnContinue').addEventListener('click', () => {
+      if (!url) return;
+      try {
+        const h = new URL(url).hostname.toLowerCase();
+        chrome.runtime.sendMessage({ type: 'allowHost', host: h }, () => {
+          window.location.href = url;
+        });
+      } catch (e) {
+        window.location.href = url;
+      }
+    });
+  </script>
+</body>
+</html>

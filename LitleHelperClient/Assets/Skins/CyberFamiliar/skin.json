@@ -1,0 +1,22 @@
+{
+  "id": "CyberFamiliar",
+  "displayName": "Кибер-дух (Cyber Familiar)",
+  "author": "PixelHelper",
+  "version": "1.0",
+  "spriteWidth": 96,
+  "spriteHeight": 96,
+  "scalingMode": "HighQuality",
+  "badgeAnchor": {
+    "x": 16,
+    "y": 14
+  },
+  "hatAnchor": {
+    "x": 8,
+    "y": -6
+  },
+  "frameIntervalsMs": {
+    "Twirl": 150,
+    "Sleep": 250,
+    "Offended": 450
+  }
+}

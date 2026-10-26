@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "share": "disabled",
+  "snapshot": false,
+  "permission": { "*": "deny" },
+  "agent": {
+    "litlehelper": {
+      "description": "LitleHelper text-only assistant",
+      "mode": "primary",
+      "steps": 1,
+      "permission": { "*": "deny" }
+    }
+  },
+  "mcp": {},
+  "plugin": []
+}

@@ -1,0 +1,16 @@
+{
+  "id": "Classic",
+  "displayName": "Классический",
+  "author": "PixelHelper",
+  "version": "1.0",
+  "spriteWidth": 48,
+  "spriteHeight": 48,
+  "badgeAnchor": { "x": 16, "y": 12 },
+  "hatAnchor": { "x": 8, "y": -4 },
+  "frameIntervalsMs": {
+    "Twirl": 150,
+    "Sleep": 250,
+    "Offended": 450,
+    "Default": 100
+  }
+}

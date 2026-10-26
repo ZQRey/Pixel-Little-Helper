@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>PixelHelper</AssemblyName>
-    <Version>1.2.52</Version>
+    <Version>1.2.69</Version>
     <ApplicationIcon>Assets\PixelHelper.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ServerGarbageCollection>false</ServerGarbageCollection>
@@ -25,7 +25,8 @@
     <Compile Remove="artifacts\**\*.cs" />
     <Compile Remove="tools\**\*.cs" />
     <InternalsVisibleTo Include="PixelHelper.Tests" />
-    <Resource Include="Assets\*.png" Exclude="Assets\preview.png" />
+    <Resource Include="Assets\**\*.png" Exclude="Assets\preview.png" />
+    <Resource Include="Assets\**\*.json" />
     <Resource Include="Assets\PixelHelper.ico" />
     <None Update="Assets\PixelHelper.ico" CopyToOutputDirectory="PreserveNewest" />
     <None Update="config.example.json" CopyToOutputDirectory="PreserveNewest" />

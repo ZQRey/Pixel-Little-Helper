@@ -9,6 +9,14 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (e.Args.Length > 0 && (e.Args[0].StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) ||
+                                  e.Args[0].StartsWith("edge-extension://", StringComparison.OrdinalIgnoreCase) ||
+                                  e.Args[0] == "--native-host"))
+        {
+            NativeMessagingHost.Run();
+            Shutdown();
+            return;
+        }
         if (e.Args.Contains("--update-service"))
         {
             System.ServiceProcess.ServiceBase.Run(new UpdateService()); Shutdown(); return;
@@ -26,8 +34,31 @@ public partial class App : Application
         }
         var appIcon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/PixelHelper;component/Assets/PixelHelper.ico")); appIcon.Freeze();
         EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler((sender,args) => { if (sender is Window window && ReferenceEquals(args.OriginalSource,window) && window.Icon==null) window.Icon=appIcon; }));
+        string? guardUrl = null;
+        for (int i = 0; i < e.Args.Length; i++)
+        {
+            if (e.Args[i] == "--guard-url" && i + 1 < e.Args.Length)
+            {
+                guardUrl = e.Args[i + 1];
+                break;
+            }
+            if (e.Args[i].StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                e.Args[i].StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                guardUrl = e.Args[i];
+                break;
+            }
+        }
         singleton = new Mutex(true, @"Local\PixelHelper-" + Environment.UserName, out bool created);
-        if (!created) { Shutdown(); return; }
+        if (!created)
+        {
+            if (!string.IsNullOrWhiteSpace(guardUrl))
+            {
+                WebGuardIpc.SendUrlToRunningInstance(guardUrl);
+            }
+            Shutdown();
+            return;
+        }
         DispatcherUnhandledException += (_, args) =>
         {
             Settings.Log(args.Exception);
@@ -37,7 +68,15 @@ public partial class App : Application
         };
         bool diagnostics = e.Args.Length == 2 && e.Args[0] == "--diagnostics";
         MainWindow = new PetWindow(diagnostics);
-        if (!diagnostics) NativeMethods.RegisterApplicationRestart(null, 0);
+        if (!diagnostics)
+        {
+            NativeMethods.RegisterApplicationRestart(null, 0);
+            WebGuardIpc.StartServer(url => Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).HandleGuardedUrl(url)));
+            if (!string.IsNullOrWhiteSpace(guardUrl))
+            {
+                Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).HandleGuardedUrl(guardUrl));
+            }
+        }
         MainWindow.Show();
         // Older updater watchers launch the GUI with SW_HIDE. Restore it without stealing focus.
         NativeMethods.ShowWindow(new System.Windows.Interop.WindowInteropHelper(MainWindow).Handle, 4);
@@ -88,6 +127,7 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e)
     {
+        WebGuardIpc.StopServer();
         singleton?.Dispose();
         base.OnExit(e);
     }

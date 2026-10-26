@@ -13,7 +13,7 @@ public sealed partial class PetWindow
         hub.SurveysUpdated += rows => Dispatcher.BeginInvoke(new Action(async () => {
             pendingSurveys=rows;
             if(surveyWindow!=null && !surveyWindow.Busy && !rows.Any(i=>i.Id==surveyWindow.SurveyId && i.State=="Pending")) surveyWindow.CloseFromServer();
-            if(menuOpen && !announcementVisible) ShowMenu();
+            RefreshMenuIfOpen();
             var due=rows.FirstOrDefault(i=>i.State=="Pending" && i.NextNoticeAt<=DateTime.UtcNow);
             if(due!=null && !openingSurvey && surveyWindow==null) await ShowSurvey(due);
         }));

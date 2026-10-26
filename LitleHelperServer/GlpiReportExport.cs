@@ -12,7 +12,7 @@ namespace LitleHelperServer;
 
 public static class GlpiReportExport
 {
-    static readonly CultureInfo Ru = CultureInfo.GetCultureInfo("ru-RU");
+    static CultureInfo Ru => ReportDeployment.Current.Culture;
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public static string Time(double? s) => s == null ? "Нет данных" : s < 60 ? s.Value.ToString("0.#", Ru) + " с" : s < 3600 ? (s.Value / 60).ToString("0.#", Ru) + " мин" : (s.Value / 3600).ToString("0.00", Ru) + " ч";
     static string Date(DateTime? d) => d.HasValue ? TimeZoneInfo.ConvertTimeFromUtc(d.Value, ReportMath.Zone).ToString("dd.MM.yyyy HH:mm", Ru) : "Нет данных";
@@ -32,7 +32,7 @@ public static class GlpiReportExport
     {
         public DateTime Generated { get; } = DateTime.UtcNow;
         public JsonElement Summary { get; } = JsonSerializer.SerializeToElement(ReportMath.Summary(tickets), Json);
-        public string Period => $"Период: {filter.From:dd.MM.yyyy} - {filter.To:dd.MM.yyyy}; отбор по дате {Basis(filter.Basis)}; Asia/Qyzylorda";
+        public string Period => $"Период: {filter.From:dd.MM.yyyy} - {filter.To:dd.MM.yyyy}; отбор по дате {Basis(filter.Basis)}; {ReportMath.Zone.Id}";
         public string Snapshot => "Срез данных: " + (data.TryGetProperty("syncedAt", out var s) && s.ValueKind == JsonValueKind.String && s.TryGetDateTime(out var d) ? Date(d) : "Нет данных");
         public Metric[] Metrics => [
             new("Заявки в выборке", tickets.Length, 9, tickets.Length.ToString(), "Соответствуют периоду и фильтрам"),
@@ -54,10 +54,27 @@ public static class GlpiReportExport
             return new("Время реакции на заявку", GlpiReportReaction.Labels, [new("Заявок", buckets.EnumerateArray().Select(b => Number(b,"count") ?? 0).ToArray(), "4169E1")]);
         }
         public string ReactionNote => GlpiReportReaction.Note + " Без корректных дат: " + (Number(data,"reactionMissing") ?? tickets.Count(t => t.AcceptanceSeconds == null)) + "." + (filter.Reaction.HasValue ? " Распределение показано до отбора по времени реакции; сводка и таблицы учитывают выбранный интервал." : "");
-        public Section[] Sections() => [Surveys(), People("technicians", "Специалисты"), People("requesters", "Заявители"),
+        public Section[] Sections() => [..ComparisonSections(), Surveys(), People("technicians", "Специалисты"), People("requesters", "Заявители"),
             new("Заявки", ["Заявка", "Заявитель", "Ответственный", "Статус", "Время исполнения", "Время жизни", "Работа", "Оценка"], tickets.Select(t => new object?[] {
                 $"#{t.Id} · {t.Title}\nСоздана: {Date(t.CreatedAt)}", t.Requesters.Length == 0 ? "Не указан" : string.Join("; ", t.Requesters.Select(a => a.Name)), t.Responsible?.Name ?? "Не определён", Status(t.Status),
                 Duration(t.ExecutionSeconds), Duration(t.LifetimeSeconds), Duration(t.EffortSeconds), t.Status == 6 ? (object?)t.CurrentScore ?? "Нет оценок" : "—" }).ToArray())];
+        IEnumerable<Section> ComparisonSections()
+        {
+            if (!data.TryGetProperty("comparison",out var c) || c.ValueKind != JsonValueKind.Object) yield break;
+            var rows = new List<object?[]>();
+            foreach(var m in c.GetProperty("metrics").EnumerateArray()) {
+                string unit=Text(m,"unit");double? current=Number(m,"current"),previous=Number(m,"previous"),delta=Number(m,"delta"),percent=Number(m,"percent");
+                object Value(double? n)=>unit=="seconds"?Duration(n):unit=="score"?Score(n):n.HasValue?(object)n.Value:"Нет данных";
+                string difference=delta.HasValue?(delta>0?"+":delta<0?"−":"")+(unit=="seconds"?Time(Math.Abs(delta.Value)):Math.Abs(delta.Value).ToString("0.##",Ru))+(unit=="score"?" балл.":""):"Нет данных";
+                string change=!delta.HasValue?"Недостаточно данных":unit=="score"?"В баллах":percent.HasValue?(percent>0?"+":"")+percent.Value.ToString("0.#",Ru)+"%":unit=="count"?"Ранее не было":"База сравнения — 0";
+                rows.Add([Text(m,"label"),Value(current),Value(previous),difference,change,Number(m,"currentSamples") is double n? $"{n} / {Number(m,"previousSamples")}":"—"]);
+            }
+            string Period(string a,string b)=>Text(c,a)+" — "+Text(c,b);
+            yield return new("Сравнение периодов",["Показатель","Текущий: "+Period("currentFrom","currentTo"),"Сравнение: "+Period("previousFrom","previousTo"),"Разница","Изменение","N текущ./сравн."],rows.ToArray());
+            var notes = new List<object?[]> { new object?[]{"Правило",Text(c,"rule")}, new object?[]{"Методика",Text(c,"note")} };
+            if(!string.IsNullOrWhiteSpace(Text(c,"warning")))notes.Add(["Ограничения",Text(c,"warning")]);
+            yield return new("Условия сравнения",["Параметр","Описание"],notes.ToArray());
+        }
         Section Surveys()
         {
             if (!data.TryGetProperty("surveyReport",out var report)) return new("Контроль обязательных оценок",["Состояние"],[]);
@@ -136,7 +153,7 @@ public static class GlpiReportExport
     public static byte[] Xlsx(JsonElement data,ReportTicket[] rows,ReportFilter filter)
     {
         var m=new Model(data,rows,filter); var report=new Sheet("Отчёт",[40,30,30,22,26,26,23,22]);
-        report.Band(2,"Статистика и оценки",1); report.Band(3,"Сформирован: "+Date(m.Generated)+" · Asia/Qyzylorda",8); report.Band(4,m.Period,8); report.Band(5,Filters(filter),8); report.Heights[5]=36; report.Band(6,m.Snapshot,8);
+        report.Band(2,"Статистика и оценки",1); report.Band(3,"Сформирован: "+Date(m.Generated)+" · "+ReportMath.Zone.Id,8); report.Band(4,m.Period,8); report.Band(5,Filters(filter),8); report.Heights[5]=36; report.Band(6,m.Snapshot,8);
         var starts=new[]{0,3,6}; var ends=new[]{2,5,7};
         for(int i=0;i<6;i++) { var metric=m.Metrics[i]; int r=i<3?8:12,c=starts[i%3],end=ends[i%3];
             foreach(var (offset,v,style) in new[]{(0,(object?)metric.Label,2),(1,metric.Value??"Нет данных",metric.Style),(2,(object?)metric.Note,8)}) {
@@ -191,7 +208,7 @@ public static class GlpiReportExport
         lock(FontGate){if(!fontsReady){GlobalFontSettings.FontResolver=new ReportFontResolver();fontsReady=true;}}
         var m=new Model(data,rows,filter);using var doc=new PdfDocument();doc.Info.Title="Статистика и оценки";doc.Info.CreationDate=m.Generated;
         using(var layout=new PdfLayout(doc,m,filter)){layout.Summary();foreach(var section in m.Sections())layout.Table(section);}
-        var footerFont=new XFont("ReportSans",8);for(int i=0;i<doc.Pages.Count;i++){using var g=XGraphics.FromPdfPage(doc.Pages[i],XGraphicsPdfPageOptions.Append);g.DrawString($"Сформирован: {Date(m.Generated)} · Asia/Qyzylorda",footerFont,XBrushes.Gray,28,575);g.DrawString($"{i+1} / {doc.Pages.Count}",footerFont,XBrushes.Gray,760,575);}
+        var footerFont=new XFont("ReportSans",8);for(int i=0;i<doc.Pages.Count;i++){using var g=XGraphics.FromPdfPage(doc.Pages[i],XGraphicsPdfPageOptions.Append);g.DrawString($"Сформирован: {Date(m.Generated)} · {ReportMath.Zone.Id}",footerFont,XBrushes.Gray,28,575);g.DrawString($"{i+1} / {doc.Pages.Count}",footerFont,XBrushes.Gray,760,575);}
         using var stream=new MemoryStream();doc.Save(stream,false);return stream.ToArray();
     }
     sealed class PdfLayout:IDisposable
@@ -211,7 +228,7 @@ public static class GlpiReportExport
         void Note(string text){var lines=Wrap(text,small,Width);Ensure(lines.Count*12+8);Text(text,small,Left,y,Width);y+=lines.Count*12+8;}
         public void Summary()
         {
-            Note("Сформирован: "+Date(model.Generated)+" · Asia/Qyzylorda. "+model.Snapshot);Note(Filters(filter));
+            Note("Сформирован: "+Date(model.Generated)+" · "+ReportMath.Zone.Id+". "+model.Snapshot);Note(Filters(filter));
             var metrics=model.Metrics;for(int i=0;i<6;i++){int col=i%3;if(col==0)Ensure(74);double x=Left+col*265;g.DrawRectangle(Pale,x,y,255,66);Text(metrics[i].Label,bold,x+10,y+6,235);Text(metrics[i].Display,new XFont("ReportSans",14,XFontStyle.Bold),x+10,y+25,235);Text(metrics[i].Note,small,x+10,y+47,235);if(col==2)y+=74;}
             Ensure(180);DrawChart(model.Timeline(),Left,y,385,165);DrawChart(model.Ratings(),Left+400,y,385,165);y+=176;
             Ensure(220);DrawChart(model.Reaction(),Left,y,Width,175);y+=187;Note(model.ReactionNote);Note(Method);

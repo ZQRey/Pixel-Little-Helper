@@ -6,8 +6,9 @@
   <meta name="color-scheme" content="dark">
   <title>Видеозвонок · PixelHelper</title>
   <link rel="icon" type="image/png" href="/messenger/app-icon.png">
-  <link rel="stylesheet" href="/messenger/call.css?v=1.2.52">
-  <script src="/messenger/call.js?v=1.2.52" defer></script>
+  <link rel="stylesheet" href="/messenger/call.css?v=1.2.59">
+  <script src="/messenger/media-access.js?v=media-fix-1"></script><script src="/messenger/livekit-client.umd.js" defer></script>
+  <script src="/messenger/call.js?v=media-fix-1" defer></script>
 </head>
 <body>
   <div class="call-wrapper">
@@ -48,6 +49,9 @@
           </div>
         </div>
       </div>
+
+      <!-- Multi-party Mesh Grid (for Group Calls) -->
+      <div id="group-grid" class="video-grid" hidden></div>
     </main>
 
     <!-- Bottom floating control panel -->
@@ -67,10 +71,34 @@
         <span class="label">Экран</span>
       </button>
 
+      <!-- Add participant button -->
+      <button id="btn-add-participant" class="control-btn" title="Добавить участника в звонок">
+        <span class="icon">➕</span>
+        <span class="label">Добавить</span>
+      </button>
+
+      <!-- Raise Hand button -->
+      <button id="btn-raise-hand" class="control-btn" title="Поднять руку ✋">
+        <span class="icon">✋</span>
+        <span id="btn-raise-hand-label" class="label">Рука</span>
+      </button>
+
+      <!-- Participants list button -->
+      <button id="btn-participants" class="control-btn" title="Список участников">
+        <span class="icon">👥</span>
+        <span id="btn-participants-label" class="label">Участники</span>
+      </button>
+
       <!-- Record button: visible ONLY for the caller (initiator) -->
       <button id="btn-record" class="control-btn record-btn" title="Запись видеозвонка на компьютер (папка «Видео»)" hidden>
         <span class="icon">⏺️</span>
         <span id="btn-record-label" class="label">Запись</span>
+      </button>
+
+      <!-- Device settings button -->
+      <button id="btn-device-settings" class="control-btn" title="Настройки микрофона и звука">
+        <span class="icon">⚙️</span>
+        <span class="label">Устройства</span>
       </button>
 
       <button id="btn-hangup" class="control-btn hangup-btn" title="Завершить звонок">
@@ -78,6 +106,59 @@
         <span class="label">Завершить</span>
       </button>
     </footer>
+
+    <!-- Participants roster modal -->
+    <dialog id="roster-modal" class="device-modal glass roster-modal">
+      <div class="device-modal-header">
+        <strong id="roster-modal-title">👥 Участники звонка</strong>
+        <button id="btn-close-roster-modal" class="modal-close-btn" title="Закрыть">✕</button>
+      </div>
+      <div class="device-modal-content">
+        <button id="btn-invite-from-roster" class="btn-primary-action" style="margin-bottom: 12px; width: 100%;">
+          ➕ Пригласить участника
+        </button>
+        <div id="roster-list" class="roster-list"></div>
+        <div id="host-actions" class="host-actions" hidden>
+          <button id="btn-end-for-all" class="btn-danger-action">
+            📞✕ Завершить звонок для всех
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Add participants modal -->
+    <dialog id="invite-modal" class="device-modal glass invite-modal">
+      <div class="device-modal-header">
+        <strong>➕ Добавить в звонок</strong>
+        <button id="btn-close-invite-modal" class="modal-close-btn" title="Закрыть">✕</button>
+      </div>
+      <div class="device-modal-content">
+        <div class="search-input-box">
+          <input type="text" id="invite-search-input" placeholder="Поиск по ФИО или логину…" autocomplete="off">
+        </div>
+        <div id="invite-candidates-list" class="invite-candidates-list">
+          <div class="candidates-loading">Загрузка списка пользователей…</div>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Device selection modal -->
+    <dialog id="device-modal" class="device-modal glass">
+      <div class="device-modal-header">
+        <strong>⚙️ Настройки звука</strong>
+        <button id="btn-close-device-modal" class="modal-close-btn" title="Закрыть">✕</button>
+      </div>
+      <div class="device-modal-content">
+        <label for="call-mic-select" class="device-label">Микрофон (устройство ввода):</label>
+        <select id="call-mic-select" class="device-select"></select>
+        <div class="mic-meter-container">
+          <span class="mic-meter-caption">Громкость микрофона:</span>
+          <div class="mic-meter-track">
+            <div id="call-mic-meter-fill" class="mic-meter-fill"></div>
+          </div>
+        </div>
+      </div>
+    </dialog>
 
     <!-- Notification toast -->
     <div id="toast" class="toast" role="status" hidden></div>

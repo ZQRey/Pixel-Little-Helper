@@ -12,6 +12,7 @@ namespace LitleHelperServer;
 
 public record TicketSurveyNotice(string Id, int TicketId, string Title, string Specialist, DateTime ExpiresAt, bool Mandatory = false, DateTime? DueAt = null, DateTime? NextNoticeAt = null, int DeferralsLeft = 0, string State = "Pending", string Error = "", bool Required = false);
 public record TicketSurveyAnswer(int Score, string? Comment, string RequestId);
+public record TicketSurveyCard(string State, TicketSurveyNotice? Notice = null, double? Score = null, string Message = "");
 public sealed class TicketSurveys(HelperDb db, GlpiReports reports, ReportGate gate, IConfiguration config, IHubContext<HelperHub> hub)
 {
     private string KeyFile => config["GlpiReports:BridgeKeyFile"] ?? "data/glpi-rating-bridge.key";
@@ -55,6 +56,44 @@ public sealed class TicketSurveys(HelperDb db, GlpiReports reports, ReportGate g
     private static bool Owner(TicketSurveyInvitation i, PanelUser u) => u.AuthSource == "AD" && Security.NormalizeAccount(i.Owner) == Security.NormalizeAccount(u.Username);
     private void Audit(string owner, string action, string detail) => db.AuditLogs.Add(new() { AdminUsername = owner, CommandType = "ticket_survey_" + action, CommandPayload = detail, Status = "Completed" });
     private static ReportTicket[] Rows(GlpiReportState state) => JsonSerializer.Deserialize<ReportTicket[]>(state.Payload) ?? [];
+    public async Task<TicketSurveyCard> ForTicket(PanelUser user, int requesterId, int ticketId, DateTime closedAt, int[] entities, CancellationToken ct)
+    {
+        var state = await reports.State(ct);
+        var ticket = Rows(state).SingleOrDefault(t => t.Id == ticketId);
+        // GLPI has already verified the live requester and closure in its own session.
+        // Refresh only when the snapshot is missing this newly closed ticket/cycle.
+        if (ticket == null || ticket.ClosedAt != closedAt) {
+            await reports.Sync(ct);
+            ticket = Rows(state).SingleOrDefault(t => t.Id == ticketId);
+        }
+        if (ticket == null || !entities.Contains(ticket.EntityId) || ticket.Requesters.FirstOrDefault()?.Id != requesterId
+            || user.AuthSource != "AD" || Security.NormalizeAccount(ticket.Requesters[0].Login) != Security.NormalizeAccount(user.Username))
+            throw new UnauthorizedAccessException("Оценка этой заявки недоступна");
+        if (ticket.Deleted || ticket.Status != 6 || ticket.ClosedAt != closedAt)
+            return new("Unavailable", Message: "Оценить можно только текущее закрытие заявки");
+        if (ticket.Assignees.Any(a => a.Id == requesterId) || ticket.Responsible?.Id == requesterId)
+            return new("Unavailable", Message: "Исполнитель не оценивает свою работу");
+        if (ticket.CurrentScore != null) return new("Answered", Score: ticket.CurrentScore, Message: "Ваша оценка сохранена в GLPI");
+        if (ticket.Responsible == null || !ReportMath.IsTechnician(ticket.Responsible))
+            return new("Unavailable", Message: "Для заявки не определён ответственный техник или супер администратор");
+        if (closedAt.AddDays(14) <= DateTime.UtcNow) return new("Expired", Message: "Истекли 14 дней после закрытия заявки");
+        if (!state.SurveysEnabled) return new("Unavailable", Message: "Приём оценок временно отключён");
+        var invite = await db.TicketSurveyInvitations.SingleOrDefaultAsync(i => i.Source == reports.Source && i.TicketId == ticketId, ct);
+        if (invite == null) {
+            await reports.ReconcileInvitations(state,Rows(state),ct);
+            invite = await db.TicketSurveyInvitations.SingleOrDefaultAsync(i => i.Source == reports.Source && i.TicketId == ticketId, ct);
+        }
+        if (invite == null) return new("Unavailable", Message: "Для этого закрытия приглашение на оценку не создавалось");
+        if (!Owner(invite,user) || invite.RequesterId != requesterId) throw new UnauthorizedAccessException("Опрос недоступен");
+        if (invite.ClosedAt != closedAt || !SurveyPolicy.Active(invite)) {
+            if (invite.State == "Answered" && invite.ClosedAt == closedAt && invite.PendingScore is >= 1 and <= 5)
+                return new("Answered", Score: invite.PendingScore, Message: "Ваша оценка сохранена в GLPI");
+            return new("Unavailable", Message: "Опрос завершён. Старый ответ не переносится на повторное закрытие");
+        }
+        return new(invite.State, Notice(invite,ticket,SurveyPolicy.Read(state)));
+    }
+    public string GlpiSurveyUrl => new UriBuilder(reports.Source[..reports.Source.LastIndexOf("/apirest.php", StringComparison.OrdinalIgnoreCase)]
+        + "/plugins/helperreports/front/surveys.php") { Scheme = "https", Port = 443 }.Uri.AbsoluteUri;
     private static TicketSurveyNotice Notice(TicketSurveyInvitation i, ReportTicket t, SurveyPolicy p)
     {
         var next=i.NextNoticeAt;
@@ -205,21 +244,29 @@ public sealed class TicketSurveys(HelperDb db, GlpiReports reports, ReportGate g
             var online = await db.Computers.Where(c => c.IsOnline && c.ConnectionId != null).ToListAsync(ct);
             foreach (var i in invites) {
                 bool mandatory = p.Mandatory && i.Mandatory;
-                if (i.LastSentAt.HasValue && now < (mandatory ? p.AfterBusinessMinutes(i.LastSentAt.Value,p.ReminderMinutes) : i.LastSentAt.Value.AddDays(1))) continue;
+                // A successfully queued SignalR event is not an acknowledgement.
+                // Retry native delivery until Claim confirms a displayed form.
+                if (i.LastSentAt.HasValue && now < i.LastSentAt.Value.AddMinutes(1)) continue;
                 if ((i.ExpiresAt <= now) || (!mandatory && i.Notices >= 3) || mandatory && !p.Working(now)) continue;
                 var t = rows.SingleOrDefault(t => t.Id == i.TicketId && SurveyPolicy.Eligible(i,t)); if (t == null) continue;
                 bool sent=false;
                 foreach (var c in online.Where(c => Security.NormalizeAccount(c.CurrentUser) == Security.NormalizeAccount(i.Owner))) {
                     var verified = await AgentUserSessions.UserAsync(c,db); if (verified == null || !Owner(i,verified)) continue;
+                    // Older clients show a text toast rather than a native queue.
+                    // Preserve their existing reminder interval to avoid toast spam.
+                    if (!SurveyClients.SupportsQueue(c.ConnectionId) && i.LastSentAt.HasValue
+                        && now < (mandatory ? p.AfterBusinessMinutes(i.LastSentAt.Value,p.ReminderMinutes) : i.LastSentAt.Value.AddDays(1))) continue;
                     var client = hub.Clients.Client(c.ConnectionId!);
                     await client.SendAsync("TicketSurveyAvailable",Notice(i,t,p),ct);
-                    if (i.Notices == 0 || i.NextNoticeAt <= now) await client.SendAsync("TicketReplyNotice", new TicketReplyNotice(i.TicketId,t.Title,"Поддержка","Заявка закрыта. Оцените результат от 1 до 5 звёзд в меню помощника «Оценить результат ★»."),ct);
+                    if (!SurveyClients.Supports(c.ConnectionId)) await client.SendAsync("TicketReplyNotice", new TicketReplyNotice(i.TicketId,t.Title,"Поддержка","Заявка закрыта. Нажмите «Оценить результат ★» в меню помощника — откроется страница GLPI. " + GlpiSurveyUrl + "?ticket=" + i.TicketId),ct);
                     sent=true;
                 }
                 // Sending is not proof of delivery. Only Claim/Acknowledge starts the answer deadline.
                 if(sent) {
                     i.LastSentAt = now;
-                    if(!mandatory) {i.Notices++;i.NextNoticeAt=now.AddDays(1);}
+                    // Only Claim acknowledges an actual displayed form and advances
+                    // Notices/NextNoticeAt. Advancing here hid the native window:
+                    // the client polled after delivery and found nothing due.
                 }
             }
             await db.SaveChangesAsync(ct);
@@ -231,6 +278,11 @@ public static class GlpiReportEndpoints
 {
     public static void MapGlpiReports(this WebApplication app)
     {
+        app.MapGet("/api/reports/glpi/context",()=>Results.Ok(ReportDeployment.Presentation())).RequireAuthorization();
+        app.MapGet("/api/reports/glpi/organization",(ReportOrganizationStore store)=>Results.Ok(store.View())).RequireAuthorization("reports.glpi.settings");
+        app.MapPost("/api/reports/glpi/organization",(ReportOrganizationUpdate input,ReportOrganizationStore store)=>{
+            store.Save(input);return Results.Ok(new {saved=true,restartRequired=true});
+        }).RequireAuthorization("reports.glpi.settings").RequireRateLimiting("registration");
         app.MapGet("/api/reports/glpi", async (HttpRequest request, ClaimsPrincipal p, HelperDb db, GlpiReports reports, CancellationToken ct) =>
             Results.Ok(await reports.Report(await db.Users.AsNoTracking().SingleAsync(u => u.Username == p.Identity!.Name, ct), ReportFilter.Parse(request.Query), ct))).RequireAuthorization("reports.glpi.view");
         app.MapPost("/api/reports/glpi/sync", async (GlpiReports reports, CancellationToken ct) => { await reports.Sync(ct); return Results.Ok(new { ok = true }); }).RequireAuthorization("reports.glpi.settings").RequireRateLimiting("registration");
@@ -253,7 +305,7 @@ public static class GlpiReportEndpoints
                 } if (change.Enabled) state.SurveysFrom ??= DateTime.UtcNow;
                 var button = await db.Buttons.SingleOrDefaultAsync(b => b.SystemKey == "ticket-surveys", ct);
                 if (button == null && change.Enabled) { button = new() { SystemKey = "ticket-surveys", IsSystem = true, Title = "Оценить результат ★", ActionType = "open_url", OrderIndex = 10001, IconName = "ticket" }; db.Buttons.Add(button); }
-                if (button != null) { button.IsActive = change.Enabled; button.Payload = config["GlpiReports:PanelUrl"] ?? "https://helper.gp1.loc/?page=surveys"; }
+                if (button != null) { button.IsActive = change.Enabled; button.ActionType = "open_url"; button.Payload = surveys.GlpiSurveyUrl; }
                 db.AuditLogs.Add(new() { AdminUsername = p.Identity!.Name!, CommandType = "glpi_surveys_settings", CommandPayload = change.Enabled ? "enabled" : "paused", Status = "Completed", Result = "Старые закрытия не опрашиваются" });
                 await db.SaveChangesAsync(ct); await SystemButtons.NotifyAsync(db, hub); return Results.Ok(new { state.SurveysEnabled, state.SurveysFrom, policy = SurveyPolicy.Read(state) });
             } finally { gate.Sync.Release(); }

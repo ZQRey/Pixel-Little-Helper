@@ -44,6 +44,13 @@ public sealed class Settings
     public string ChatBackground { get; set; } = "Dots";
     public string? ChatBackgroundImage { get; set; }
     public double ChatBackgroundDim { get; set; } = .35;
+    public string SelectedSkinId { get; set; } = "Classic";
+    public bool WebGuardEnabled { get; set; } = true;
+    public List<string> WebGuardWhitelist { get; set; } = new();
+    public List<string> WebGuardBlacklist { get; set; } = new();
+    public string? PreferredBrowserPath { get; set; }
+    public string? PreferredBrowserName { get; set; }
+    public bool BrowserPromptShown { get; set; }
     internal bool EnsureClientKey()
     {
         string? machineKey = MachineIdentity.Read(ServerUrl);

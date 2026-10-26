@@ -287,6 +287,7 @@ public static class EmergencyTests
                 null!,
                 settings,
                 ticketGate,
+                null,
                 httpFactory
             );
 
@@ -446,6 +447,59 @@ public static class EmergencyTests
             {
                 Check(ex.Message.Contains("отключён"), "hub rejects trigger when AllowClientTrigger and AllowStandalone are disabled");
             }
+
+            // Branch-isolated Code Blue and Specialist Call test
+            var branchA = await db.Branches.FirstAsync();
+            var branchB = await db.Branches.OrderByDescending(b => b.Id).FirstAsync();
+            var docA = new PanelUser { Username = "doc-branch-a", FullName = "Доктор А", Role = Roles.User, PasswordHash = "!AD" };
+            var docB = new PanelUser { Username = "doc-branch-b", FullName = "Доктор Б", Role = Roles.User, PasswordHash = "!AD" };
+            db.Users.AddRange(docA, docB);
+            var compA = new Computer { MachineName = "PC-DOC-A", CurrentUser = docA.Username, CurrentUserFullName = docA.FullName, BranchId = branchA.Id, IsOnline = true, ConnectionId = "conn-a" };
+            var compB = new Computer { MachineName = "PC-DOC-B", CurrentUser = docB.Username, CurrentUserFullName = docB.FullName, BranchId = branchB.Id, IsOnline = true, ConnectionId = "conn-b" };
+            db.Computers.AddRange(compA, compB);
+            await db.SaveChangesAsync();
+            AgentUserSessions.BindVerified("conn-a", docA);
+            AgentUserSessions.BindVerified("conn-b", docB);
+
+            var branchOpts = customOpts with
+            {
+                CodeBlueBranchUsers = new()
+                {
+                    [branchA.Id.ToString()] = new() { docA.Username },
+                    [branchB.Id.ToString()] = new() { docB.Username }
+                },
+                Departments = new()
+                {
+                    new()
+                    {
+                        Id = 1,
+                        Name = "Хирургия",
+                        SpecialistTitle = "Хирург",
+                        BranchResponsibleUsers = new()
+                        {
+                            [branchA.Id.ToString()] = new() { docA.Username },
+                            [branchB.Id.ToString()] = new() { docB.Username }
+                        }
+                    }
+                }
+            };
+            settings.SaveEmergency(branchOpts);
+
+            // Trigger Code Blue from Branch A
+            var blueTargetsA = await EmergencyRecipients.TargetMachines(new EmergencyAlertNotice("CODE_BLUE", "Код синий", "101", null, null, null, null, 30, null, null), branchA.Id, db, settings, CancellationToken.None);
+            Check(blueTargetsA.Count == 1 && blueTargetsA[0].MachineName == "PC-DOC-A", "Code Blue in Branch A targets only Branch A specialists");
+
+            // Trigger Code Blue from Branch B
+            var blueTargetsB = await EmergencyRecipients.TargetMachines(new EmergencyAlertNotice("CODE_BLUE", "Код синий", "201", null, null, null, null, 30, null, null), branchB.Id, db, settings, CancellationToken.None);
+            Check(blueTargetsB.Count == 1 && blueTargetsB[0].MachineName == "PC-DOC-B", "Code Blue in Branch B targets only Branch B specialists");
+
+            // Trigger Specialist Call for Surgery in Branch A
+            var surgTargetsA = await EmergencyRecipients.TargetMachines(new EmergencyAlertNotice("SPECIALIST_CALL", "Вызов хирурга", "101", null, null, null, null, 30, null, "Хирургия"), branchA.Id, db, settings, CancellationToken.None);
+            Check(surgTargetsA.Count == 1 && surgTargetsA[0].MachineName == "PC-DOC-A", "Specialist call in Branch A targets only Branch A department specialists");
+
+            // Trigger Specialist Call for Surgery in Branch B
+            var surgTargetsB = await EmergencyRecipients.TargetMachines(new EmergencyAlertNotice("SPECIALIST_CALL", "Вызов хирурга", "201", null, null, null, null, 30, null, "Хирургия"), branchB.Id, db, settings, CancellationToken.None);
+            Check(surgTargetsB.Count == 1 && surgTargetsB[0].MachineName == "PC-DOC-B", "Specialist call in Branch B targets only Branch B department specialists");
 
             Console.WriteLine("ALL EMERGENCY INTEGRATION CHECKS PASSED!");
         }

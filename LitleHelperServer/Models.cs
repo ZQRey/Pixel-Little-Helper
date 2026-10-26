@@ -16,6 +16,7 @@ public class Computer
     public string CurrentUser { get; set; } = "";
     public string CurrentUserFullName { get; set; } = "";
     public bool SupportsSystemButtons { get; set; }
+    public bool SupportsAiDiagnostics { get; set; }
     public string IpAddress { get; set; } = "";
     public string OsVersion { get; set; } = "";
     public bool IsOnline { get; set; }
@@ -192,6 +193,10 @@ public class ChatPollVote
 }
 public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 {
+    public DbSet<AiSession> AiSessions => Set<AiSession>();
+    public DbSet<AiMessage> AiMessages => Set<AiMessage>();
+    public DbSet<AiDiagnosticCheck> AiDiagnosticChecks => Set<AiDiagnosticCheck>();
+    public DbSet<AiRequestLog> AiRequestLogs => Set<AiRequestLog>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<ChatFile> ChatFiles => Set<ChatFile>();
     public DbSet<ChatGroupRestriction> ChatGroupRestrictions => Set<ChatGroupRestriction>();
@@ -225,6 +230,13 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<SurveyAdminAlert> SurveyAdminAlerts => Set<SurveyAdminAlert>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        b.Entity<AiSession>().HasIndex(s => new { s.OwnerUserId, s.WindowInstanceId }).IsUnique();
+        b.Entity<AiMessage>().HasIndex(m => new { m.SessionId, m.ClientMessageId }).IsUnique();
+        b.Entity<AiMessage>().HasIndex(m => new { m.SessionId, m.Sequence }).IsUnique();
+        b.Entity<AiMessage>().HasOne<AiSession>().WithMany().HasForeignKey(m => m.SessionId).OnDelete(DeleteBehavior.Cascade);
+        b.Entity<AiDiagnosticCheck>().HasIndex(m => new { m.SessionId, m.ClientRequestId }).IsUnique();
+        b.Entity<AiDiagnosticCheck>().HasOne<AiSession>().WithMany().HasForeignKey(m => m.SessionId).OnDelete(DeleteBehavior.Cascade);
+        b.Entity<AiRequestLog>().HasIndex(m => new { m.OwnerUserId, m.CreatedAt });
         b.Entity<ChatGroupMember>().HasKey(m => new { m.GroupId, m.UserId });
         b.Entity<ChatGroupDeparture>().HasKey(m => new { m.GroupId, m.UserId });
         b.Entity<ChatGroup>().HasOne<PanelUser>().WithMany().HasForeignKey(g => g.OwnerId).OnDelete(DeleteBehavior.Restrict);
@@ -251,7 +263,7 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
         b.Entity<KnowledgeArticle>().HasIndex(x => x.Category);
     }
 }
-public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false);
+public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false);
 public record CommandEnvelope(string TaskId, string Type, string Payload);
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);

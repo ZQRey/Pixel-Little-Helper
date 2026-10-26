@@ -190,7 +190,10 @@ public class VideoCallWindow : Window
                     args.PermissionKind == CoreWebView2PermissionKind.Microphone ||
                     args.PermissionKind == CoreWebView2PermissionKind.Notifications)
                 {
-                    args.State = CoreWebView2PermissionState.Allow;
+                    args.State = Uri.TryCreate(args.Uri, UriKind.Absolute, out var origin) &&
+                        Uri.Compare(origin, new Uri(CallServerAddress.Secure(serverAddress)), UriComponents.SchemeAndServer,
+                            UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) == 0
+                        ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
                 }
             };
 
@@ -200,8 +203,8 @@ public class VideoCallWindow : Window
                 Dispatcher.Invoke(Close);
             };
 
-            string host = serverAddress.TrimEnd('/');
-            string url = $"{host}/messenger/call.html?peer={peerId}&video={(isVideo ? 1 : 0)}&caller={(isCaller ? 1 : 0)}&user={currentUserId}&name={Uri.EscapeDataString(targetName)}&port={CallRecordingReceiver.LocalPort}&v=1.2.52";
+            string host = CallServerAddress.Secure(serverAddress);
+            string url = $"{host}/messenger/call.html?peer={peerId}&video={(isVideo ? 1 : 0)}&caller={(isCaller ? 1 : 0)}&user={currentUserId}&name={Uri.EscapeDataString(targetName)}&port={CallRecordingReceiver.LocalPort}&v=1.2.69";
             if (!string.IsNullOrEmpty(callId))
             {
                 url += $"&callId={Uri.EscapeDataString(callId)}";

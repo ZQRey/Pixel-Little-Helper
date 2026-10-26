@@ -1,0 +1,9 @@
+# Optional server-side connection to the separately installed host controller.
+# The token file is a dedicated secret, not the OpenCode password or a model key.
+services:
+  server:
+    environment:
+      Ai__WorkerControllerUrl: ${AI_WORKER_CONTROLLER_URL:?Set the private host controller URL}
+      Ai__WorkerControllerTokenFile: /run/helper-ai-controller/token
+    volumes:
+      - ${AI_WORKER_CONTROLLER_TOKEN_FILE:?Set a dedicated readable controller token file}:/run/helper-ai-controller/token:ro

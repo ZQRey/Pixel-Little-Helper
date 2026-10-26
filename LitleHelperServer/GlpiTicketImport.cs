@@ -8,13 +8,15 @@ public class GlpiImportHealth { public DateTime? LastPollAt {get;set;} public st
 public class GlpiTicketImport(HelperDb db,GlpiService glpi,IntegrationSettings settings,TicketManagementGate gate,GlpiImportHealth health)
 {
     internal static string Plain(string html)=>WebUtility.HtmlDecode(Regex.Replace(Regex.Replace(html,@"</?(?:p|div|br|li|tr)\b[^>]*>","\n",RegexOptions.IgnoreCase),"<[^>]*>","",RegexOptions.Singleline)).Trim();
+    public static string StateKey(string importSource) =>
+        "glpi-import:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(importSource)));
     public async Task<int> PollAsync(CancellationToken token)
     {
         if(!settings.GlpiImport().Enabled || !settings.Telegram().Enabled)return 0;
         await gate.Semaphore.WaitAsync(token);
         try
         {
-            string key="glpi-import:"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(glpi.ImportSource)));
+            string key=StateKey(glpi.ImportSource);
             var cursor=await db.TelegramBotStates.FindAsync([key],token);
             if(cursor==null)
             {
@@ -32,19 +34,22 @@ public class GlpiTicketImport(HelperDb db,GlpiService glpi,IntegrationSettings s
                         int status=GlpiService.Number(data.GetProperty("status"));
                         if(status<5)
                         {
-                            int location=data.TryGetProperty("locations_id",out var loc)?GlpiService.Number(loc):0;
-                            if(location>0)locations??=await glpi.ImportLocationsAsync(token);
-                            int? branchId=null;var visited=new HashSet<int>();var leaf=locations?.FirstOrDefault(l=>l.Id==location);int parent=location;
-                            while(parent>0&&visited.Add(parent)){if(options.LocationBranches?.TryGetValue(parent,out int b)==true){branchId=b;break;}parent=locations?.FirstOrDefault(l=>l.Id==parent)?.ParentId??0;}
-                            var branch=branchId==null?null:await db.Branches.FirstOrDefaultAsync(b=>b.Id==branchId&&b.IsActive,token);
-                            var assignees=await glpi.AssigneesAsync(id,token);
-                            var ticket=new TicketRecord{GlpiId=id,Username=await glpi.ImportRequesterAsync(id,token),MachineName="Через GLPI",Title=Plain(GlpiService.Text(data,"name")),Description=Plain(GlpiService.Text(data,"content")),BranchId=branch?.Id,BranchName=branch?.Name??"",Room=leaf!=null&&!(options.LocationBranches?.ContainsKey(leaf.Id)??false)?leaf.Name:"",Status=status.ToString(),AssignedGlpiUserId=assignees.FirstOrDefault(),SyncedAt=DateTime.UtcNow};
-                            await using var transaction=await db.Database.BeginTransactionAsync(token);
-                            db.Tickets.Add(ticket);db.TelegramDeliveries.Add(new(){Ticket=ticket});cursor.Offset=id;await db.SaveChangesAsync(token);await transaction.CommitAsync(token);imported++;
+                            if (!await db.Tickets.AnyAsync(t => t.GlpiId == id, token))
+                            {
+                                int location=data.TryGetProperty("locations_id",out var loc)?GlpiService.Number(loc):0;
+                                if(location>0)locations??=await glpi.ImportLocationsAsync(token);
+                                int? branchId=null;var visited=new HashSet<int>();var leaf=locations?.FirstOrDefault(l=>l.Id==location);int parent=location;
+                                while(parent>0&&visited.Add(parent)){if(options.LocationBranches?.TryGetValue(parent,out int b)==true){branchId=b;break;}parent=locations?.FirstOrDefault(l=>l.Id==parent)?.ParentId??0;}
+                                var branch=branchId==null?null:await db.Branches.FirstOrDefaultAsync(b=>b.Id==branchId&&b.IsActive,token);
+                                var assignees=await glpi.AssigneesAsync(id,token);
+                                var ticket=new TicketRecord{GlpiId=id,Username=await glpi.ImportRequesterAsync(id,token),MachineName="Через GLPI",Title=Plain(GlpiService.Text(data,"name")),Description=Plain(GlpiService.Text(data,"content")),BranchId=branch?.Id,BranchName=branch?.Name??"",Room=leaf!=null&&!(options.LocationBranches?.ContainsKey(leaf.Id)??false)?leaf.Name:"",Status=status.ToString(),AssignedGlpiUserId=assignees.FirstOrDefault(),SyncedAt=DateTime.UtcNow};
+                                await using var transaction=await db.Database.BeginTransactionAsync(token);
+                                db.Tickets.Add(ticket);db.TelegramDeliveries.Add(new(){Ticket=ticket});cursor.Offset=Math.Max(cursor.Offset, id);await db.SaveChangesAsync(token);await transaction.CommitAsync(token);imported++;
+                            }
                         }
                     }
                 }
-                cursor.Offset=id;await db.SaveChangesAsync(token);
+                cursor.Offset=Math.Max(cursor.Offset, id);await db.SaveChangesAsync(token);
             }
             health.Initialized=true;health.LastId=cursor.Offset;health.LastPollAt=DateTime.UtcNow;health.LastError="";return imported;
         } finally {gate.Semaphore.Release();}

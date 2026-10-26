@@ -21,6 +21,7 @@ public class SpecialistDepartmentConfig
     public string Color { get; set; } = "#2563eb";
     public List<string> ResponsibleUsers { get; set; } = new();
     public List<string> ResponsibleGroups { get; set; } = new();
+    public Dictionary<string, List<string>>? BranchResponsibleUsers { get; set; } = new();
 }
 public record EmergencyOptions(
     bool Enabled = false,
@@ -38,15 +39,20 @@ public record EmergencyOptions(
     bool BroadcastAllBranches = false,
     Dictionary<string, List<string>>? EmergencyCodeLanguages = null,
     List<string>? AllowedCodes = null,
-    Dictionary<string,List<string>>? CodeLaunchRoles = null
+    Dictionary<string,List<string>>? CodeLaunchRoles = null,
+    Dictionary<string, List<string>>? CodeBlueBranchUsers = null
 );
+
+public record SecurityOptions(bool WebGuardEnabled = true);
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
 {
     private readonly object gate = new();
     private readonly IDataProtector protector = protection.CreateProtector("LitleHelper.Integrations.v1");
     private string PathName => configuration["Integrations:SettingsFile"] ?? Path.Combine("data", "integrations.json");
-    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null);
+    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null, SecurityOptions? Security = null);
+    public SecurityOptions Security() { lock(gate) return ReadStored().Security ?? new(); }
+    public void SaveSecurity(SecurityOptions options) { lock(gate) Write(ReadStored() with { Security = options }); }
     public GlpiImportOptions GlpiImport() { lock(gate) return ReadStored().GlpiImport ?? new(); }
     public void SaveGlpiImport(GlpiImportOptions options)
     {
@@ -56,7 +62,27 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
     public CartridgeOptions Cartridge() { lock(gate) return ReadStored().Cartridge ?? new(); }
     public void SaveCartridge(CartridgeOptions options) { if(options.Enabled && string.IsNullOrWhiteSpace(options.ApiKey))throw new ArgumentException("Для включения интеграции задайте API-ключ."); lock(gate) Write(ReadStored() with { Cartridge = options }); }
     public EmergencyOptions Emergency() { lock(gate) return ReadStored().Emergency ?? new(); }
-    public void SaveEmergency(EmergencyOptions options) { EmergencyLanguages.Validate(options); lock(gate) Write(ReadStored() with { Emergency = options }); EmergencyDirectorySync.Request(); }
+    public void SaveEmergency(EmergencyOptions options)
+    {
+        EmergencyLanguages.Validate(options);
+        if (options.CodeBlueBranchUsers != null)
+        {
+            var aggregated = options.CodeBlueBranchUsers.Values.SelectMany(x => x).Distinct().ToList();
+            options = options with { CodeBlueResponsibleUsers = aggregated };
+        }
+        if (options.Departments != null)
+        {
+            foreach (var dept in options.Departments)
+            {
+                if (dept.BranchResponsibleUsers != null && dept.BranchResponsibleUsers.Count > 0)
+                {
+                    dept.ResponsibleUsers = dept.BranchResponsibleUsers.Values.SelectMany(x => x).Distinct().ToList();
+                }
+            }
+        }
+        lock(gate) Write(ReadStored() with { Emergency = options });
+        EmergencyDirectorySync.Request();
+    }
     public void SaveDepartmentMap(Dictionary<int,int> map) {lock(gate) Write(ReadStored() with {DepartmentMap=map});}
     public int? ExternalDepartmentId(int local) {lock(gate) return ReadStored().DepartmentMap is { } map && map.TryGetValue(local,out int value)?value:null;}
     public int? LocalDepartmentId(int external) {lock(gate) {

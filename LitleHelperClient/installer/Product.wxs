@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.52" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.69" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
-    <MajorUpgrade DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
     <MediaTemplate EmbedCab="yes" /><Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" /><Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="SERVERURL" Secure="yes" />
@@ -40,6 +40,41 @@
         <Component Id="ServerConnection" Guid="B3CF3359-C01D-48FC-95C2-111DCBEE9B6F" Win64="yes">
           <RegistryValue Root="HKLM" Key="Software\PixelHelper" Name="ServerUrl" Type="string" Value="[SERVERURL]" KeyPath="yes" />
         </Component>
+        <Component Id="WebGuardBrowserRegistration" Guid="5B73E1B9-45B1-4DF5-96BE-8608F87C9A44" Win64="yes">
+          <RegistryKey Root="HKLM" Key="Software\Clients\StartMenuInternet\PixelHelper">
+            <RegistryValue Type="string" Value="PixelHelper Web Guard" KeyPath="yes" />
+            <RegistryValue Key="Capabilities" Name="ApplicationDescription" Type="string" Value="Защита от фишинга и опасных ссылок PixelHelper" />
+            <RegistryValue Key="Capabilities" Name="ApplicationName" Type="string" Value="PixelHelper Web Guard" />
+            <RegistryValue Key="Capabilities\URLAssociations" Name="http" Type="string" Value="PixelHelperURL" />
+            <RegistryValue Key="Capabilities\URLAssociations" Name="https" Type="string" Value="PixelHelperURL" />
+            <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --guard-url &quot;%1&quot;" />
+          </RegistryKey>
+          <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PixelHelper" Type="string" Value="Software\Clients\StartMenuInternet\PixelHelper\Capabilities" />
+          <RegistryKey Root="HKLM" Key="Software\Classes\PixelHelperURL">
+            <RegistryValue Type="string" Value="PixelHelper Guard URL" />
+            <RegistryValue Name="FriendlyTypeName" Type="string" Value="PixelHelper Guard URL" />
+            <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --guard-url &quot;%1&quot;" />
+          </RegistryKey>
+        </Component>
+        <Component Id="BrowserExtensionPolicies" Guid="3F8A7D6E-5C4B-4E3A-9F2D-8B7C6E5A4D3C" Win64="yes">
+          <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Edge\ExtensionInstallForcelist">
+            <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="Software\Microsoft\Edge\NativeMessagingHosts\com.pixelhelper.webguard">
+            <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" KeyPath="yes" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="Software\Policies\Google\Chrome\ExtensionInstallForcelist">
+            <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="Software\Google\Chrome\NativeMessagingHosts\com.pixelhelper.webguard">
+            <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" />
+          </RegistryKey>
+          <RegistryKey Root="HKLM" Key="Software\Policies\YandexBrowser\ExtensionInstallForcelist">
+            <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
+          </RegistryKey>
+        </Component>
       </DirectoryRef>
     <Feature Id="Complete" Title="PixelHelper" Level="1">
       <ComponentGroupRef Id="PublishedFiles" />
@@ -47,6 +82,8 @@
       <ComponentRef Id="GlobalShortcut" />
       <ComponentRef Id="ServerConnection" />
       <ComponentRef Id="MachineStartup" />
+      <ComponentRef Id="WebGuardBrowserRegistration" />
+      <ComponentRef Id="BrowserExtensionPolicies" />
     </Feature>
     <CustomAction Id="CleanUserProfiles" FileKey="MainExecutable" ExeCommand="--cleanup-machine" Execute="deferred" Impersonate="no" Return="check" />
     <InstallExecuteSequence>

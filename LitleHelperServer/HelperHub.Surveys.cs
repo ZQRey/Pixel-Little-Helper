@@ -13,13 +13,27 @@ public partial class HelperHub
     public async Task<TicketSurveyNotice[]> GetTicketSurveys()
     {
         var computer = await Agent(); var user = await AgentUserSessions.UserAsync(computer, db);
+        SurveyClients.Register(Context.ConnectionId,queue:false);
         return user == null ? [] : await SurveyService.Pending(user, Context.ConnectionAborted, true);
     }
     public async Task AcknowledgeTicketSurvey(string id) => await SurveyService.Acknowledge(await SurveyUser(), id, Context.ConnectionAborted);
-    public async Task<bool> ClaimTicketSurvey(string id) => await SurveyService.Claim(await SurveyUser(),id,Context.ConnectionId,Context.ConnectionAborted);
+    public async Task<bool> ClaimTicketSurvey(string id)
+    {
+        bool claimed=await SurveyService.Claim(await SurveyUser(),id,Context.ConnectionId,Context.ConnectionAborted);
+        Context.GetHttpContext()!.RequestServices.GetRequiredService<ILogger<HelperHub>>()
+            .LogInformation("Survey native claim {SurveyId} on {Machine}: {Claimed}",id,Context.User?.Identity?.Name,claimed);
+        return claimed;
+    }
     public async Task<TicketSurveyNotice[]> GetAllTicketSurveys()
     {
         var computer=await Agent();var user=await AgentUserSessions.UserAsync(computer,db);
+        bool known = SurveyClients.SupportsQueue(Context.ConnectionId);
+        SurveyClients.Register(Context.ConnectionId);
+        if (!known) {
+            Context.GetHttpContext()!.RequestServices.GetRequiredService<ILogger<HelperHub>>()
+                .LogInformation("Survey queue registered on {Machine}; verified user {UserId}",computer.MachineName,user?.Id);
+            await Clients.Caller.SendAsync("OnButtonsUpdated", await Buttons(db,computer));
+        }
         return user==null ? [] : await SurveyService.Pending(user,Context.ConnectionAborted);
     }
     public async Task<object> AnswerTicketSurvey(string id, TicketSurveyAnswer answer) => await SurveyService.Answer(await SurveyUser(), id, answer, Context.ConnectionAborted);

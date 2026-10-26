@@ -8,3 +8,8 @@
 **/node_modules/
 scratch/
 *.log
+backups/
+*.bak*
+*.bak-*
+**/PixelHelper-release-keys/
+*signing*.pem

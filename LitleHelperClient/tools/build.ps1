@@ -7,6 +7,17 @@ $publish = Join-Path $output 'publish'
 New-Item -ItemType Directory -Force $output | Out-Null
 & $Dotnet publish (Join-Path $projectRoot 'PixelHelper.csproj') -c Release -r win-x64 --self-contained true -o $publish '-p:PublishSingleFile=false' '-p:PublishReadyToRun=false'
 if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+
+$extSrc = Join-Path $projectRoot 'extension'
+if (Test-Path (Join-Path $extSrc 'pack-extension.ps1')) {
+    & (Join-Path $extSrc 'pack-extension.ps1')
+    $publishExt = Join-Path $publish 'extension'
+    New-Item -ItemType Directory -Force $publishExt | Out-Null
+    Copy-Item (Join-Path $extSrc 'pixelhelper-webguard.crx') $publishExt -Force
+    Copy-Item (Join-Path $extSrc 'update.xml') $publishExt -Force
+    Copy-Item (Join-Path $extSrc 'com.pixelhelper.webguard.json') $publishExt -Force
+}
+
 if ($SkipMsi) { return }
 if (-not $WixBin) { throw 'Set -WixBin to the WiX 3.14 bin directory (heat, candle, light).' }
 if (Test-Path (Join-Path $WixBin 'bin\heat.exe')) { $WixBin = Join-Path $WixBin 'bin' }

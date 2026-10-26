@@ -43,6 +43,7 @@ public partial class GlpiService
             reportServiceIds.Clear();
             reportServiceIds.Add(FieldInt(fullSession, "glpiID"));
             reportServiceIds.Add(settings.ServiceUserId);
+            reportServiceIds.UnionWith(ReportDeployment.Current.ServiceUserIds);
             string timezone = Text(fullSession, "glpitimezone", "0");
             var sourceZone = TimeZoneInfo.FindSystemTimeZoneById(timezone is "0" or "" ? store.ReportingTimeZone : timezone);
             var tickets = await ReportAll("Ticket", session, ct);
@@ -62,7 +63,12 @@ public partial class GlpiService
                 string login = user.ValueKind == JsonValueKind.Undefined ? "" : Text(user, "name");
                 var ownProfiles = profileUsers.Where(p => FieldInt(p, "users_id") == id && (FieldInt(p, "entities_id") == entity || FieldInt(p, "entities_id") == 0 && FieldInt(p, "is_recursive") == 1))
                     .Select(p => profiles.GetValueOrDefault(FieldInt(p, "profiles_id"), "")).Distinct().ToArray();
-                return new(id, login, name.Length == 0 ? login : name, string.Join(", ", ownProfiles), reportServiceIds.Contains(id) || login.Equals("Telegram", StringComparison.OrdinalIgnoreCase));
+                bool? technicianProfile=ReportDeployment.Current.TechnicianProfileIds.Length==0 ? null
+                    : profileUsers.Any(p=>FieldInt(p,"users_id")==id
+                        && (FieldInt(p,"entities_id")==entity || FieldInt(p,"entities_id")==0 && FieldInt(p,"is_recursive")==1)
+                        && ReportDeployment.Current.TechnicianProfileIds.Contains(FieldInt(p,"profiles_id")));
+                return new(id, login, name.Length == 0 ? login : name, string.Join(", ", ownProfiles),
+                    reportServiceIds.Contains(id) || ReportDeployment.Current.IsService(id,login),technicianProfile);
             }
             bool Qualified(ReportActor a) => ReportTechnician(a);
             string web = settings.BaseUrl[..settings.BaseUrl.LastIndexOf("/apirest.php", StringComparison.OrdinalIgnoreCase)];

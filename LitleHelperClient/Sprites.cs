@@ -4,24 +4,64 @@ using System.Windows.Media.Imaging;
 
 namespace PixelHelper;
 
-internal enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, Joy, Sad, Surprise, Laugh, Think, Celebrate, Offended, Twirl, Dance, Workout, Charging, Facepalm, Flower, Cry, TurnBack, Shy, PetCat, PetDog }
-internal sealed class SpriteFrame
+public enum PetState { Idle, Sleep, Drag, Action, Greeting, Success, Error, Notice, Yawn, Wake, Busy, Dizzy, LookLeft, LookRight, LookUp, LookDown, LookUpLeft, LookUpRight, LookDownLeft, LookDownRight, Joy, Sad, Surprise, Laugh, Think, Celebrate, Offended, Twirl, Dance, Workout, Charging, Facepalm, Flower, Cry, TurnBack, Shy, PetCat, PetDog }
+public sealed class SpriteFrame
 {
     internal BitmapSource Image { get; }
     internal byte[] Pixels { get; }
     internal int Width => Image.PixelWidth;
     internal int Height => Image.PixelHeight;
-    internal SpriteFrame(string name)
+    internal SpriteFrame(BitmapSource source)
     {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.UriSource = new Uri($"pack://application:,,,/PixelHelper;component/Assets/{name}.png");
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.EndInit();
-        Image = new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
-        Image.Freeze();
+        Image = source is FormatConvertedBitmap fcb && fcb.DestinationFormat == PixelFormats.Bgra32
+            ? source
+            : new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        if (!Image.IsFrozen && Image.CanFreeze) Image.Freeze();
         Pixels = new byte[Width * Height * 4];
         Image.CopyPixels(Pixels, Width * 4, 0);
+    }
+    internal SpriteFrame(string name)
+    {
+        BitmapSource? loaded = LoadBitmap(name);
+        if (loaded == null)
+        {
+            loaded = BitmapSource.Create(48, 48, 96, 96, PixelFormats.Bgra32, null, new byte[48 * 48 * 4], 48 * 4);
+        }
+        Image = loaded;
+        if (!Image.IsFrozen && Image.CanFreeze) Image.Freeze();
+        Pixels = new byte[Width * Height * 4];
+        Image.CopyPixels(Pixels, Width * 4, 0);
+    }
+    private static BitmapSource? LoadBitmap(string name)
+    {
+        string[] candidateUris =
+        {
+            $"pack://application:,,,/PixelHelper;component/Assets/{name}.png",
+            $"pack://application:,,,/PixelHelper;component/Assets/Shared/{name}.png",
+            $"pack://application:,,,/PixelHelper;component/Assets/Shared/Badges/{name}.png",
+            $"pack://application:,,,/PixelHelper;component/Assets/Skins/Classic/{name}.png"
+        };
+        foreach (var uriStr in candidateUris)
+        {
+            try
+            {
+                var uri = new Uri(uriStr);
+                var streamInfo = Application.GetResourceStream(uri);
+                if (streamInfo != null)
+                {
+                    var bi = new BitmapImage();
+                    bi.BeginInit();
+                    bi.StreamSource = streamInfo.Stream;
+                    bi.CacheOption = BitmapCacheOption.OnLoad;
+                    bi.EndInit();
+                    var converted = new FormatConvertedBitmap(bi, PixelFormats.Bgra32, null, 0);
+                    converted.Freeze();
+                    return converted;
+                }
+            }
+            catch { }
+        }
+        return null;
     }
     internal bool Opaque(int x, int y) => x >= 0 && y >= 0 && x < Width && y < Height && Pixels[(y * Width + x) * 4 + 3] >= 20;
     internal IEnumerable<Rect> Runs(double left, double top, double scale)
@@ -71,18 +111,10 @@ internal sealed class FaceBadges
 }
 internal sealed class Sprites
 {
-    private readonly Dictionary<PetState, SpriteFrame[]> frames = new();
     internal static int FrameCount(PetState state) =>
         state == PetState.Idle || state == PetState.Charging ? 4 :
         state is PetState.Twirl or PetState.Dance or PetState.Workout ? 8 : 2;
-    internal Sprites()
-    {
-        foreach (var state in Enum.GetValues<PetState>())
-        {
-            int count = FrameCount(state);
-            frames[state] = Enumerable.Range(1, count).Select(i => new SpriteFrame($"{state.ToString().ToLowerInvariant()}_{i}")).ToArray();
-        }
-    }
-    internal SpriteFrame Get(PetState state, int frame) => frames[state][frame % frames[state].Length];
+    internal Sprites() { }
+    internal SpriteFrame Get(PetState state, int frame) => SkinManager.Instance.GetSpriteFrame(state, frame);
 }
 

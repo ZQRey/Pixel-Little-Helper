@@ -526,6 +526,13 @@ public static class Loc
             [AppLanguage.English] = "Papa didn't allow me to do this... 🥺",
             [AppLanguage.Chinese] = "爸爸不许我这么做…… 🥺"
         },
+        ["TraySkinTheme"] = new()
+        {
+            [AppLanguage.Russian] = "Тема помощника",
+            [AppLanguage.Kazakh] = "Көмекші тақырыбы",
+            [AppLanguage.English] = "Assistant Theme",
+            [AppLanguage.Chinese] = "助手主题"
+        },
         ["TraySoundProfile"] = new()
         {
             [AppLanguage.Russian] = "Оповещения и звук",

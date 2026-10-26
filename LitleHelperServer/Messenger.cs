@@ -71,7 +71,7 @@ public class ChatPresence
     public bool Online(int user) => GetStatus(user) != "offline";
 }
 [Authorize(AuthenticationSchemes = "Bearer")]
-public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence presence, MessengerSettings settings) : Hub
+public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence presence, MessengerSettings settings, CallSessionRegistry callRegistry, LiveKitService liveKit) : Hub
 {
     public async Task SetMessengerOpen(bool isOpen)
     {
@@ -87,11 +87,23 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
         bool isPsychologist = string.Equals(me.Role, Roles.Psychologist, StringComparison.OrdinalIgnoreCase) || me.FullName.Contains("психолог", StringComparison.OrdinalIgnoreCase) || me.Username.Contains("psychologist", StringComparison.OrdinalIgnoreCase) || me.Username.Contains("psiholog", StringComparison.OrdinalIgnoreCase);
         await Clients.Groups(users.Select(u=>"Chat:"+u)).SendAsync("Typing",new {peer=peer<0?peer:me.Id,userId=me.Id,me.FullName,isPsychologist,until=DateTime.UtcNow.AddSeconds(5)});
     }
-    // WebRTC Signaling
-    public async Task StartCall(int targetUserId, bool isVideo, string? callId = null)
+    // WebRTC Signaling with CallSessionRegistry and Connection-targeted routing
+    public async Task StartCall(int targetUserId, bool isVideo, string callId)
     {
         callId = string.IsNullOrWhiteSpace(callId) ? Guid.NewGuid().ToString("N") : callId;
         var me = await Messenger.UserAsync(db, Context.User!);
+        await ChatExtras.ValidatePeer(db, me.Id, targetUserId);
+
+        if (callRegistry.IsUserBusy(targetUserId, callId))
+        {
+            var targetUser = await db.Users.FindAsync(targetUserId);
+            string targetName = targetUser?.FullName ?? "Собеседник";
+            await Clients.Caller.SendAsync("CallRejected", callId, targetUserId, targetName, "busy");
+            return;
+        }
+
+        callRegistry.Create(callId, me.Id, me.Username, me.FullName, Context.ConnectionId, targetUserId, isVideo);
+
         await Clients.Group("Chat:" + targetUserId).SendAsync("IncomingCall", new {
             callId,
             callerId = me.Id,
@@ -101,7 +113,7 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
         });
     }
 
-    public async Task StartGroupCall(int groupId, bool isVideo, string? callId = null)
+    public async Task StartGroupCall(int groupId, bool isVideo, string callId)
     {
         callId = string.IsNullOrWhiteSpace(callId) ? Guid.NewGuid().ToString("N") : callId;
         var me = await Messenger.UserAsync(db, Context.User!);
@@ -111,6 +123,19 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
             .ToListAsync();
         var group = await db.ChatGroups.SingleOrDefaultAsync(g => g.Id == groupId);
         string groupName = group?.Name ?? "Групповой звонок";
+
+        callRegistry.Create(callId, me.Id, me.Username, me.FullName, Context.ConnectionId, 0, isVideo, groupId);
+
+        var allMembers = await db.ChatGroupMembers.Where(m => m.GroupId == groupId).Select(m => m.UserId).ToListAsync();
+        await Clients.Groups(allMembers.Select(id => "Chat:" + id)).SendAsync("GroupCallStateChanged", new {
+            active = true,
+            groupId,
+            callId,
+            isVideo,
+            participantCount = 1,
+            participants = new[] { new { userId = me.Id, fullName = me.FullName } }
+        });
+
         foreach (var memberId in members)
         {
             await Clients.Group("Chat:" + memberId).SendAsync("IncomingCall", new {
@@ -119,48 +144,472 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
                 callerName = me.FullName,
                 groupId,
                 groupName,
+                participantCount = 1,
                 isVideo
             });
         }
     }
 
-    public async Task AcceptCall(string callId, int callerId, object? sdp = null)
+    public async Task JoinGroupCall(string callId)
     {
         var me = await Messenger.UserAsync(db, Context.User!);
-        await Clients.Group("Chat:" + callerId).SendAsync("CallAccepted", callId, me.Id, me.FullName, sdp);
+        var session = callRegistry.Get(callId);
+        if (session == null)
+        {
+            throw new HubException("Групповой звонок не найден или уже завершён.");
+        }
+
+        if (session.GroupId != null)
+        {
+            int groupId = session.GroupId.Value;
+            bool isMember = await db.ChatGroupMembers.AnyAsync(m => m.GroupId == groupId && m.UserId == me.Id);
+            if (!isMember)
+            {
+                throw new HubException("Вы не являетесь участником данной группы.");
+            }
+
+            bool isRestricted = await db.ChatGroupRestrictions.AnyAsync(r => r.GroupId == groupId && r.UserId == me.Id && r.EndsAt > DateTime.UtcNow);
+            if (isRestricted)
+            {
+                throw new HubException("Ваш доступ к звонкам в этой группе временно ограничен.");
+            }
+        }
+        else if (session.IsAdHoc || session.InvitedUserIds.ContainsKey(me.Id) || session.Participants.ContainsKey(me.Id))
+        {
+            // Ad-hoc звонок, пользователь приглашён или уже участник
+        }
+        else
+        {
+            throw new HubException("Вы не приглашены в данный звонок.");
+        }
+
+        int maxParticipants = liveKit.IsEnabled ? 50 : 4;
+        if (!callRegistry.TryJoinGroup(callId, me.Id, me.Username, me.FullName, Context.ConnectionId, maxParticipants, out session, out var error))
+        {
+            throw new HubException(error ?? "Не удалось присоединиться к групповому звонку.");
+        }
+
+        if (session!.Participants.Count > 4 && liveKit.IsEnabled)
+        {
+            session.Mode = "livekit";
+        }
+
+        var others = session!.Participants.Values.Where(p => p.UserId != me.Id).ToList();
+        foreach (var p in others)
+        {
+            if (!string.IsNullOrEmpty(p.ConnectionId))
+            {
+                await Clients.Client(p.ConnectionId).SendAsync("ParticipantJoined", callId, new {
+                    userId = me.Id,
+                    fullName = me.FullName,
+                    username = me.Username,
+                    connectionId = Context.ConnectionId
+                });
+            }
+        }
+
+        await Clients.Caller.SendAsync("GroupCallJoined", callId, new {
+            groupId = session.GroupId,
+            isVideo = session.IsVideo,
+            mode = session.Mode,
+            isRecording = session.IsRecording,
+            recordingStartedBy = session.RecordingStartedBy,
+            participants = session.Participants.Values.Select(p => new {
+                userId = p.UserId,
+                fullName = p.FullName,
+                username = p.Username,
+                isCaller = p.UserId == session.CallerUserId,
+                handRaised = p.HandRaised
+            }).ToList()
+        });
+
+        if (session.GroupId != null)
+        {
+            int groupId = session.GroupId.Value;
+            var allMembers = await db.ChatGroupMembers.Where(m => m.GroupId == groupId).Select(m => m.UserId).ToListAsync();
+            await Clients.Groups(allMembers.Select(id => "Chat:" + id)).SendAsync("GroupCallStateChanged", new {
+                active = true,
+                groupId,
+                callId,
+                isVideo = session.IsVideo,
+                mode = session.Mode,
+                isRecording = session.IsRecording,
+                recordingStartedBy = session.RecordingStartedBy,
+                participantCount = session.Participants.Count,
+                participants = session.Participants.Values.Select(p => new { userId = p.UserId, fullName = p.FullName }).ToList()
+            });
+        }
     }
 
-    public async Task RejectCall(string callId, int callerId, string reason = "busy")
+    public async Task LeaveGroupCall(string callId)
     {
         var me = await Messenger.UserAsync(db, Context.User!);
-        await Clients.Group("Chat:" + callerId).SendAsync("CallRejected", callId, me.Id, me.FullName, reason);
+        await LeaveGroupCallInternal(callId, me.Id);
     }
 
-    public async Task SendIceCandidate(string callId, int targetUserId, object candidate, string sdpMid = "", int sdpMLineIndex = 0)
+    private async Task LeaveGroupCallInternal(string callId, int userId)
+    {
+        if (callRegistry.TryLeaveGroup(callId, userId, out var session, out int remainingCount))
+        {
+            if (session != null)
+            {
+                foreach (var p in session.Participants.Values)
+                {
+                    if (!string.IsNullOrEmpty(p.ConnectionId))
+                    {
+                        await Clients.Client(p.ConnectionId).SendAsync("ParticipantLeft", callId, userId);
+                    }
+                }
+
+                int groupId = session.GroupId ?? 0;
+                bool stillActive = remainingCount > 1;
+                if (groupId != 0)
+                {
+                    var allMembers = await db.ChatGroupMembers.Where(m => m.GroupId == groupId).Select(m => m.UserId).ToListAsync();
+
+                    await Clients.Groups(allMembers.Select(id => "Chat:" + id)).SendAsync("GroupCallStateChanged", new {
+                        active = stillActive,
+                        groupId,
+                        callId,
+                        isVideo = session.IsVideo,
+                        mode = session.Mode,
+                        isRecording = session.IsRecording,
+                        recordingStartedBy = session.RecordingStartedBy,
+                        participantCount = session.Participants.Count,
+                        participants = session.Participants.Values.Select(p => new { userId = p.UserId, fullName = p.FullName }).ToList()
+                    });
+                }
+
+                if (!stillActive)
+                {
+                    if (session.Participants.Count == 1)
+                    {
+                        var lastPerson = session.Participants.Values.First();
+                        if (!string.IsNullOrEmpty(lastPerson.ConnectionId))
+                        {
+                            await Clients.Client(lastPerson.ConnectionId).SendAsync("CallEnded", callId, 0);
+                        }
+                    }
+                    await RecordCallHistoryAsync(session, "completed");
+                }
+            }
+        }
+    }
+
+    public async Task SetCallRecording(string callId, bool isRecording)
     {
         var me = await Messenger.UserAsync(db, Context.User!);
-        await Clients.Group("Chat:" + targetUserId).SendAsync("IceCandidateReceived", callId, me.Id, candidate, sdpMid, sdpMLineIndex);
+        var session = callRegistry.Get(callId);
+        if (session == null) return;
+        if (session.CallerUserId != me.Id && session.HostUserId != me.Id)
+        {
+            throw new HubException("Только организатор может управлять записью звонка.");
+        }
+
+        session.IsRecording = isRecording;
+        session.RecordingStartedBy = isRecording ? me.FullName : null;
+
+        foreach (var p in session.Participants.Values)
+        {
+            if (!string.IsNullOrEmpty(p.ConnectionId))
+            {
+                await Clients.Client(p.ConnectionId).SendAsync("CallRecordingStateChanged", callId, isRecording, me.FullName);
+            }
+        }
+    }
+
+    public async Task RaiseHand(string callId, bool raised)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        var session = callRegistry.Get(callId);
+        if (session != null && session.Participants.TryGetValue(me.Id, out var part))
+        {
+            part.HandRaised = raised;
+            foreach (var p in session.Participants.Values)
+            {
+                if (!string.IsNullOrEmpty(p.ConnectionId))
+                {
+                    await Clients.Client(p.ConnectionId).SendAsync("ParticipantHandChanged", callId, me.Id, raised);
+                }
+            }
+        }
+    }
+
+    public async Task SetScreenSharing(string callId, bool isSharing)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        var session = callRegistry.Get(callId);
+        if (session == null || session.Status == CallSessionStatus.Ended) return;
+        if (!session.Participants.ContainsKey(me.Id) && session.CallerUserId != me.Id && session.CalleeUserId != me.Id) return;
+
+        session.ScreenSharingUserId = isSharing ? me.Id : 0;
+        session.ScreenSharingUserFullName = isSharing ? me.FullName : null;
+
+        foreach (var p in session.Participants.Values)
+        {
+            if (!string.IsNullOrEmpty(p.ConnectionId) && p.UserId != me.Id)
+            {
+                await Clients.Client(p.ConnectionId).SendAsync("ScreenShareChanged", callId, me.Id, isSharing, me.FullName);
+            }
+        }
+    }
+
+    public async Task InviteToCall(string callId, int targetUserId)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        var session = callRegistry.Get(callId);
+        if (session == null || session.Status == CallSessionStatus.Ended)
+        {
+            throw new HubException("Звонок не найден или уже завершён.");
+        }
+
+        if (!session.Participants.ContainsKey(me.Id))
+        {
+            throw new HubException("Вы не являетесь участником данного звонка.");
+        }
+
+        if (targetUserId == me.Id || targetUserId <= 0)
+        {
+            throw new HubException("Некорректный идентификатор пользователя.");
+        }
+
+        var target = await db.Users.FirstOrDefaultAsync(u => u.Id == targetUserId && u.IsActive);
+        if (target == null)
+        {
+            throw new HubException("Пользователь не найден или неактивен.");
+        }
+
+        if (session.Participants.ContainsKey(targetUserId))
+        {
+            throw new HubException("Пользователь уже участвует в звонке.");
+        }
+
+        int maxParticipants = liveKit.IsEnabled ? 50 : 4;
+        if (session.Participants.Count >= maxParticipants)
+        {
+            throw new HubException($"Достигнут максимум участников звонка ({maxParticipants}).");
+        }
+
+        bool was1to1 = session.GroupId == null && !session.IsAdHoc;
+        session.IsAdHoc = true;
+        session.InvitedUserIds[targetUserId] = true;
+
+        if (session.Participants.Count > 4 && liveKit.IsEnabled)
+        {
+            session.Mode = "livekit";
+        }
+
+        if (was1to1)
+        {
+            var roster = session.Participants.Values.Select(p => new {
+                userId = p.UserId,
+                fullName = p.FullName,
+                username = p.Username,
+                connectionId = p.ConnectionId
+            }).ToList();
+
+            foreach (var p in session.Participants.Values)
+            {
+                if (!string.IsNullOrEmpty(p.ConnectionId))
+                {
+                    await Clients.Client(p.ConnectionId).SendAsync("CallUpgradedToGroup", callId, new {
+                        mode = session.Mode,
+                        participants = roster
+                    });
+                }
+            }
+        }
+
+        string groupTitle = session.GroupId != null
+            ? (await db.ChatGroups.Where(g => g.Id == session.GroupId).Select(g => g.Name).FirstOrDefaultAsync() ?? "Группа")
+            : $"Групповой звонок ({me.FullName})";
+
+        await Clients.Group("Chat:" + targetUserId).SendAsync("IncomingCall", new {
+            callId = session.CallId,
+            callerId = me.Id,
+            callerName = me.FullName,
+            groupId = session.GroupId ?? 0,
+            groupName = groupTitle,
+            participantCount = session.Participants.Count,
+            isVideo = session.IsVideo,
+            isAdHoc = true
+        });
+    }
+
+    public Task<object> GetGroupCallState(int groupId)
+    {
+        var session = callRegistry.GetActiveGroupCall(groupId);
+        if (session != null && (session.Status == CallSessionStatus.Active || session.Status == CallSessionStatus.Ringing))
+        {
+            return Task.FromResult<object>(new {
+                active = true,
+                callId = session.CallId,
+                isVideo = session.IsVideo,
+                mode = session.Mode,
+                isRecording = session.IsRecording,
+                recordingStartedBy = session.RecordingStartedBy,
+                callerUserId = session.CallerUserId,
+                callerName = session.CallerFullName,
+                participantCount = session.Participants.Count,
+                participants = session.Participants.Values.Select(p => new { userId = p.UserId, fullName = p.FullName }).ToList()
+            });
+        }
+        return Task.FromResult<object>(new { active = false, groupId });
+    }
+
+    public async Task EndGroupCallForAll(string callId)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        var session = callRegistry.Get(callId);
+        if (session == null || session.GroupId == null) return;
+        if (session.CallerUserId != me.Id)
+        {
+            throw new HubException("Только организатор может завершить звонок для всех.");
+        }
+
+        callRegistry.MarkEnded(callId, "ended_by_host", out var endedSession);
+        if (endedSession != null)
+        {
+            foreach (var p in endedSession.Participants.Values)
+            {
+                if (!string.IsNullOrEmpty(p.ConnectionId))
+                {
+                    await Clients.Client(p.ConnectionId).SendAsync("CallEnded", callId, me.Id);
+                }
+            }
+
+            int groupId = endedSession.GroupId ?? 0;
+            if (groupId != 0)
+            {
+                var allMembers = await db.ChatGroupMembers.Where(m => m.GroupId == groupId).Select(m => m.UserId).ToListAsync();
+                await Clients.Groups(allMembers.Select(id => "Chat:" + id)).SendAsync("GroupCallStateChanged", new {
+                    active = false,
+                    groupId,
+                    callId
+                });
+            }
+            await RecordCallHistoryAsync(endedSession, "ended_by_host");
+        }
+    }
+
+    public async Task AcceptCall(string callId, int callerId)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        callRegistry.MarkAnswered(callId, Context.ConnectionId, me.Username, me.FullName, out var session);
+
+        string? callerConnId = session?.CallerConnectionId;
+        if (!string.IsNullOrEmpty(callerConnId))
+        {
+            await Clients.Client(callerConnId).SendAsync("CallAccepted", callId, me.Id);
+        }
+        else
+        {
+            await Clients.Group("Chat:" + callerId).SendAsync("CallAccepted", callId, me.Id);
+        }
+
+        await Clients.GroupExcept("Chat:" + me.Id, Context.ConnectionId).SendAsync("CallAnsweredElsewhere", callId);
+    }
+
+    public async Task RejectCall(string callId, int callerId, string reason)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        callRegistry.MarkEnded(callId, reason, out var session);
+
+        string? callerConnId = session?.CallerConnectionId;
+        if (!string.IsNullOrEmpty(callerConnId))
+        {
+            await Clients.Client(callerConnId).SendAsync("CallRejected", callId, me.Id, me.FullName, reason);
+        }
+        else
+        {
+            await Clients.Group("Chat:" + callerId).SendAsync("CallRejected", callId, me.Id, me.FullName, reason);
+        }
+
+        await Clients.Group("Chat:" + me.Id).SendAsync("CallEnded", callId, me.Id);
+        await RecordCallHistoryAsync(session, reason);
+    }
+
+    public async Task SendIceCandidate(string callId, int targetUserId, object candidate, string sdpMid, int sdpMLineIndex)
+    {
+        var me = await Messenger.UserAsync(db, Context.User!);
+        var session = callRegistry.Get(callId);
+        string? targetConnId = (session != null && session.Participants.TryGetValue(targetUserId, out var part)) ? part.ConnectionId :
+                               (session?.CalleeUserId == targetUserId ? session.CalleeConnectionId :
+                               (session?.CallerUserId == targetUserId ? session.CallerConnectionId : null));
+
+        if (!string.IsNullOrEmpty(targetConnId))
+        {
+            await Clients.Client(targetConnId).SendAsync("IceCandidateReceived", callId, me.Id, candidate, sdpMid, sdpMLineIndex);
+        }
+        else
+        {
+            await Clients.Group("Chat:" + targetUserId).SendAsync("IceCandidateReceived", callId, me.Id, candidate, sdpMid, sdpMLineIndex);
+        }
     }
 
     public async Task SendSdpOffer(string callId, int targetUserId, object sdp)
     {
         var me = await Messenger.UserAsync(db, Context.User!);
-        await Clients.Group("Chat:" + targetUserId).SendAsync("SdpOfferReceived", callId, me.Id, sdp);
+        var session = callRegistry.Get(callId);
+        string? targetConnId = (session != null && session.Participants.TryGetValue(targetUserId, out var part)) ? part.ConnectionId :
+                               (session?.CalleeUserId == targetUserId ? session.CalleeConnectionId :
+                               (session?.CallerUserId == targetUserId ? session.CallerConnectionId : null));
+
+        if (!string.IsNullOrEmpty(targetConnId))
+        {
+            await Clients.Client(targetConnId).SendAsync("SdpOfferReceived", callId, me.Id, sdp);
+        }
+        else
+        {
+            await Clients.Group("Chat:" + targetUserId).SendAsync("SdpOfferReceived", callId, me.Id, sdp);
+        }
     }
 
     public async Task SendSdpAnswer(string callId, int targetUserId, object sdp)
     {
         var me = await Messenger.UserAsync(db, Context.User!);
-        await Clients.Group("Chat:" + targetUserId).SendAsync("SdpAnswerReceived", callId, me.Id, sdp);
+        var session = callRegistry.Get(callId);
+        string? targetConnId = (session != null && session.Participants.TryGetValue(targetUserId, out var part)) ? part.ConnectionId :
+                               (session?.CallerUserId == targetUserId ? session.CallerConnectionId :
+                               (session?.CalleeUserId == targetUserId ? session.CalleeConnectionId : null));
+
+        if (!string.IsNullOrEmpty(targetConnId))
+        {
+            await Clients.Client(targetConnId).SendAsync("SdpAnswerReceived", callId, me.Id, sdp);
+        }
+        else
+        {
+            await Clients.Group("Chat:" + targetUserId).SendAsync("SdpAnswerReceived", callId, me.Id, sdp);
+        }
     }
 
-    public async Task EndCall(string callId, int targetUserId = 0)
+    public async Task EndCall(string callId, int targetUserId)
     {
         var me = await Messenger.UserAsync(db, Context.User!);
+        var session = callRegistry.Get(callId);
+
+        if (session != null && (session.GroupId != null || session.IsAdHoc))
+        {
+            await LeaveGroupCallInternal(callId, me.Id);
+            return;
+        }
+
+        callRegistry.MarkEnded(callId, "hangup", out session);
+
+        string? targetConnId = session?.CallerUserId == targetUserId ? session.CallerConnectionId :
+                               (session?.CalleeUserId == targetUserId ? session.CalleeConnectionId : null);
+
+        if (!string.IsNullOrEmpty(targetConnId))
+        {
+            await Clients.Client(targetConnId).SendAsync("CallEnded", callId, me.Id);
+        }
         if (targetUserId != 0)
         {
             await Clients.Group("Chat:" + targetUserId).SendAsync("CallEnded", callId, me.Id);
         }
+        await Clients.Group("Chat:" + me.Id).SendAsync("CallEnded", callId, me.Id);
+
+        await RecordCallHistoryAsync(session, "hangup");
     }
 
     public override async Task OnConnectedAsync()
@@ -175,9 +624,187 @@ public class MessengerHub(HelperDb db, PanelSessions sessions, ChatPresence pres
     }
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        presence.Remove(Context.ConnectionId); sessions.Remove(Context.ConnectionId);
+        presence.Remove(Context.ConnectionId);
+        sessions.Remove(Context.ConnectionId);
+
+        var user = await Messenger.UserAsync(db, Context.User!);
+        var activeSessions = callRegistry.GetSessionsForConnection(Context.ConnectionId);
+        foreach (var s in activeSessions)
+        {
+            if (s.GroupId != null || s.IsAdHoc)
+            {
+                await LeaveGroupCallInternal(s.CallId, user.Id);
+                continue;
+            }
+
+            callRegistry.MarkEnded(s.CallId, "disconnected", out _);
+            int otherUserId = s.CallerConnectionId == Context.ConnectionId ? s.CalleeUserId : s.CallerUserId;
+            string? otherConnId = s.CallerConnectionId == Context.ConnectionId ? s.CalleeConnectionId : s.CallerConnectionId;
+
+            if (!string.IsNullOrEmpty(otherConnId))
+            {
+                await Clients.Client(otherConnId).SendAsync("CallEnded", s.CallId, 0);
+            }
+            if (otherUserId != 0)
+            {
+                await Clients.Group("Chat:" + otherUserId).SendAsync("CallEnded", s.CallId, 0);
+            }
+            await RecordCallHistoryAsync(s, "disconnected");
+        }
+
         await Clients.All.SendAsync("ChatChanged");
         await base.OnDisconnectedAsync(exception);
+    }
+
+    private async Task RecordCallHistoryAsync(CallSession? session, string reason)
+    {
+        if (session == null || session.HistoryRecorded) return;
+        session.HistoryRecorded = true;
+
+        try
+        {
+            int callerId = session.CallerUserId;
+            if (callerId == 0) return;
+
+            string clientId = "call_" + session.CallId;
+            var existing = await db.ChatMessages.AsNoTracking().FirstOrDefaultAsync(m => m.ClientId == clientId);
+            if (existing != null) return;
+
+            if (session.GroupId != null)
+            {
+                int groupId = session.GroupId.Value;
+                var existingGroup = await db.ChatGroupMessages.AsNoTracking().FirstOrDefaultAsync(m => m.ClientId == clientId);
+                if (existingGroup != null) return;
+
+                string body;
+                if (session.AnsweredAtUtc != null)
+                {
+                    var dur = (session.EndedAtUtc ?? DateTime.UtcNow) - session.AnsweredAtUtc.Value;
+                    if (dur < TimeSpan.Zero) dur = TimeSpan.Zero;
+                    string durStr = dur.TotalHours >= 1 ? dur.ToString(@"hh\:mm\:ss") : dur.ToString(@"mm\:ss");
+                    body = session.IsVideo ? $"🎥 Групповой видеозвонок, {durStr}" : $"📞 Групповой аудиозвонок, {durStr}";
+                }
+                else
+                {
+                    body = session.IsVideo ? "🎥 Пропущенный групповой видеозвонок" : "📞 Пропущенный групповой звонок";
+                }
+
+                var groupMsg = new ChatGroupMessage
+                {
+                    SenderId = callerId,
+                    GroupId = groupId,
+                    Body = body,
+                    ClientId = clientId,
+                    SentAt = session.CreatedAtUtc,
+                    Command = "call"
+                };
+
+                db.ChatGroupMessages.Add(groupMsg);
+                await db.SaveChangesAsync();
+
+                var chatMsgView = new ChatMessage
+                {
+                    Id = groupMsg.Id,
+                    SenderId = callerId,
+                    RecipientId = -groupId,
+                    Body = body,
+                    ClientId = clientId,
+                    SentAt = session.CreatedAtUtc,
+                    Command = "call",
+                    SenderName = session.CallerFullName
+                };
+
+                var memberIds = await db.ChatGroupMembers.Where(m => m.GroupId == groupId).Select(m => m.UserId).ToListAsync();
+                await Clients.Groups(memberIds.Select(id => "Chat:" + id)).SendAsync("ChatMessage", chatMsgView);
+                await Clients.Groups(memberIds.Select(id => "Chat:" + id)).SendAsync("ChatChanged");
+                return;
+            }
+
+            if (session.IsAdHoc)
+            {
+                var dur = (session.EndedAtUtc ?? DateTime.UtcNow) - (session.AnsweredAtUtc ?? session.CreatedAtUtc);
+                if (dur < TimeSpan.Zero) dur = TimeSpan.Zero;
+                string durStr = dur.TotalHours >= 1 ? dur.ToString(@"hh\:mm\:ss") : dur.ToString(@"mm\:ss");
+                int pCount = Math.Max(session.Participants.Count, session.InvitedUserIds.Count + 1);
+                string adHocBody = $"👥 Групповой звонок, {pCount} участников, {durStr}";
+
+                var targetUserIds = session.Participants.Keys
+                    .Concat(session.InvitedUserIds.Keys)
+                    .Concat(new[] { session.CalleeUserId })
+                    .Where(id => id != callerId && id > 0)
+                    .Distinct()
+                    .ToList();
+
+                foreach (var otherId in targetUserIds)
+                {
+                    string clientAdHocId = $"{clientId}_{otherId}";
+                    var adHocMsg = new ChatMessage
+                    {
+                        SenderId = callerId,
+                        RecipientId = otherId,
+                        Body = adHocBody,
+                        ClientId = clientAdHocId,
+                        SentAt = session.CreatedAtUtc,
+                        Command = "call"
+                    };
+                    db.ChatMessages.Add(adHocMsg);
+                }
+                await db.SaveChangesAsync();
+
+                foreach (var otherId in targetUserIds)
+                {
+                    var adHocViewMsg = new ChatMessage
+                    {
+                        SenderId = callerId,
+                        RecipientId = otherId,
+                        Body = adHocBody,
+                        ClientId = $"{clientId}_{otherId}",
+                        SentAt = session.CreatedAtUtc,
+                        Command = "call",
+                        SenderName = session.CallerFullName
+                    };
+                    await Clients.Groups("Chat:" + callerId, "Chat:" + otherId).SendAsync("ChatMessage", adHocViewMsg);
+                    await Clients.Groups("Chat:" + callerId, "Chat:" + otherId).SendAsync("ChatChanged");
+                }
+                return;
+            }
+
+            int calleeId = session.CalleeUserId;
+            if (calleeId == 0 || callerId == calleeId) return;
+
+            string directBody;
+            if (session.AnsweredAtUtc != null)
+            {
+                var dur = (session.EndedAtUtc ?? DateTime.UtcNow) - session.AnsweredAtUtc.Value;
+                if (dur < TimeSpan.Zero) dur = TimeSpan.Zero;
+                string durStr = dur.TotalHours >= 1 ? dur.ToString(@"hh\:mm\:ss") : dur.ToString(@"mm\:ss");
+                directBody = session.IsVideo ? $"🎥 Видеозвонок, {durStr}" : $"📞 Аудиозвонок, {durStr}";
+            }
+            else
+            {
+                directBody = session.IsVideo ? "🎥 Пропущенный видеозвонок" : "📞 Пропущенный звонок";
+            }
+
+            var msg = new ChatMessage
+            {
+                SenderId = callerId,
+                RecipientId = calleeId,
+                Body = directBody,
+                ClientId = clientId,
+                SentAt = session.CreatedAtUtc,
+                Command = "call"
+            };
+
+            db.ChatMessages.Add(msg);
+            await db.SaveChangesAsync();
+
+            await Clients.Groups("Chat:" + callerId, "Chat:" + calleeId).SendAsync("ChatMessage", msg);
+            await Clients.Groups("Chat:" + callerId, "Chat:" + calleeId).SendAsync("ChatChanged");
+        }
+        catch
+        {
+            // Ignore duplicate or concurrent save errors
+        }
     }
 }
 public static class Messenger
@@ -210,6 +837,7 @@ public static class Messenger
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_ChatMessages_SenderId_ClientId\" ON \"ChatMessages\" (\"SenderId\", \"ClientId\")");
         await db.Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_ChatMessages_RecipientId_Id\" ON \"ChatMessages\" (\"RecipientId\", \"Id\")");
         await ChatFiles.EnsureSchemaAsync(db);
+        await ChatGroups.EnsureSchemaAsync(db);
         await ChatBroadcasts.EnsureSchemaAsync(db); await ChatExtras.EnsureSchemaAsync(db); await ChatPolls.EnsureSchemaAsync(db);
     }
     internal static string Token(PanelUser user, IConfiguration config)
@@ -368,21 +996,155 @@ public static class Messenger
         });
         api.MapGet("/webrtc/config", (IConfiguration config) =>
         {
-            var stun = config["WebRTC:StunServer"] ?? "stun:stun.l.google.com:19302";
+            var stun = config["WebRTC:StunServer"] ?? "stun:172.16.16.61:3478";
             var iceServers = new List<object>
             {
-                new { urls = new[] { stun, "stun:helper:3478" } }
+                new { urls = new[] { stun, "stun:helper.gp1.loc:3478", "stun:helper:3478", "stun:stun.l.google.com:19302" } }
             };
-            string? turn = config["WebRTC:TurnServer"];
+            string? turn = config["WebRTC:TurnServer"] ?? "turn:172.16.16.61:3478";
             if (!string.IsNullOrWhiteSpace(turn))
             {
                 iceServers.Add(new {
-                    urls = turn,
+                    urls = new[] { turn, "turn:helper.gp1.loc:3478", "turn:helper:3478" },
                     username = config["WebRTC:TurnUser"] ?? "helper",
                     credential = config["WebRTC:TurnPassword"] ?? "helperpass"
                 });
             }
             return Results.Ok(new { iceServers });
+        });
+        api.MapGet("/groups/{groupId:int}/call-state", (int groupId, CallSessionRegistry callRegistry) =>
+        {
+            var session = callRegistry.GetActiveGroupCall(groupId);
+            if (session != null && (session.Status == CallSessionStatus.Active || session.Status == CallSessionStatus.Ringing))
+            {
+                return Results.Ok(new {
+                    active = true,
+                    callId = session.CallId,
+                    isVideo = session.IsVideo,
+                    mode = session.Mode,
+                    isRecording = session.IsRecording,
+                    recordingStartedBy = session.RecordingStartedBy,
+                    callerUserId = session.CallerUserId,
+                    callerName = session.CallerFullName,
+                    participantCount = session.Participants.Count,
+                    participants = session.Participants.Values.Select(p => new { userId = p.UserId, fullName = p.FullName }).ToList()
+                });
+            }
+            return Results.Ok(new { active = false, groupId });
+        });
+        api.MapGet("/calls/{callId}/invite-candidates", async (string callId, string? q, HelperDb db, ClaimsPrincipal p, CallSessionRegistry callRegistry) =>
+        {
+            var me = await UserAsync(db, p);
+            var session = callRegistry.Get(callId);
+            if (session == null || session.Status == CallSessionStatus.Ended)
+            {
+                return Results.NotFound(new { error = "Звонок не найден или завершён." });
+            }
+
+            if (!session.Participants.ContainsKey(me.Id) && session.CallerUserId != me.Id && session.CalleeUserId != me.Id)
+            {
+                return Results.StatusCode(403);
+            }
+
+            var activeIds = session.Participants.Keys.ToHashSet();
+            activeIds.Add(me.Id);
+
+            var query = db.Users.AsNoTracking().Where(u => u.IsActive && !activeIds.Contains(u.Id));
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                string term = q.Trim().ToLower();
+                query = query.Where(u => u.FullName.ToLower().Contains(term) || u.Username.ToLower().Contains(term));
+            }
+
+            var candidates = await query
+                .OrderBy(u => u.FullName)
+                .Take(25)
+                .Select(u => new { u.Id, u.FullName, u.Username })
+                .ToListAsync();
+
+            return Results.Ok(candidates);
+        });
+        api.MapPost("/calls/{callId}/token", async (string callId, LiveKitService liveKit, HelperDb db, ClaimsPrincipal p, CallSessionRegistry callRegistry) =>
+        {
+            var me = await UserAsync(db, p);
+            if (!liveKit.IsEnabled) return Results.BadRequest(new { error = "LiveKit SFU не настроен на сервере." });
+
+            bool isHost = false;
+            var session = callRegistry.Get(callId);
+            if (session != null)
+            {
+                if (session.GroupId != null)
+                {
+                    int gId = session.GroupId.Value;
+                    var isMember = await db.ChatGroupMembers.AnyAsync(m => m.GroupId == gId && m.UserId == me.Id);
+                    if (!isMember) return Results.StatusCode(403);
+                    var isBanned = await db.ChatGroupRestrictions.AnyAsync(r => r.GroupId == gId && r.UserId == me.Id && r.EndsAt > DateTime.UtcNow);
+                    if (isBanned) return Results.StatusCode(403);
+                    isHost = session.CallerUserId == me.Id || session.HostUserId == me.Id;
+                }
+                else if (session.IsAdHoc)
+                {
+                    bool isAllowed = session.Participants.ContainsKey(me.Id) || session.InvitedUserIds.ContainsKey(me.Id);
+                    if (!isAllowed) return Results.StatusCode(403);
+                    isHost = session.CallerUserId == me.Id || session.HostUserId == me.Id;
+                }
+                else
+                {
+                    if (session.CallerUserId != me.Id && session.CalleeUserId != me.Id) return Results.StatusCode(403);
+                    isHost = session.CallerUserId == me.Id;
+                }
+            }
+            else if (callId.StartsWith("call_grp_") || callId.StartsWith("group_"))
+            {
+                int gId = 0;
+                if (callId.StartsWith("group_") && int.TryParse(callId[6..], out int parsedGId)) gId = parsedGId;
+                if (gId != 0)
+                {
+                    var isMember = await db.ChatGroupMembers.AnyAsync(m => m.GroupId == gId && m.UserId == me.Id);
+                    if (!isMember) return Results.StatusCode(403);
+                    var group = await db.ChatGroups.FirstOrDefaultAsync(g => g.Id == gId);
+                    isHost = group?.OwnerId == me.Id;
+                }
+            }
+
+            var token = liveKit.GenerateToken(callId, me, isHost);
+            return Results.Ok(new { token, url = liveKit.Url, callId, mode = "livekit" });
+        });
+        api.MapPost("/calls/{callId}/recording/start", async (string callId, HelperDb db, ClaimsPrincipal p, CallSessionRegistry callRegistry, IHubContext<MessengerHub> hub) =>
+        {
+            var me = await UserAsync(db, p);
+            var session = callRegistry.Get(callId);
+            if (session == null) return Results.NotFound(new { error = "Звонок не найден" });
+            if (session.CallerUserId != me.Id && session.HostUserId != me.Id) return Results.StatusCode(403);
+
+            session.IsRecording = true;
+            session.RecordingStartedBy = me.FullName;
+            foreach (var part in session.Participants.Values)
+            {
+                if (!string.IsNullOrEmpty(part.ConnectionId))
+                {
+                    await hub.Clients.Client(part.ConnectionId).SendAsync("CallRecordingStateChanged", callId, true, me.FullName);
+                }
+            }
+            return Results.Ok(new { status = "recording_started", callId, startedBy = me.FullName });
+        });
+        api.MapPost("/calls/{callId}/recording/stop", async (string callId, HelperDb db, ClaimsPrincipal p, CallSessionRegistry callRegistry, IHubContext<MessengerHub> hub) =>
+        {
+            var me = await UserAsync(db, p);
+            var session = callRegistry.Get(callId);
+            if (session == null) return Results.NotFound(new { error = "Звонок не найден" });
+            if (session.CallerUserId != me.Id && session.HostUserId != me.Id) return Results.StatusCode(403);
+
+            session.IsRecording = false;
+            session.RecordingStartedBy = null;
+            foreach (var part in session.Participants.Values)
+            {
+                if (!string.IsNullOrEmpty(part.ConnectionId))
+                {
+                    await hub.Clients.Client(part.ConnectionId).SendAsync("CallRecordingStateChanged", callId, false, me.FullName);
+                }
+            }
+            return Results.Ok(new { status = "recording_stopped", callId });
         });
     }
 }

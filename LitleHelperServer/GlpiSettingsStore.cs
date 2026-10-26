@@ -18,7 +18,7 @@ public sealed class GlpiSettingsStore(IConfiguration config, IDataProtectionProv
     {
         lock (gate)
         {
-            if (!File.Exists(FilePath)) return new(config["Glpi:BaseUrl"] ?? "http://glpi.gp1.loc/apirest.php", config["Glpi:AppToken"] ?? "", config["Glpi:UserToken"] ?? "", config.GetValue<int>("Glpi:ServiceUserId"));
+            if (!File.Exists(FilePath)) return new(config["Glpi:BaseUrl"] ?? "", config["Glpi:AppToken"] ?? "", config["Glpi:UserToken"] ?? "", config.GetValue<int>("Glpi:ServiceUserId"));
             var saved = JsonSerializer.Deserialize<Stored>(File.ReadAllText(FilePath)) ?? throw new InvalidOperationException("Не удалось прочитать настройки GLPI");
             string Decode(string value) => value.Length == 0 ? "" : protector.Unprotect(value);
             return new(saved.BaseUrl, Decode(saved.AppToken), Decode(saved.UserToken), saved.ServiceUserId, saved.AuthMode, saved.Login, Decode(saved.Password));

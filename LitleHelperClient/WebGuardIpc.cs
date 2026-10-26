@@ -9,7 +9,7 @@ internal static class WebGuardIpc
     private static readonly string PipeName = "PixelHelperGuardPipe-" + Environment.UserName;
     private static CancellationTokenSource? cts;
 
-    internal static void SendUrlToRunningInstance(string url)
+    internal static bool SendUrlToRunningInstance(string url, bool launchOnFailure = false)
     {
         try
         {
@@ -17,12 +17,13 @@ internal static class WebGuardIpc
             client.Connect(1500);
             using var writer = new StreamWriter(client, Encoding.UTF8) { AutoFlush = true };
             writer.WriteLine(url);
+            return true;
         }
         catch (Exception ex)
         {
             Settings.Log(ex);
-            // Fallback: if pipe communication failed, launch the URL safely
-            WebGuard.LaunchUrl(url);
+            if (launchOnFailure) WebGuard.LaunchUrl(url);
+            return false;
         }
     }
 
@@ -38,7 +39,7 @@ internal static class WebGuardIpc
             {
                 try
                 {
-                    using var server = new NamedPipeServerStream(PipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                    using var server = new NamedPipeServerStream(PipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                     await server.WaitForConnectionAsync(token);
                     using var reader = new StreamReader(server, Encoding.UTF8);
                     string? line = await reader.ReadLineAsync(token);

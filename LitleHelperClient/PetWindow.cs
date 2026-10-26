@@ -976,10 +976,6 @@ public sealed partial class PetWindow : Window
         }
 
         int unreadDisplay = faceStatus == FaceNoticeStatus.None ? totalUnreadMessages : 0;
-        if (state == PetState.Yawn && string.Equals(SkinManager.Instance.CurrentSkinId, "Mage", StringComparison.OrdinalIgnoreCase))
-        {
-            unreadDisplay = 0;
-        }
         var badge = faceBadges.Get(faceStatus, unreadDisplay, faceHeartFrame);
         if (badge != null)
         {
@@ -2219,9 +2215,7 @@ public sealed partial class PetWindow : Window
                 if (DateTime.UtcNow - lastPaperworkCheck >= TimeSpan.FromMinutes(5))
                 {
                     lastPaperworkCheck = DateTime.UtcNow;
-                    ShowNotice(string.Equals(SkinManager.Instance.CurrentSkinId, "Mage", StringComparison.OrdinalIgnoreCase)
-                        ? "Идёт печать документа... Колдую над очередью принтера 📄✨"
-                        : "Идёт печать документа на принтере... Проверяю очередь 📄");
+                    ShowNotice("Идёт печать документа на принтере... Проверяю очередь 📄");
                 }
             }
         }

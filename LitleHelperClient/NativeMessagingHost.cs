@@ -61,7 +61,7 @@ public static class NativeMessagingHost
                     if (result.Verdict != WebGuardVerdict.Safe)
                     {
                         // Notify running desktop assistant window so character reacts with speech bubble/tray
-                        WebGuardIpc.SendUrlToRunningInstance(url);
+                        WebGuardIpc.SendUrlToRunningInstance(url, launchOnFailure: false);
                         return JsonSerializer.Serialize(new
                         {
                             verdict = "Blocked",
@@ -77,6 +77,11 @@ public static class NativeMessagingHost
         {
             Settings.Log(ex);
         }
-        return JsonSerializer.Serialize(new { verdict = "Safe" });
+        return JsonSerializer.Serialize(new
+        {
+            verdict = "Blocked",
+            reason = "Не удалось проверить ссылку. Переход заблокирован для безопасности.",
+            host = ""
+        });
     }
 }

@@ -38,7 +38,7 @@ internal static class AntivirusScanIpc
             {
                 try
                 {
-                    using var server = new NamedPipeServerStream(PipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                    using var server = new NamedPipeServerStream(PipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                     await server.WaitForConnectionAsync(token);
                     using var reader = new StreamReader(server, Encoding.UTF8);
                     string? line = await reader.ReadLineAsync(token);

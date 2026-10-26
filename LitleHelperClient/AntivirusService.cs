@@ -149,7 +149,7 @@ public sealed class AntivirusService : IDisposable
     {
         try
         {
-            string serverUrl = settings.ServerUrl?.TrimEnd('/') ?? "http://helper.gp1.loc";
+            string serverUrl = UpdateBaseUrl();
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
             http.DefaultRequestHeaders.Add("X-Client-Key", settings.ClientToken);
             http.DefaultRequestHeaders.Add("X-Machine-Name", Environment.MachineName);
@@ -162,6 +162,12 @@ public sealed class AntivirusService : IDisposable
             using var doc = JsonDocument.Parse(manifestJson);
             string remoteVer = doc.RootElement.GetProperty("version").GetString() ?? "";
             string remoteSha = doc.RootElement.GetProperty("bundleSha256").GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(remoteVer) || remoteSha.Length != 64 || remoteSha.Any(c => !Uri.IsHexDigit(c)))
+                throw new InvalidDataException("Некорректный манифест антивирусных баз.");
+            long remoteSize = doc.RootElement.TryGetProperty("bundleSizeBytes", out var sizeProp) ? sizeProp.GetInt64() : 0;
+            const long maximumBundleBytes = 200 * 1024 * 1024;
+            if (remoteSize is <= 0 or > maximumBundleBytes)
+                throw new InvalidDataException("Недопустимый размер антивирусного пакета.");
 
             string localVer = "";
             if (File.Exists(ManifestPath))
@@ -183,10 +189,14 @@ public sealed class AntivirusService : IDisposable
             var bundleResp = await http.GetAsync(serverUrl + "/api/antivirus/bundle", token);
             if (!bundleResp.IsSuccessStatusCode) return;
 
+            if (bundleResp.Content.Headers.ContentLength is long contentLength && contentLength != remoteSize)
+                throw new InvalidDataException("Размер антивирусного пакета не совпадает с манифестом.");
+
             string tempZip = Path.Combine(DbDir, "bundle.tmp.zip");
             await using (var fs = File.Create(tempZip))
             {
                 await bundleResp.Content.CopyToAsync(fs, token);
+                if (fs.Length != remoteSize) throw new InvalidDataException("Размер антивирусного пакета не совпадает с манифестом.");
             }
 
             // Verify SHA256
@@ -203,11 +213,20 @@ public sealed class AntivirusService : IDisposable
                 return; // Checksum mismatch
             }
 
-            // Extract bundle
+            // Extract into a staging directory so a failed update never removes the current database.
             string extractDir = Path.Combine(DbDir, "current");
-            if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
-            ZipFile.ExtractToDirectory(tempZip, extractDir);
-            File.Delete(tempZip);
+            string stagingDir = Path.Combine(DbDir, "staging-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                ZipFile.ExtractToDirectory(tempZip, stagingDir);
+                if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
+                Directory.Move(stagingDir, extractDir);
+            }
+            finally
+            {
+                if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true);
+                File.Delete(tempZip);
+            }
 
             await File.WriteAllTextAsync(ManifestPath, manifestJson, token);
             LoadLocalDatabases();
@@ -274,25 +293,50 @@ public sealed class AntivirusService : IDisposable
             var paths = excludedPaths.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             foreach (var p in paths)
             {
-                if (filePath.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return true;
+                if (IsPathUnder(filePath, p)) return true;
             }
-        }
-
-        // 4. Restoration Whitelist (prevent double-quarantine)
-        if (quarantine.IsWhitelisted(filePath))
-        {
-            return true;
         }
 
         return false;
     }
 
-    public async Task<ScanResult> ScanFileAsync(string filePath, CancellationToken token)
+    private string UpdateBaseUrl()
     {
-        await Task.Yield();
+        string raw = settings.ServerUrl?.TrimEnd('/') ?? "https://helper.gp1.loc";
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            throw new InvalidOperationException("Неверный адрес сервера для обновления антивирусных баз.");
+        if (uri.Scheme != Uri.UriSchemeHttps && !uri.IsLoopback)
+            throw new InvalidOperationException("Обновление антивирусных баз разрешено только по HTTPS.");
+        return raw;
+    }
+
+    private static bool IsPathUnder(string filePath, string root)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(filePath);
+            string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (fullRoot.Length == 0) return false;
+            return fullPath.Equals(fullRoot, StringComparison.OrdinalIgnoreCase) ||
+                   fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                   fullPath.StartsWith(fullRoot + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public Task<ScanResult> ScanFileAsync(string filePath, CancellationToken token) =>
+        Task.Run(() => ScanFileCore(filePath, token), token);
+
+    private ScanResult ScanFileCore(string filePath, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
         if (!File.Exists(filePath)) return new ScanResult(false, filePath);
 
         var fi = new FileInfo(filePath);
+        if (fi.Length == 0) return new ScanResult(false, filePath);
         if (IsExcluded(filePath, fi.Length))
         {
             return new ScanResult(false, filePath);
@@ -550,7 +594,7 @@ public sealed class AntivirusService : IDisposable
             // Report to server
             if (hub.IsOnline)
             {
-                string serverUrl = settings.ServerUrl?.TrimEnd('/') ?? "http://helper.gp1.loc";
+                string serverUrl = UpdateBaseUrl();
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 http.DefaultRequestHeaders.Add("X-Client-Key", settings.ClientToken);
                 http.DefaultRequestHeaders.Add("X-Machine-Name", Environment.MachineName);
@@ -564,7 +608,7 @@ public sealed class AntivirusService : IDisposable
                     threatType = result.ThreatType,
                     fileSizeBytes = result.FileSizeBytes,
                     sha256 = result.Sha256,
-                    actionTaken = "Quarantined"
+                    actionTaken = item == null ? "QuarantineFailed" : "Quarantined"
                 };
 
                 await http.PostAsJsonAsync(serverUrl + "/api/antivirus/threats", payload);

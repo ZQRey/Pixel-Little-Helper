@@ -235,8 +235,7 @@ rule Suspicious_Double_Extension_Executable {
             string hashesFile = Path.Combine(hashesDir, "malware_hashes.txt");
             if (!File.Exists(hashesFile))
             {
-                File.WriteAllText(hashesFile, "# PixelGuard AV Baseline Malicious SHA256\n" +
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n");
+                File.WriteAllText(hashesFile, "# PixelGuard AV Baseline Malicious SHA256\n");
             }
 
             if (File.Exists(bundlePath)) File.Delete(bundlePath);
@@ -257,7 +256,7 @@ rule Suspicious_Double_Extension_Executable {
             cachedManifest = new AntivirusManifest(
                 Version: DateTime.UtcNow.ToString("yyyyMMdd.HHmm"),
                 UpdatedAt: DateTime.UtcNow,
-                MalwareBazaarHashCount: 1,
+                MalwareBazaarHashCount: 0,
                 YaraRulesCount: 3,
                 ClamAvVersion: "daily-cvd-baseline",
                 BundleSha256: sha256,

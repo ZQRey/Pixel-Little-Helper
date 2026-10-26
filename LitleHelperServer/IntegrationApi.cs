@@ -414,23 +414,39 @@ public static class IntegrationApi
             }
         });
 
-        app.MapGet("/api/internal/resolve-client", async (string? ip, string? machine, HelperDb db, CancellationToken token) =>
+        app.MapGet("/api/internal/resolve-client", async (string? ip, string? machine, HttpContext context, HelperDb db, IConfiguration config, CancellationToken token) =>
         {
+            string? configuredKey = config["Internal:ResolveClientApiKey"];
+            string? providedKey = context.Request.Headers["X-Api-Key"].FirstOrDefault();
+            bool keyOk = !string.IsNullOrWhiteSpace(configuredKey) && !string.IsNullOrWhiteSpace(providedKey) &&
+                System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(configuredKey),
+                    System.Text.Encoding.UTF8.GetBytes(providedKey));
+            string caller = context.Request.Headers["X-Real-IP"].ToString();
+            if (string.IsNullOrWhiteSpace(caller)) caller = context.Connection.RemoteIpAddress?.ToString() ?? "";
+            string[] allowedCallers = (config["Internal:ResolveClientAllowedIps"] ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            bool callerOk = allowedCallers.Contains(caller, StringComparer.OrdinalIgnoreCase);
+            if (!keyOk && !callerOk) return Results.Unauthorized();
+
             if (string.IsNullOrWhiteSpace(ip) && string.IsNullOrWhiteSpace(machine))
                 return Results.BadRequest(new { error = "IP or machine is required" });
 
             ip = ip?.Trim();
             machine = machine?.Trim();
-            var query = db.Computers.AsQueryable();
+            if (!string.IsNullOrWhiteSpace(ip) && !System.Net.IPAddress.TryParse(ip, out _))
+                return Results.BadRequest(new { error = "Invalid IP address" });
 
+            var query = db.Computers.AsQueryable();
             if (!string.IsNullOrWhiteSpace(machine))
             {
-                string m = machine.ToLower();
-                query = query.Where(c => c.MachineName.ToLower() == m);
+                string m = Security.Canonical(machine);
+                if (!Security.MachineValid(m)) return Results.BadRequest(new { error = "Invalid machine name" });
+                query = query.Where(c => c.MachineName == m);
             }
             else if (!string.IsNullOrWhiteSpace(ip))
             {
-                query = query.Where(c => c.IpAddress == ip || c.IpAddress.Contains(ip));
+                query = query.Where(c => c.IpAddress == ip);
             }
 
             var computer = await query
@@ -438,7 +454,8 @@ public static class IntegrationApi
                 .ThenByDescending(c => c.LastSeen)
                 .FirstOrDefaultAsync(token);
 
-            if (computer == null) return Results.NotFound(new { error = "Not found", ip, machine });
+            context.Response.Headers.CacheControl = "no-store";
+            if (computer == null) return Results.NotFound(new { error = "Not found" });
             return Results.Ok(new
             {
                 ip = computer.IpAddress,
@@ -451,7 +468,7 @@ public static class IntegrationApi
                 isOnline = computer.IsOnline,
                 lastSeen = computer.LastSeen
             });
-        });
+        }).RequireRateLimiting("resolve-client");
 
         app.MapGet("/api/settings/security", (IntegrationSettings settings, AntivirusSyncWorker avWorker) => Results.Ok(new
         {
@@ -534,15 +551,20 @@ public static class IntegrationApi
             return Results.Ok(list);
         }).RequireAuthorization("settings.manage");
 
-        app.MapPost("/api/antivirus/threats", async (ThreatReportRequest req, HelperDb db, IntegrationSettings settings, IHubContext<HelperHub> hub, CancellationToken token) =>
+        app.MapPost("/api/antivirus/threats", async (ThreatReportRequest req, System.Security.Claims.ClaimsPrincipal actor, HelperDb db, IntegrationSettings settings, IHubContext<HelperHub> hub, CancellationToken token) =>
         {
+            string machineName = actor.IsInRole("Agent")
+                ? Security.Canonical(actor.Identity?.Name ?? "")
+                : Security.Canonical(req.MachineName);
+            if (!Security.MachineValid(machineName)) return Results.BadRequest(new { error = "Неверное имя компьютера." });
+
             var sec = settings.Security();
             DateTime now = DateTime.UtcNow;
             DateTime? until = sec.AntivirusRetentionDays > 0 ? now.AddDays(sec.AntivirusRetentionDays) : null;
 
             var record = new ThreatRecord
             {
-                MachineName = req.MachineName,
+                MachineName = machineName,
                 UserName = req.UserName,
                 FilePath = req.FilePath,
                 ThreatName = req.ThreatName,

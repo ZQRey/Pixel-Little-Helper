@@ -48,6 +48,7 @@ public static class BrowserExtensionDeployer
             // Register Native Messaging Host in HKLM and HKCU
             RegisterNativeHost(@"SOFTWARE\Microsoft\Edge\NativeMessagingHosts", manifestPath);
             RegisterNativeHost(@"SOFTWARE\Google\Chrome\NativeMessagingHosts", manifestPath);
+            RegisterNativeHost(@"SOFTWARE\YandexBrowser\NativeMessagingHosts", manifestPath);
         }
         catch (Exception ex)
         {

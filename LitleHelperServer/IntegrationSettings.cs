@@ -59,15 +59,28 @@ public record SecurityOptions(
     long MaxScanSizeBytes = 262144000,
     string ThreatAction = "quarantine"
 );
+public record RegistrationOptions(List<string> AllowedNetworks);
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
 {
     private readonly object gate = new();
     private readonly IDataProtector protector = protection.CreateProtector("LitleHelper.Integrations.v1");
     private string PathName => configuration["Integrations:SettingsFile"] ?? Path.Combine("data", "integrations.json");
-    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null, SecurityOptions? Security = null);
+    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null, SecurityOptions? Security = null, RegistrationOptions? Registration = null);
     public SecurityOptions Security() { lock(gate) return ReadStored().Security ?? new(); }
     public void SaveSecurity(SecurityOptions options) { lock(gate) Write(ReadStored() with { Security = options }); }
+    public RegistrationOptions Registration() { lock(gate) return ReadStored().Registration ?? new(NetworkAccess.DefaultRegistrationNetworks.ToList()); }
+    public void SaveRegistration(RegistrationOptions options)
+    {
+        var networks = NetworkAccess.NormalizeNetworks(options.AllowedNetworks);
+        lock(gate) Write(ReadStored() with { Registration = new RegistrationOptions(networks.ToList()) });
+    }
+    public object RegistrationView() => new
+    {
+        allowedNetworks = Registration().AllowedNetworks,
+        defaultNetworks = NetworkAccess.DefaultRegistrationNetworks,
+        allowPublic = configuration.GetValue<bool>("Registration:AllowPublic")
+    };
     public GlpiImportOptions GlpiImport() { lock(gate) return ReadStored().GlpiImport ?? new(); }
     public void SaveGlpiImport(GlpiImportOptions options)
     {

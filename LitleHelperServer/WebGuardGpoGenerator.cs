@@ -113,6 +113,14 @@ $policies = @(
         Type = 'String'
         Value = 'C:\Program Files\PixelHelper\extension\com.pixelhelper.webguard.json'
         Description = 'Google Chrome: NativeMessagingHost'
+    }},
+    # Яндекс Браузер NativeMessagingHosts
+    @{{
+        Key = 'HKLM\Software\YandexBrowser\NativeMessagingHosts\com.pixelhelper.webguard'
+        ValueName = ''
+        Type = 'String'
+        Value = 'C:\Program Files\PixelHelper\extension\com.pixelhelper.webguard.json'
+        Description = 'Яндекс Браузер: NativeMessagingHost'
     }}
 )
 

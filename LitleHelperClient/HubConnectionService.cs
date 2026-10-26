@@ -65,7 +65,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     }
     private HubConnection BuildConnection()
     {
-        string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "http://helper.gp1.loc" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
+        string url = settings.HubUrl ?? (string.IsNullOrWhiteSpace(settings.ServerUrl) ? "https://helper.gp1.loc" : settings.ServerUrl.TrimEnd('/')) + "/helperHub";
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")) throw new ArgumentException("Неверный адрес хаба");
         var created = new HubConnectionBuilder().WithUrl(uri, options =>
         {

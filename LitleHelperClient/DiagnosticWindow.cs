@@ -236,7 +236,7 @@ internal sealed class DiagnosticWindow : Window
             try
             {
                 using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-                string baseUrl = (settings.ServerUrl ?? "http://helper.gp1.loc").TrimEnd('/');
+                string baseUrl = (settings.ServerUrl ?? "https://helper.gp1.loc").TrimEnd('/');
                 
                 // Проверяем /health (основной) или /api/health (дополнительный)
                 var res = await client.GetAsync(baseUrl + "/health");

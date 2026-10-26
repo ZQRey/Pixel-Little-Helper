@@ -68,6 +68,7 @@ const context = vm.createContext({
     else if (p === '/branches') result = [{ id: 1, name: 'Главный филиал', isActive: true }, { id: 2, name: 'Второй филиал', isActive: true }];
     else if (p === '/settings/messenger') result = { enabled: true, retentionDays: 90, storedMessages: 42 };
     else if (p === '/settings/updates') result = { enabled: true, latest: { version: '1.2.31', size: 69000000 } };
+    else if (p === '/settings/registration') result = { allowedNetworks: ['172.16.16.0/23', '10.0.0.0/23'], defaultNetworks: ['172.16.16.0/23'], allowPublic: false };
     else if (p === '/computers') result = [];
     return {
       ok: true,
@@ -97,6 +98,7 @@ vm.runInContext(source, context);
   assert(content.includes('data-settings-tab="cartridge"'), 'must include cartridge tab');
   assert(content.includes('data-settings-tab="emergency"'), 'must include emergency tab');
   assert(content.includes('data-settings-tab="branches"'), 'must include branches tab');
+  assert(content.includes('data-settings-tab="networks"'), 'must include networks tab');
   assert(content.includes('data-settings-tab="messenger"'), 'must include messenger tab');
   assert(content.includes('data-settings-tab="updates"'), 'must include updates tab');
 
@@ -121,6 +123,12 @@ vm.runInContext(source, context);
   const cartBody = element('#settings-tab-body').innerHTML;
   assert(cartBody.includes('cartridge-form'), 'cartridge panel must render cartridge form');
   assert(cartBody.includes('/api/integrations/cartridges/ready'), 'cartridge panel must render webhook endpoint');
+
+  // Switch to networks tab
+  await context.switchTab('networks');
+  const networksBody = element('#settings-tab-body').innerHTML;
+  assert(networksBody.includes('registration-network-form'), 'networks panel must render registration form');
+  assert(networksBody.includes('172.16.16.0/23'), 'networks panel must render configured subnets');
 
   // Switch to glpi tab
   await context.switchTab('glpi');
@@ -209,7 +217,7 @@ vm.runInContext(source, context);
   assert(emergencyHtml.includes('Петров Петр'), 'must render surgeon_petrov badge under branch 1');
   assert(emergencyHtml.includes('data-remove-dept-user="1:1:surgeon_petrov"'), 'must render remove button for dept specialist');
 
-  console.log('PASS unified settings panel: all 9 tabs render cleanly with correct permissions and forms');
+  console.log('PASS unified settings panel: all 10 tabs render cleanly with correct permissions and forms');
   console.log('PASS user branch checkboxes: multi-branch selection and labels verified');
   console.log('PASS emergency branch matrix: Code Blue 5 branches, specialist 2D matrix, user badges verified');
 })().catch(err => {

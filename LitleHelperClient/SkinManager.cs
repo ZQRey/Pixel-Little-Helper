@@ -11,6 +11,12 @@ public sealed class SkinManager : ISkinManager
 {
     private static readonly Lazy<SkinManager> instance = new(() => new SkinManager());
     public static SkinManager Instance => instance.Value;
+    private static readonly HashSet<string> SupportedSkinIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Classic",
+        "GlassmorphismOrb",
+        "StealthNeon"
+    };
 
     private readonly object syncLock = new();
     private readonly Dictionary<string, SkinInfo> availableSkins = new(StringComparer.OrdinalIgnoreCase);
@@ -71,6 +77,12 @@ public sealed class SkinManager : ISkinManager
             if (availableSkins.ContainsKey(requestedId) && !string.Equals(requestedId, currentSkinId, StringComparison.OrdinalIgnoreCase))
             {
                 SetSkinInternal(requestedId, saveToSettings: false);
+            }
+            else if (!availableSkins.ContainsKey(requestedId))
+            {
+                userSettings.SelectedSkinId = "Classic";
+                try { userSettings.Save(); }
+                catch (Exception ex) { Settings.Log(ex); }
             }
         }
     }
@@ -306,7 +318,7 @@ public sealed class SkinManager : ISkinManager
                         {
                             string json = File.ReadAllText(jsonPath);
                             var manifest = JsonSerializer.Deserialize<SkinManifest>(json, Settings.Json);
-                            if (manifest != null && !string.IsNullOrWhiteSpace(manifest.Id))
+                            if (manifest != null && !string.IsNullOrWhiteSpace(manifest.Id) && SupportedSkinIds.Contains(manifest.Id))
                             {
                                 availableSkins[manifest.Id] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
                             }
@@ -352,24 +364,6 @@ public sealed class SkinManager : ISkinManager
             availableSkins["StealthNeon"] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
         }
 
-        // Ensure CyberFamiliar
-        if (!availableSkins.ContainsKey("CyberFamiliar"))
-        {
-            var manifest = LoadManifestFromResource("CyberFamiliar") ?? new SkinManifest
-            {
-                Id = "CyberFamiliar",
-                DisplayName = "Кибер-дух (Cyber Familiar)",
-                Author = "PixelHelper",
-                Version = "1.0",
-                SpriteWidth = 96,
-                SpriteHeight = 96,
-                ScalingMode = "HighQuality",
-                BadgeAnchor = new SkinAnchor { X = 16, Y = 14 },
-                HatAnchor = new SkinAnchor { X = 8, Y = -6 }
-            };
-            availableSkins["CyberFamiliar"] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
-        }
-
         // Ensure GlassmorphismOrb
         if (!availableSkins.ContainsKey("GlassmorphismOrb"))
         {
@@ -386,34 +380,6 @@ public sealed class SkinManager : ISkinManager
                 HatAnchor = new SkinAnchor { X = 8, Y = -6 }
             };
             availableSkins["GlassmorphismOrb"] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
-        }
-
-        // Ensure Mage (Arcane Mage)
-        if (!availableSkins.ContainsKey("Mage"))
-        {
-            var manifest = LoadManifestFromResource("Mage") ?? new SkinManifest
-            {
-                Id = "Mage",
-                DisplayName = "Энергичный чародей (Arcane Mage)",
-                Author = "PixelHelper",
-                Version = "1.0",
-                SpriteWidth = 96,
-                SpriteHeight = 96,
-                ScalingMode = "HighQuality",
-                BadgeAnchor = new SkinAnchor { X = 35.0, Y = 12.0 },
-                HatAnchor = new SkinAnchor { X = 24.0, Y = -6.0 },
-                FrameIntervalsMs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Twirl"] = 100,
-                    ["Sleep"] = 300,
-                    ["Workout"] = 150,
-                    ["Dance"] = 120,
-                    ["Charging"] = 150,
-                    ["Idle"] = 140,
-                    ["Default"] = 120
-                }
-            };
-            availableSkins["Mage"] = new SkinInfo(manifest.Id, manifest.DisplayName, manifest.Author, manifest.Version, manifest);
         }
     }
 

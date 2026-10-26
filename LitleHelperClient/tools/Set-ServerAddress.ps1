@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $uri = $null
 if ($ServerUrl -match '[\s\\,]' -or ![Uri]::TryCreate($ServerUrl,[UriKind]::Absolute,[ref]$uri) -or
     $uri.Scheme -notin @('http','https') -or $uri.HostNameType -eq [UriHostNameType]::Unknown -or
-    $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'Укажите адрес вида http://helper.gp1.loc, без обратных слешей и запятой.' }
+    $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'Укажите адрес вида https://helper.gp1.loc, без обратных слешей и запятой.' }
 $machine=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
 try {
     $key=$machine.CreateSubKey('Software\PixelHelper')

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.72" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.73" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
     <MediaTemplate EmbedCab="yes" /><Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" /><Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
@@ -10,8 +10,8 @@
       <RegistrySearch Id="FindServerUrl" Root="HKLM" Key="Software\PixelHelper" Name="ServerUrl" Type="raw" Win64="yes" />
     </Property>
     <SetProperty Id="SERVERURL" Action="UseExistingServerUrl" Value="[EXISTINGSERVERURL]" After="AppSearch">NOT SERVERURL AND EXISTINGSERVERURL</SetProperty>
-    <SetProperty Id="SERVERURL" Action="UseDefaultServerUrl" Value="http://helper.gp1.loc" After="UseExistingServerUrl">NOT SERVERURL</SetProperty>
-    <Condition Message="Укажите адрес вида http://helper.gp1.loc: прямые слеши, без пробелов и запятых.">Installed OR ((SERVERURL &lt;&lt; "http://" OR SERVERURL &lt;&lt; "https://") AND NOT (SERVERURL &gt;&lt; " ") AND NOT (SERVERURL &gt;&lt; "\") AND NOT (SERVERURL &gt;&lt; ",") AND SERVERURL &lt;&gt; "http://" AND SERVERURL &lt;&gt; "https://")</Condition>
+    <SetProperty Id="SERVERURL" Action="UseDefaultServerUrl" Value="https://helper.gp1.loc" After="UseExistingServerUrl">NOT SERVERURL</SetProperty>
+    <Condition Message="Укажите адрес вида https://helper.gp1.loc: прямые слеши, без пробелов и запятых.">Installed OR ((SERVERURL &lt;&lt; "http://" OR SERVERURL &lt;&lt; "https://") AND NOT (SERVERURL &gt;&lt; " ") AND NOT (SERVERURL &gt;&lt; "\") AND NOT (SERVERURL &gt;&lt; ",") AND SERVERURL &lt;&gt; "http://" AND SERVERURL &lt;&gt; "https://")</Condition>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="PixelHelper">
         <Component Id="MainExecutableComponent" Guid="96F581E4-391C-490F-B3E7-2CD0B03BAC75" Win64="yes">
@@ -74,6 +74,9 @@
           <RegistryKey Root="HKLM" Key="Software\Policies\YandexBrowser\ExtensionInstallForcelist">
             <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
           </RegistryKey>
+          <RegistryKey Root="HKLM" Key="Software\YandexBrowser\NativeMessagingHosts\com.pixelhelper.webguard">
+            <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" />
+          </RegistryKey>
         </Component>
         <Component Id="ExplorerContextMenu" Guid="B4E17C2F-4389-4B52-9A2E-8E7C5D1F6A34" Win64="yes">
           <!-- Files context menu -->
@@ -125,7 +128,7 @@
       <Property Id="DefaultUIFont" Value="Normal" />
       <Dialog Id="ServerAddressDlg" Width="370" Height="210" Title="Установка PixelHelper" NoMinimize="yes">
         <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="20" Text="Подключение помощника к серверу" />
-        <Control Id="Label" Type="Text" X="20" Y="55" Width="330" Height="30" Text="Укажите адрес сервера, например http://helper.gp1.loc" />
+        <Control Id="Label" Type="Text" X="20" Y="55" Width="330" Height="30" Text="Укажите адрес сервера, например https://helper.gp1.loc" />
         <Control Id="ServerUrl" Type="Edit" X="20" Y="90" Width="330" Height="18" Property="SERVERURL" />
         <Control Id="Note" Type="Text" X="20" Y="120" Width="330" Height="30" Text="Помощник запустится автоматически. Адрес применяется ко всем пользователям. Ключ создаётся автоматически." />
         <Control Id="Install" Type="PushButton" X="190" Y="175" Width="75" Height="23" Default="yes" Text="Установить">

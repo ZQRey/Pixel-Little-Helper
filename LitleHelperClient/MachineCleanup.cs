@@ -73,6 +73,7 @@ internal static class MachineCleanup
                     using var user = Registry.Users.OpenSubKey(mount, true) ?? throw new IOException("Cannot open user hive");
                     using (var run = user.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true)) run?.DeleteValue("PixelHelper", false);
                     user.DeleteSubKeyTree(@"Software\PixelHelper", false);
+                    RemoveWebGuardOverrides(user);
                     using var folders = user.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders");
                     string appData = folders?.GetValue("AppData", null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string ?? Path.Combine(home, "AppData", "Roaming");
                     appData = appData.Replace("%USERPROFILE%", home, StringComparison.OrdinalIgnoreCase);
@@ -90,6 +91,24 @@ internal static class MachineCleanup
             return 0;
         }
         catch { return 1; }
+    }
+    private static void RemoveWebGuardOverrides(RegistryKey user)
+    {
+        foreach (string protocol in new[] { "http", "https" })
+        {
+            string path = $@"Software\Classes\{protocol}\shell\open\command";
+            using var command = user.OpenSubKey(path);
+            string? value = command?.GetValue(null) as string;
+            if (value != null && value.Contains("PixelHelper.exe", StringComparison.OrdinalIgnoreCase) &&
+                value.Contains("--guard-url", StringComparison.OrdinalIgnoreCase))
+                user.DeleteSubKeyTree(path, false);
+        }
+        user.DeleteSubKeyTree(@"Software\Classes\PixelHelperURL", false);
+        using var registered = user.OpenSubKey(@"Software\RegisteredApplications", true);
+        if (registered?.GetValue("PixelHelper") as string == @"Software\Classes\PixelHelperURL")
+            registered.DeleteValue("PixelHelper", false);
+        foreach (string browser in new[] { @"Software\Google\Chrome\NativeMessagingHosts", @"Software\Microsoft\Edge\NativeMessagingHosts", @"Software\YandexBrowser\NativeMessagingHosts" })
+            user.DeleteSubKeyTree(browser + @"\com.pixelhelper.webguard", false);
     }
     private static int Reg(params string[] arguments)
     {

@@ -68,6 +68,22 @@ if (args.FirstOrDefault() == "--ad-probe")
     await connection.ConnectAsync("localhost", ldap.Port); await connection.BindAsync("alice@ad.test", "AD-test-password");
     Console.WriteLine("LDAP bind successful"); return;
 }
+if (args.FirstOrDefault() == "--networks")
+{
+    var defaults = LitleHelperServer.NetworkAccess.DefaultRegistrationNetworks;
+    Check(LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("172.16.16.11"), defaults), "default networks allow helper resolver");
+    Check(LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("172.16.17.254"), defaults), "172.16.16.0/23 covers upper half");
+    Check(LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("192.168.3.10"), defaults), "192.168.2.0/23 covers configured branch");
+    Check(LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("10.0.1.10"), defaults), "10.0.0.0/23 covers VPN branch");
+    Check(!LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("172.16.18.10"), defaults), "outside configured networks is denied");
+    Check(!LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("8.8.8.8"), defaults), "public address is denied");
+    var normalized = LitleHelperServer.NetworkAccess.NormalizeNetworks(["192.168.0.5/23", "10.0.0.10", "fd00::/8", "192.168.0.0/23"]);
+    Check(normalized.SequenceEqual(["192.168.0.0/23", "10.0.0.10/32", "fd00::/8"]), "networks are canonicalized and deduplicated");
+    Check(LitleHelperServer.NetworkAccess.IsAllowed(IPAddress.Parse("fd00::1"), normalized), "IPv6 ULA network is supported");
+    try { LitleHelperServer.NetworkAccess.NormalizeNetworks(["not-a-network"]); throw new Exception("invalid network accepted"); }
+    catch (ArgumentException) { Check(true, "invalid CIDR is rejected"); }
+    return;
+}
 if (args.FirstOrDefault() == "--telegram-management") { await TelegramManagementTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--glpi-import") { await GlpiImportTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--messenger") { await MessengerTests.RunAsync(); return; }

@@ -10,7 +10,7 @@ public static class PanelApi
 {
     public static void MapPanelApi(this WebApplication app)
     {
-        app.MapPost("/api/agents/register", async (AgentRegistrationRequest request, HelperDb db) =>
+        app.MapPost("/api/agents/register", async (AgentRegistrationRequest request, HttpContext context, HelperDb db, IConfiguration config, IntegrationSettings settings) =>
         {
             if (string.IsNullOrWhiteSpace(request.MachineName) || string.IsNullOrWhiteSpace(request.ClientKey)) return Results.BadRequest();
             string machine = Security.Canonical(request.MachineName);
@@ -19,6 +19,11 @@ public static class PanelApi
                 return Results.BadRequest(new { error = "Неверные данные регистрации клиента." });
             string hash = Security.KeyHash(request.ClientKey);
             var computer = await db.Computers.SingleOrDefaultAsync(c => c.MachineName == machine);
+            bool firstRegistration = computer == null || string.IsNullOrEmpty(computer.AgentKeyHash);
+            var callerAddress = NetworkAccess.CallerAddress(context);
+            if (firstRegistration && !config.GetValue<bool>("Registration:AllowPublic") &&
+                !NetworkAccess.IsAllowed(callerAddress, settings.Registration().AllowedNetworks))
+                return Results.Json(new { error = "Регистрация нового клиента разрешена только из разрешённых сетей." }, statusCode: 403);
             if (computer == null)
             {
                 computer = new Computer { MachineName = machine, AgentKeyHash = hash };
@@ -42,6 +47,12 @@ public static class PanelApi
             try { await glpi.TestConnectionAsync(token); return Results.Ok(new { success = true, message = "GLPI API: авторизация успешна. Тестовая заявка не создавалась." }); }
             catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or TaskCanceledException)
             { return Results.Ok(new { success = false, message = ex is TaskCanceledException ? "GLPI не ответил за 20 секунд. Проверьте сеть и адрес." : ex is HttpRequestException ? "Сервер помощника не смог подключиться к GLPI. Проверьте адрес, DNS, TLS и сеть." : ex.Message }); }
+        }).RequireAuthorization("settings.manage");
+        app.MapGet("/api/settings/registration", (IntegrationSettings settings) => Results.Ok(settings.RegistrationView())).RequireAuthorization("settings.manage");
+        app.MapPut("/api/settings/registration", (RegistrationOptions request, IntegrationSettings settings) =>
+        {
+            try { settings.SaveRegistration(request); return Results.Ok(settings.RegistrationView()); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         }).RequireAuthorization("settings.manage");
         app.MapPost("/api/auth/login", async (LoginRequest request, HelperDb db, IConfiguration config) =>
         {

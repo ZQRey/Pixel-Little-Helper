@@ -303,7 +303,6 @@ public static class WebGuard
                     return true;
                 }
             }
-            return true;
         }
 
         return false;

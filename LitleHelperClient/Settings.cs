@@ -8,7 +8,7 @@ public sealed class Settings
 {
     public double? X { get; set; }
     public double? Y { get; set; }
-    public string? ServerUrl { get; set; } = "http://helper.gp1.loc";
+    public string? ServerUrl { get; set; } = "https://helper.gp1.loc";
     public string? HubUrl { get; set; }
     public string ClientToken { get; set; } = "";
     public bool EnableAdministrativeCommands { get; set; } = true;
@@ -101,7 +101,11 @@ public sealed class Settings
             Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) && uri.HostNameType != UriHostNameType.Unknown &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
             string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment))
+        {
+            if (uri.Scheme == Uri.UriSchemeHttp && uri.Host.Equals("helper.gp1.loc", StringComparison.OrdinalIgnoreCase))
+                uri = new UriBuilder(uri) { Scheme = Uri.UriSchemeHttps, Port = -1 }.Uri;
             settings.ServerUrl = uri.AbsoluteUri.TrimEnd('/');
+        }
     }
     private static readonly object writeGate = new();
     public void Save() { lock (writeGate) AtomicWrite(Path.Combine(Folder, "config.json"), JsonSerializer.Serialize(this, Json)); }

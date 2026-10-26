@@ -6,10 +6,11 @@ namespace PixelHelper;
 public static class WebGuardProtocolHandler
 {
     private const string ProtocolProgId = "PixelHelperURL";
+    private const string RegisteredApplication = @"Software\RegisteredApplications";
 
     /// <summary>
-    /// Configures PixelHelper as default browser/URL handler in HKCU for the current user.
-    /// Sets http, https, and .html handlers to PixelHelperURL.
+    /// Registers a per-user URL protocol candidate without taking over http/https.
+    /// Windows 10/11 only honor the user's explicit UserChoice selection.
     /// </summary>
     public static void SetAsDefault()
     {
@@ -21,10 +22,9 @@ public static class WebGuardProtocolHandler
 
             string commandValue = $"\"{exePath}\" --guard-url \"%1\"";
 
-            // 1. Ensure HKCU\Software\Classes\PixelHelperURL is registered
-            using (var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64))
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
+            using (var progIdKey = baseKey.CreateSubKey($@"Software\Classes\{ProtocolProgId}", writable: true))
             {
-                using var progIdKey = baseKey.CreateSubKey($@"Software\Classes\{ProtocolProgId}", writable: true);
                 if (progIdKey != null)
                 {
                     progIdKey.SetValue(null, "PixelHelper Guard URL");
@@ -37,11 +37,13 @@ public static class WebGuardProtocolHandler
                     using var cmdKey = progIdKey.CreateSubKey(@"shell\open\command", writable: true);
                     cmdKey?.SetValue(null, commandValue);
                 }
-
-                // 2. Set per-user protocol handlers in HKCU\Software\Classes
-                SetProtocolCommand(baseKey, "http", commandValue);
-                SetProtocolCommand(baseKey, "https", commandValue);
             }
+
+            using (var registered = baseKey.CreateSubKey(RegisteredApplication, writable: true))
+                registered?.SetValue("PixelHelper", $@"Software\Classes\{ProtocolProgId}");
+
+            // Remove overrides written by older versions; the browser is chosen by the user.
+            RemoveLegacyOverrides(baseKey);
         }
         catch (Exception ex)
         {
@@ -50,56 +52,50 @@ public static class WebGuardProtocolHandler
     }
 
     /// <summary>
-    /// Restores the user's preferred browser executable as default in HKCU\Software\Classes\http and https.
+    /// Removes PixelHelper URL overrides. The browser remains the Windows user's default.
     /// </summary>
     public static void RestoreUserDefault(string browserExePath)
     {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(browserExePath) || !File.Exists(browserExePath))
-            {
-                RemoveOverride();
-                return;
-            }
-
-            string browserCmd = $"\"{browserExePath}\" \"%1\"";
-
-            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
-            SetProtocolCommand(baseKey, "http", browserCmd);
-            SetProtocolCommand(baseKey, "https", browserCmd);
-
-            // Also update PixelHelperURL in HKCU to point directly to browser as a fallback
-            using var cmdKey = baseKey.CreateSubKey($@"Software\Classes\{ProtocolProgId}\shell\open\command", writable: true);
-            cmdKey?.SetValue(null, browserCmd);
-        }
-        catch (Exception ex)
-        {
-            Settings.Log(ex);
-        }
+        _ = browserExePath;
+        RemoveOverride();
     }
 
     /// <summary>
-    /// Removes HKCU\Software\Classes protocol overrides so system default ProgId is used.
+    /// Removes only PixelHelper-owned HKCU protocol overrides and the URL protocol candidate.
     /// </summary>
     public static void RemoveOverride()
     {
         try
         {
             using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64);
-            baseKey.DeleteSubKeyTree(@"Software\Classes\http\shell\open\command", false);
-            baseKey.DeleteSubKeyTree(@"Software\Classes\https\shell\open\command", false);
+            RemoveLegacyOverrides(baseKey);
             baseKey.DeleteSubKeyTree($@"Software\Classes\{ProtocolProgId}", false);
+            using var registered = baseKey.OpenSubKey(RegisteredApplication, writable: true);
+            if (registered?.GetValue("PixelHelper") as string == $@"Software\Classes\{ProtocolProgId}")
+                registered.DeleteValue("PixelHelper", false);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
     }
 
-    private static void SetProtocolCommand(RegistryKey baseKey, string protocol, string command)
+    private static void RemoveLegacyOverrides(RegistryKey baseKey)
     {
-        try
-        {
-            using var cmdKey = baseKey.CreateSubKey($@"Software\Classes\{protocol}\shell\open\command", writable: true);
-            cmdKey?.SetValue(null, command);
-        }
-        catch { }
+        RemoveProtocolOverride(baseKey, "http");
+        RemoveProtocolOverride(baseKey, "https");
     }
+
+    private static void RemoveProtocolOverride(RegistryKey baseKey, string protocol)
+    {
+        string path = $@"Software\Classes\{protocol}\shell\open\command";
+        using var command = baseKey.OpenSubKey(path);
+        if (IsPixelHelperCommand(command?.GetValue(null) as string))
+            baseKey.DeleteSubKeyTree(path, false);
+    }
+
+    private static bool IsPixelHelperCommand(string? command) =>
+        !string.IsNullOrWhiteSpace(command) &&
+        command.Contains("PixelHelper.exe", StringComparison.OrdinalIgnoreCase) &&
+        command.Contains("--guard-url", StringComparison.OrdinalIgnoreCase);
 }

@@ -60,17 +60,13 @@ public sealed class QuarantineManager
             var whitelist = ReadWhitelist();
             if (whitelist.Count == 0) return false;
 
-            if (!string.IsNullOrEmpty(sha256) && whitelist.Any(w => string.Equals(w.Sha256, sha256, StringComparison.OrdinalIgnoreCase)))
+            if (!string.IsNullOrEmpty(sha256))
             {
-                return true;
+                return whitelist.Any(w => string.Equals(w.Sha256, sha256, StringComparison.OrdinalIgnoreCase));
             }
 
-            if (!string.IsNullOrEmpty(filePath) && whitelist.Any(w => string.Equals(w.FilePath, filePath, StringComparison.OrdinalIgnoreCase)))
-            {
-                return true;
-            }
-
-            return false;
+            return !string.IsNullOrEmpty(filePath) &&
+                   whitelist.Any(w => string.Equals(w.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
         }
     }
 

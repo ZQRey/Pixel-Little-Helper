@@ -63,6 +63,8 @@ services:
       Glpi__AppToken: ${GLPI_APP_TOKEN:-}
       Glpi__UserToken: ${GLPI_USER_TOKEN:-}
       Glpi__ServiceUserId: ${GLPI_SERVICE_USER_ID:-0}
+      Internal__ResolveClientApiKey: ${RESOLVE_CLIENT_API_KEY:-}
+      Internal__ResolveClientAllowedIps: ${RESOLVE_CLIENT_ALLOWED_IPS:-172.16.16.11}
       WebRTC__StunServer: "stun:172.16.16.61:3478"
       WebRTC__TurnServer: "turn:172.16.16.61:3478"
       WebRTC__TurnUser: "helper"

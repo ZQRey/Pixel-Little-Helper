@@ -39,7 +39,7 @@ $actions = @(Rows 'SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecute
 foreach ($case in @(
     @{ Supplied = 'https://custom.example:5443'; Existing = 'http://old.example:5000'; Expected = 'https://custom.example:5443' },
     @{ Supplied = ''; Existing = 'http://old.example:5000'; Expected = 'http://old.example:5000' },
-    @{ Supplied = ''; Existing = ''; Expected = 'http://helper.gp1.loc' }
+    @{ Supplied = ''; Existing = ''; Expected = 'https://helper.gp1.loc' }
 )) {
     $session.Property('SERVERURL') = $case.Supplied
     $session.Property('EXISTINGSERVERURL') = $case.Existing

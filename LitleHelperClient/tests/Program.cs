@@ -1069,14 +1069,13 @@ try
     var kbDto = new KnowledgeArticleDto(1, "Тестовая статья", "DMED", "Контент", "dmed", null, "All", 0, true, DateTime.UtcNow, DateTime.UtcNow);
     Check(kbDto.Title == "Тестовая статья" && kbDto.Category == "DMED", "KnowledgeArticleDto properties preserved");
 
-    // Sprint 39: Skin Engine, StealthNeon, CyberFamiliar, and GlassmorphismOrb
+    // Sprint 39: Skin Engine, StealthNeon, and GlassmorphismOrb
     var skinMgr = SkinManager.Instance;
     var availableSkins = skinMgr.GetAvailableSkins();
     Check(availableSkins.Any(s => s.Id == "Classic"), "SkinManager discovers Classic skin");
     Check(availableSkins.Any(s => s.Id == "StealthNeon"), "SkinManager discovers StealthNeon skin");
-    Check(availableSkins.Any(s => s.Id == "CyberFamiliar"), "SkinManager discovers CyberFamiliar skin");
     Check(availableSkins.Any(s => s.Id == "GlassmorphismOrb"), "SkinManager discovers GlassmorphismOrb skin");
-    Check(availableSkins.Any(s => s.Id == "Mage"), "SkinManager discovers Mage skin");
+    Check(availableSkins.Select(s => s.Id).OrderBy(id => id).SequenceEqual(["Classic", "GlassmorphismOrb", "StealthNeon"]), "SkinManager exposes only the three supported themes");
 
     // Test StealthNeon
     var snSkin = availableSkins.First(s => s.Id == "StealthNeon");
@@ -1102,19 +1101,6 @@ try
     }
     Check(true, "All 38 states (98 frames) of StealthNeon successfully verified");
 
-    // Test CyberFamiliar (HD 96x96)
-    Check(skinMgr.SetSkin("CyberFamiliar"), "SetSkin('CyberFamiliar') returned true");
-    Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "CyberFamiliar has HighQuality scaling mode");
-    foreach (var state in Enum.GetValues<PetState>())
-    {
-        for (int index = 0; index < Sprites.FrameCount(state); index++)
-        {
-            var frame = skinMgr.GetSpriteFrame(state, index);
-            Check(frame != null && frame.Width == 96 && frame.Height == 96, $"CyberFamiliar {state}_{index + 1} valid 96x96");
-        }
-    }
-    Check(true, "All 38 states (98 frames) of CyberFamiliar successfully verified");
-
     // Test GlassmorphismOrb (HD 96x96)
     Check(skinMgr.SetSkin("GlassmorphismOrb"), "SetSkin('GlassmorphismOrb') returned true");
     Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "GlassmorphismOrb has HighQuality scaling mode");
@@ -1127,20 +1113,6 @@ try
         }
     }
     Check(true, "All 38 states (98 frames) of GlassmorphismOrb successfully verified");
-
-    // Test Mage (Arcane Mage HD 96x96)
-    Check(skinMgr.SetSkin("Mage"), "SetSkin('Mage') returned true");
-    Check(skinMgr.CurrentSkin.Manifest.ScalingMode == "HighQuality", "Mage has HighQuality scaling mode");
-    Check(skinMgr.CurrentSkin.Manifest.BadgeAnchor.X == 35.0 && skinMgr.CurrentSkin.Manifest.BadgeAnchor.Y == 12.0, "Mage badge anchor is positioned on staff gem (35, 12)");
-    foreach (var state in Enum.GetValues<PetState>())
-    {
-        for (int index = 0; index < Sprites.FrameCount(state); index++)
-        {
-            var frame = skinMgr.GetSpriteFrame(state, index);
-            Check(frame != null && frame.Width == 96 && frame.Height == 96, $"Mage {state}_{index + 1} valid 96x96");
-        }
-    }
-    Check(true, "All 38 states (98 frames) of Mage successfully verified");
 
     // Verify HD top-half hit-testing (GlassmorphismOrb top half is interactive)
     var orbIdle = skinMgr.GetSpriteFrame(PetState.Idle, 0);

@@ -141,7 +141,11 @@ document.addEventListener('keydown', e => { if(e.key==='Escape')closeReportHints
 document.addEventListener('scroll',positionReportColumnHint,{capture:true,passive:true});
 window.addEventListener('resize',positionReportColumnHint);
 try { if (window.parent !== window) window.parent.addEventListener('scroll',positionReportColumnHint,{passive:true}); } catch (_) {}
-function reportPeriod(kind) {
+function reportPeriod(kind, preserveFilter = false) {
+  if (!preserveFilter) {
+    delete glpiReportFilters.score;
+    delete glpiReportFilters.reaction;
+  }
   glpiReportFilters.period = kind;
   const today = reportDay(new Date()), end = new Date(today + 'T12:00:00Z'), start = new Date(end);
   if (kind === 'week') start.setUTCDate(start.getUTCDate() - (start.getUTCDay() + 6) % 7);
@@ -168,7 +172,7 @@ async function selectReportScore(value) {
 }
 async function renderGlpiReports() {
   await ensureReportContext();
-  if (!glpiReportFilters.from) reportPeriod('month');
+  if (!glpiReportFilters.from) reportPeriod('month', true);
   const viewGeneration = generation;
   const data = await api('/reports/glpi?' + new URLSearchParams(glpiReportFilters));
   if (viewGeneration !== generation || page !== 'reports') return;
@@ -202,7 +206,19 @@ async function renderGlpiReports() {
   document.querySelectorAll('[data-report-help]').forEach(button => button.addEventListener('click', () => { const open=button.getAttribute('aria-expanded')!=='true'; closeReportHints(); button.setAttribute('aria-expanded',String(open)); document.getElementById(button.getAttribute('aria-controls')).hidden=!open; }));
   $('#report-compare-mode').addEventListener('change',e=>{const custom=e.target.value==='custom';document.querySelectorAll('[data-compare-custom]').forEach(label=>{label.hidden=!custom;const input=label.querySelector('input');input.disabled=!custom;input.required=custom;});});
   $('#report-filter').querySelectorAll('[name=from],[name=to]').forEach(input=>input.addEventListener('change',()=>{$('#report-filter [name=period]').value='custom';}));
-  $('#report-filter').addEventListener('submit', e => { e.preventDefault(); const reaction=glpiReportFilters.reaction, score=glpiReportFilters.score; glpiReportFilters = Object.fromEntries([...new FormData(e.target)].filter(([, v]) => v !== '')); if(reaction != null)glpiReportFilters.reaction=reaction; if(score != null)glpiReportFilters.score=score; glpiReportPage = 0; renderGlpiReports().catch(e => toast(e.message, true)); });
+  $('#report-filter').addEventListener('submit', e => {
+    e.preventDefault();
+    const prevFrom = glpiReportFilters.from, prevTo = glpiReportFilters.to;
+    const formValues = Object.fromEntries([...new FormData(e.target)].filter(([, v]) => v !== ''));
+    const datesChanged = formValues.from !== prevFrom || formValues.to !== prevTo;
+    const reaction = datesChanged ? null : glpiReportFilters.reaction;
+    const score = datesChanged ? null : glpiReportFilters.score;
+    glpiReportFilters = formValues;
+    if (reaction != null) glpiReportFilters.reaction = reaction;
+    if (score != null) glpiReportFilters.score = score;
+    glpiReportPage = 0;
+    renderGlpiReports().catch(e => toast(e.message, true));
+  });
   document.querySelectorAll('[data-reaction]').forEach(b => b.addEventListener('click', () => selectReportReaction(b.dataset.reaction).catch(e => toast(e.message,true))));
   $('#report-reaction-clear')?.addEventListener('click', () => selectReportReaction(null).catch(e => toast(e.message,true)));
   document.querySelectorAll('[data-period]').forEach(b => b.addEventListener('click', () => { reportPeriod(b.dataset.period); glpiReportPage = 0; renderGlpiReports().catch(e => toast(e.message, true)); }));
@@ -226,7 +242,15 @@ async function renderGlpiReports() {
   }
   const points = data.timeline, max = Math.max(1, ...points.flatMap(p => [p.created,p.solved,p.closed]));
   $('#report-timeline').innerHTML = points.length ? `<div class="report-bars">${points.map(p => `<button class="report-bar-day" data-day="${p.day}" title="${p.day}: создано ${p.created}, решено ${p.solved}, закрыто ${p.closed}"><span class="report-bar-group">${['created','solved','closed'].map(k => `<i class="${k}" data-height="${Math.max(p[k] ? 3 : 0, p[k] / max * 105)}"></i>`).join('')}</span><small>${p.day.slice(5)}</small></button>`).join('')}</div><small>Нажмите на дату для детализации. Динамика учитывает даты каждого события.</small>` : '<div class="empty">За этот период событий нет</div>';
-  $('#report-timeline').querySelectorAll('[data-day]').forEach(b => b.addEventListener('click', () => { glpiReportFilters.from = glpiReportFilters.to = b.dataset.day; glpiReportFilters.period='day'; glpiReportTab = 'tickets'; glpiReportPage = 0; renderGlpiReports().catch(e => toast(e.message,true)); }));
+  $('#report-timeline').querySelectorAll('[data-day]').forEach(b => b.addEventListener('click', () => {
+    delete glpiReportFilters.score;
+    delete glpiReportFilters.reaction;
+    glpiReportFilters.from = glpiReportFilters.to = b.dataset.day;
+    glpiReportFilters.period='day';
+    glpiReportTab = 'tickets';
+    glpiReportPage = 0;
+    renderGlpiReports().catch(e => toast(e.message,true));
+  }));
   const scores = (data.ratings && data.ratings.length ? data.ratings : [5,4,3,2,1].map(n => ({ score: n, count: data.tickets.filter(t => t.status === 6 && t.currentScore != null && Math.round(t.currentScore) === n).length }))).map(x => ({ n: x.score ?? x.n, count: x.count })), maxScores = Math.max(1,...scores.map(x => x.count));
   $('#report-stars-chart').innerHTML = scores.map(x => `<button type="button" class="report-rating-row ${String(data.filter.score) === String(x.n) ? 'selected' : ''}" data-score="${x.n}" aria-pressed="${String(data.filter.score) === String(x.n)}" aria-label="${x.n} ★: ${x.count} заявок" title="Показать заявки с оценкой ${x.n} ★ (${x.count} заявок)"><span>${x.n} ★</span><div><i data-width="${x.count / maxScores * 100}"></i></div><b>${x.count}</b></button>`).join('');
   document.querySelectorAll('[data-score]').forEach(b => b.addEventListener('click', () => selectReportScore(b.dataset.score).catch(e => toast(e.message, true))));

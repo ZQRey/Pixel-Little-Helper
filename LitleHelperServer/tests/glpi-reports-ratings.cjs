@@ -108,7 +108,6 @@ const sandbox = {
   closeReportHints: () => {},
   reportComparisonView: () => '',
   surveyReportHtml: () => '',
-  reportPeriod: () => {},
   document: {
     addEventListener: () => {},
     createElement: () => ({ textContent: '', addEventListener: () => {}, style: {} }),
@@ -162,7 +161,17 @@ async function test() {
   const filters4 = vm.runInContext('glpiReportFilters', sandbox);
   assert.strictEqual(filters4.score, undefined, 'selectReportScore(null) should clear score');
 
-  console.log('PASS GLPI Reports: interactive rating buttons, selection banner, score toggle and clear');
+  // Changing period clears score and reaction
+  await vm.runInContext('selectReportScore(5)', sandbox);
+  let filtersAfterScore = vm.runInContext('glpiReportFilters', sandbox);
+  assert.strictEqual(filtersAfterScore.score, '5', 'Score should be 5 before period change');
+  vm.runInContext('reportPeriod("year")', sandbox);
+  let filtersAfterPeriod = vm.runInContext('glpiReportFilters', sandbox);
+  assert.strictEqual(filtersAfterPeriod.score, undefined, 'Changing period to year must reset score filter');
+  assert.strictEqual(filtersAfterPeriod.reaction, undefined, 'Changing period must reset reaction filter');
+  assert.strictEqual(filtersAfterPeriod.period, 'year', 'Period should be set to year');
+
+  console.log('PASS GLPI Reports: interactive rating buttons, selection banner, score toggle and clear, period reset');
 }
 
 test().catch(err => {

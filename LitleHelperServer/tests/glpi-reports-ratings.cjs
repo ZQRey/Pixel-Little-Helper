@@ -163,15 +163,32 @@ async function test() {
 
   // Changing period clears score and reaction
   await vm.runInContext('selectReportScore(5)', sandbox);
+  await vm.runInContext('selectReportReaction("1")', sandbox);
   let filtersAfterScore = vm.runInContext('glpiReportFilters', sandbox);
   assert.strictEqual(filtersAfterScore.score, '5', 'Score should be 5 before period change');
+  assert.strictEqual(filtersAfterScore.reaction, '1', 'Reaction should be 1 before period change');
   vm.runInContext('reportPeriod("year")', sandbox);
   let filtersAfterPeriod = vm.runInContext('glpiReportFilters', sandbox);
   assert.strictEqual(filtersAfterPeriod.score, undefined, 'Changing period to year must reset score filter');
   assert.strictEqual(filtersAfterPeriod.reaction, undefined, 'Changing period must reset reaction filter');
   assert.strictEqual(filtersAfterPeriod.period, 'year', 'Period should be set to year');
 
-  console.log('PASS GLPI Reports: interactive rating buttons, selection banner, score toggle and clear, period reset');
+  // Test selectReportReaction toggle and clear
+  await vm.runInContext('selectReportReaction("2")', sandbox);
+  let filtersReaction = vm.runInContext('glpiReportFilters', sandbox);
+  assert.strictEqual(filtersReaction.reaction, '2', 'Reaction should be set to 2');
+  await vm.runInContext('selectReportReaction("2")', sandbox);
+  filtersReaction = vm.runInContext('glpiReportFilters', sandbox);
+  assert.strictEqual(filtersReaction.reaction, undefined, 'Re-clicking reaction 2 should toggle it off');
+
+  await vm.runInContext('selectReportReaction("3")', sandbox);
+  filtersReaction = vm.runInContext('glpiReportFilters', sandbox);
+  assert.strictEqual(filtersReaction.reaction, '3', 'Reaction should be set to 3');
+  await vm.runInContext('selectReportReaction(null)', sandbox);
+  filtersReaction = vm.runInContext('glpiReportFilters', sandbox);
+  assert.strictEqual(filtersReaction.reaction, undefined, 'selectReportReaction(null) should clear reaction');
+
+  console.log('PASS GLPI Reports: interactive rating buttons, reaction toggle/clear, selection banner, score toggle and clear, period reset');
 }
 
 test().catch(err => {

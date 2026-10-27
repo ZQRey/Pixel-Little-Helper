@@ -158,7 +158,8 @@ function reportReactionChart(data) {
   return `<div class="panel report-chart report-reaction"><h3>Время реакции на заявку</h3><p>От создания до принятия в работу. Интервалы не пересекаются, верхняя граница включается.</p><div class="report-reaction-bars">${buckets.map(b => `<button type="button" class="report-reaction-bar ${String(data.filter.reaction) === String(b.id) ? 'selected' : ''}" data-reaction="${b.id}" aria-pressed="${String(data.filter.reaction) === String(b.id)}" aria-label="${escape(b.range)}: ${b.count} заявок" title="${escape(b.range)}: ${b.count} заявок"><strong>${b.count}</strong><span class="report-reaction-track"><i data-height="${Math.max(b.count ? 4 : 0, b.count / max * 145)}"></i></span><span>${escape(b.label)}</span></button>`).join('')}</div><p class="report-note">Без корректных дат создания и принятия: ${data.reactionMissing ?? 0}. Нажмите на столбец, чтобы отобрать заявки. Распределение показано до отбора по времени реакции.</p>${data.filter.reaction != null ? `<div class="report-reaction-selection">Выбран интервал: ${escape(buckets.find(b => b.id === data.filter.reaction)?.range || '')}. Сводка, таблицы и выгрузка учитывают этот отбор. <button type="button" id="report-reaction-clear">Сбросить интервал</button></div>` : ''}</div>`;
 }
 async function selectReportReaction(value) {
-  if (value == null) delete glpiReportFilters.reaction; else glpiReportFilters.reaction = String(value);
+  if (value == null || String(glpiReportFilters.reaction) === String(value)) delete glpiReportFilters.reaction;
+  else glpiReportFilters.reaction = String(value);
   glpiReportTab = 'tickets'; glpiReportPage = 0;
   await renderGlpiReports();
   $('#report-rows')?.scrollIntoView({block:'start',behavior:'smooth'});
@@ -183,7 +184,7 @@ async function renderGlpiReports() {
   $('#stats').hidden = true;
   $('#content').innerHTML = `<div class="report-banner"><div><span class="eyebrow">GLPI / АНАЛИТИКА</span><h2>Как работает поддержка</h2><p>Обращения, время решения и обратная связь пользователей.</p></div><div class="report-freshness">Срез: ${reportDate(data.syncedAt)}<br>История с ${reportDate(data.coverageFrom)}<br>${data.totalAvailable} заявок в доступной области</div></div>
   ${data.error ? `<p class="report-warning">${escape(data.error)}</p>` : ''}
-  <form id="report-filter" class="report-filters"><input type="hidden" name="period" value="${escape(data.filter.periodKind || 'auto')}"><div class="report-presets">${[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['year', 'Год']].map(([k, v]) => `<button type="button" data-period="${k}">${v}</button>`).join('')}</div>
+  <form id="report-filter" class="report-filters"><input type="hidden" name="period" value="${escape(data.filter.periodKind || 'auto')}"><div class="report-presets">${[['day', 'День'], ['week', 'Неделя'], ['month', 'Месяц'], ['year', 'Год']].map(([k, v]) => `<button type="button" data-period="${k}" class="${(data.filter.periodKind || 'month') === k ? 'active' : ''}">${v}</button>`).join('')}</div>
   <label>С даты<input name="from" type="date" required value="${escape(data.filter.from)}"></label><label>По дату<input name="to" type="date" required value="${escape(data.filter.to)}"></label>
   <label>Отбирать по дате<select name="basis">${[['created', 'Создания'], ['solved', 'Решения'], ['closed', 'Закрытия'], ['answered', 'Оценки']].map(([k, v]) => `<option value="${k}" ${data.filter.basis === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
   <label>Филиал<select name="branchId">${choice(c.branches, glpiReportFilters.branchId)}</select></label><label>Специалист<select name="technician">${choice(c.technicians, glpiReportFilters.technician)}</select></label>
@@ -208,9 +209,9 @@ async function renderGlpiReports() {
   $('#report-filter').querySelectorAll('[name=from],[name=to]').forEach(input=>input.addEventListener('change',()=>{$('#report-filter [name=period]').value='custom';}));
   $('#report-filter').addEventListener('submit', e => {
     e.preventDefault();
-    const prevFrom = glpiReportFilters.from, prevTo = glpiReportFilters.to;
+    const prevFrom = glpiReportFilters.from, prevTo = glpiReportFilters.to, prevPeriod = glpiReportFilters.period;
     const formValues = Object.fromEntries([...new FormData(e.target)].filter(([, v]) => v !== ''));
-    const datesChanged = formValues.from !== prevFrom || formValues.to !== prevTo;
+    const datesChanged = formValues.from !== prevFrom || formValues.to !== prevTo || (formValues.period && formValues.period !== prevPeriod);
     const reaction = datesChanged ? null : glpiReportFilters.reaction;
     const score = datesChanged ? null : glpiReportFilters.score;
     glpiReportFilters = formValues;

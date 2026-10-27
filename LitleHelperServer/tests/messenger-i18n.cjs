@@ -92,6 +92,12 @@ class MockElement {
     search(this);
     return results;
   }
+  closest(sel) { return this; }
+  insertBefore(n, ref) { this.append(n); }
+  addEventListener() {}
+  removeEventListener() {}
+  focus() {}
+  blur() {}
   close() {}
   showModal() {}
 }
@@ -184,6 +190,7 @@ conv.append(emptyDiv);
 registerElement('new-messages', 'button');
 registerElement('attach', 'button');
 registerElement('file-input', 'input');
+registerElement('record-voice', 'button');
 registerElement('input', 'textarea');
 registerElement('emoji', 'button');
 registerElement('send', 'button');
@@ -211,11 +218,13 @@ const sandbox = {
   document: {
     documentElement: doc,
     title: '',
-    getElementById(id) { return elementsById.get(id) || null; },
+    getElementById(id) { return elementsById.get(id) || registerElement(id); },
     querySelector(sel) { return doc.querySelector(sel); },
     querySelectorAll(sel) { return doc.querySelectorAll(sel); },
     createElement(tag) { return new MockElement(tag); },
-    createTextNode(t) { return { nodeType: 3, textContent: t }; }
+    createTextNode(t) { return { nodeType: 3, textContent: t }; },
+    addEventListener: () => {},
+    removeEventListener: () => {}
   },
   localStorage: storage,
   location: { origin: 'http://localhost', protocol: 'https:' },

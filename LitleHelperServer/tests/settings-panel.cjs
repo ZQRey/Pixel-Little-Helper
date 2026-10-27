@@ -13,6 +13,8 @@ function element(id) {
       hidden: false,
       isConnected: true,
       open: true,
+      showModal() { this.open = true; },
+      close() { this.open = false; },
       dataset: {},
       style: {},
       handlers: {},
@@ -39,6 +41,7 @@ const localStorageMock = {
   setItem: (k, v) => storage.set(k, String(v))
 };
 
+let lastModal = '';
 const permissions = ['settings.manage', 'updates.manage', 'commands.execute'];
 const context = vm.createContext({
   document: { querySelector: element, querySelectorAll: () => [] },
@@ -48,13 +51,13 @@ const context = vm.createContext({
   superAdmin: () => false,
   roleName: r => r,
   toast: () => {},
-  modal: () => {},
+  modal: (title, html) => { lastModal = html || ''; },
   closeModal: () => {},
   confirm: () => true,
   localStorage: localStorageMock,
   sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
   window: { location: { origin: 'http://127.0.0.1:21500' } },
-  Date, JSON, Number, String, Promise, Set, Map, Array,
+  Date, JSON, Number, String, Promise, Set, Map, Array, setTimeout, clearTimeout,
   fetch: async (url, opts) => {
     const p = String(url).replace('/api', '');
     let result = {};
@@ -140,6 +143,29 @@ vm.runInContext(source, context);
   const securityBody = element('#settings-tab-body').innerHTML;
   assert(securityBody.includes('webguard-enabled'), 'security panel must render webguard toggle');
   assert(securityBody.includes('btn-download-gpo'), 'security panel must render GPO script download button');
+  assert(securityBody.includes('btn-download-av-gpo'), 'security panel must render Defender GPO script download button');
+  assert(typeof element('#btn-download-gpo').handlers.click === 'function', 'btn-download-gpo must have click handler');
+  assert(typeof element('#btn-download-av-gpo').handlers.click === 'function', 'btn-download-av-gpo must have click handler');
+  assert(securityBody.includes('btn-manage-exclusions'), 'security panel must render exclusions button');
+  assert(typeof element('#btn-manage-exclusions').handlers.click === 'function', 'btn-manage-exclusions must have click handler');
+
+  // Open exclusions modal and verify split columns
+  element('#btn-manage-exclusions').handlers.click();
+  const modalHtml = element('#modal-content').innerHTML;
+  assert(modalHtml.includes('modal-new-ext'), 'exclusions modal must render extension input');
+  assert(modalHtml.includes('modal-new-path'), 'exclusions modal must render path input');
+  assert(modalHtml.includes('modal-add-ext'), 'exclusions modal must render add extension button');
+  assert(modalHtml.includes('modal-add-path'), 'exclusions modal must render add path button');
+  assert(modalHtml.includes('modal-save-exclusions'), 'exclusions modal must render save exclusions button');
+
+  // Test adding an extension and a path, then saving
+  element('#modal-new-ext').value = 'docx';
+  element('#modal-add-ext').handlers.click();
+  element('#modal-new-path').value = 'E:\\HospitalFiles';
+  element('#modal-add-path').handlers.click();
+  element('#modal-save-exclusions').handlers.click();
+  assert(element('#av-excluded-ext').value.includes('.docx'), 'saved extensions must include .docx');
+  assert(element('#av-excluded-paths').value.includes('E:\\HospitalFiles'), 'saved paths must include E:\\HospitalFiles');
 
   // Switch to updates tab
   await context.switchTab('updates');
@@ -147,7 +173,7 @@ vm.runInContext(source, context);
   assert(updatesBody.includes('client-update-form'), 'updates panel must render client-update-form');
 
   // Test userBranchLabels and userForm branch checkboxes
-  let lastModal = '';
+  lastModal = '';
   context.modal = (title, html) => { lastModal = html || ''; };
   const mockBranches = [
     { id: 1, name: 'Поликлиника', isActive: true },

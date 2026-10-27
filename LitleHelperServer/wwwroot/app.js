@@ -88,7 +88,7 @@ function renderAudit(items){$('#content').innerHTML=`<div class="toolbar"><input
 let ticketStatusFilter='all', ticketBranchFilter='';
 const ticketStatusName=value=>({Created:'Новая',1:'Новая',2:'В работе (назначена)',3:'В работе (запланирована)',4:'Ожидание',5:'Выполнена (решена)',6:'Закрыта'})[value]||value;
 function renderTickets(items,branches=[]){$('#content').innerHTML=`<div class="toolbar"><input id="ticket-filter" placeholder="Поиск по номеру, пользователю или тексту"><select id="ticket-status-filter">${[["all","Все статусы"],["active","Активные"],["work","В работе"],["1","Новая"],["2","В работе (назначена)"],["3","В работе (запланирована)"],["4","Ожидание"],["5","Выполнена (решена)"],["6","Закрыта"]].map(([value,label])=>`<option value="${value}" ${ticketStatusFilter===value?"selected":""}>${label}</option>`).join("")}</select><select id="ticket-branch-filter"><option value="">Все доступные филиалы</option><option value="0" ${ticketBranchFilter==='0'?'selected':''}>Без филиала (старые)</option>${branches.map(b=>`<option value="${b.id}" ${ticketBranchFilter===String(b.id)?'selected':''}>${escape(b.name)}</option>`).join('')}</select>${can('tickets.manage')?'<button id="new-ticket" class="primary">＋ Новая заявка</button>':''}</div><div id="ticket-table"></div>`;const render=()=>{const q=$('#ticket-filter').value.toLowerCase();const status=ticketStatusFilter;const visible=t=>status==='all'||(status==='active'&&Number(t.status==='Created'?1:t.status)<5)||(status==='work'&&['2','3'].includes(t.status))||String(t.status==='Created'?1:t.status)===status;$('#ticket-table').innerHTML=table(['GLPI','ПОЛЬЗОВАТЕЛЬ / ПК','ОБРАЩЕНИЕ','СТАТУС','СОЗДАНО',''],items.filter(visible).filter(t=>(t.glpiId+' '+t.username+' '+t.title+' '+t.description+' '+(t.branchName||'')+' '+(t.room||'')).toLowerCase().includes(q)).map(t=>`<tr><td><strong>#${t.glpiId}</strong></td><td>${escape(t.username)}<small>${escape(t.machineName)}</small><small>${escape(t.branchName||'Без филиала')} · кабинет ${escape(t.room||'—')}</small></td><td class="wrap">${escape(t.title||t.description.slice(0,70))}</td><td>${escape(ticketStatusName(t.status))}<small>${escape(t.assignedUsername|| (t.assignedGlpiUserId?"GLPI #"+t.assignedGlpiUserId:""))}</small></td><td>${date(t.createdAt)}</td><td><button data-ticket="${t.id}">Открыть</button></td></tr>`).join(''));$('#ticket-table').querySelectorAll('[data-ticket]').forEach(b=>b.addEventListener('click',()=>ticketForm(items.find(i=>i.id===Number(b.dataset.ticket)))));};$('#ticket-branch-filter').addEventListener('change',e=>{ticketBranchFilter=e.target.value;loadPage().catch(e=>toast(e.message,true));});$('#ticket-filter').addEventListener('input',render);$('#ticket-status-filter').addEventListener('change',e=>{ticketStatusFilter=e.target.value;loadPage().catch(e=>toast(e.message,true));});render();if($('#new-ticket'))$('#new-ticket').addEventListener('click',()=>{modal('Новое обращение',`<form id="ticket-form"><label>Филиал<select name="branchId" ${branches.some(b=>b.isActive)?'required':''}><option value="">Выберите филиал</option>${branches.filter(b=>b.isActive).map(b=>`<option value="${b.id}">${escape(b.name)}</option>`).join('')}</select></label><label>Кабинет<input name="room" maxlength="100" ${branches.some(b=>b.isActive)?'required':''}></label><label>Заголовок<input name="title" maxlength="160" required></label><label>Описание<textarea name="description" maxlength="8000" required></textarea></label><div class="error" id="form-error"></div><button class="primary">Создать в GLPI</button></form>`);$('#ticket-form').addEventListener('submit',async e=>{e.preventDefault();const send=e.target.querySelector('button');send.disabled=true;try{const data=Object.fromEntries(new FormData(e.target));data.branchId=data.branchId?Number(data.branchId):null;const result=await api('/tickets','POST',data);closeModal();await loadPage();toast('Создана заявка #'+result.glpiId);}catch(error){$('#form-error').textContent=error.message;}finally{send.disabled=false;}});});}
-async function ticketForm(ticket){modal('Заявка GLPI #'+ticket.glpiId,`<p>${escape(ticket.username)} · ${escape(ticket.machineName)}</p><p>Филиал: ${escape(ticket.branchName||'Не указан')} · Кабинет: ${escape(ticket.room||'Не указан')}</p><pre class="audit-output">${escape(ticket.description)}</pre><div id="ticket-attachments-area"></div><div id="glpi-status"><small>Загрузка данных GLPI…</small></div>${can('tickets.manage')?'<form id="ticket-status-form" class="terminal-input"><select name="status"><option value="1">Новая</option><option value="2">В работе (назначена)</option><option value="3">В работе (запланирована)</option><option value="4">Ожидание</option><option value="5">Выполнена (решена)</option><option value="6">Закрыта</option></select><button class="primary">Изменить статус</button></form>':''}`);try{const detail=await api('/tickets/'+ticket.id);if($('#glpi-status'))$('#glpi-status').textContent='Текущий статус GLPI: '+ticketStatusName(detail.glpi.status);if(detail.attachments&&detail.attachments.length&&$('#ticket-attachments-area')){$('#ticket-attachments-area').innerHTML=`<div class="ticket-attachments-box" style="margin:12px 0;padding:10px;background:var(--bg-subtle,#f8fafc);border-radius:8px;border:1px solid var(--border,#e2e8f0)"><h4 style="margin:0 0 8px 0;font-size:13px">📎 Прикреплённые файлы (${detail.attachments.length})</h4><div style="display:flex;flex-wrap:wrap;gap:8px">${detail.attachments.map(a=>{const isImg=/\.(png|jpe?g|gif|bmp|webp)$/i.test(a.fileName);const url=`/api/tickets/${ticket.id}/attachments/${a.id}`;return `<div style="border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px">${isImg?`<a href="${url}" target="_blank"><img src="${url}" style="width:36px;height:36px;object-fit:cover;border-radius:4px" alt="${escape(a.fileName)}"></a>`:`<span style="font-size:18px">📄</span>`}<div><a href="${url}" download="${escape(a.fileName)}" style="font-weight:600;font-size:12px;text-decoration:none;color:#2563eb">${escape(a.fileName)}</a><div style="font-size:11px;color:#64748b">${(a.fileSize/1024).toFixed(1)} КБ</div></div></div>`;}).join('')}</div></div>`;}}catch(e){if($('#glpi-status'))$('#glpi-status').textContent=e.message;}if($('#ticket-status-form'))$('#ticket-status-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/tickets/'+ticket.id+'/status','PUT',{status:Number(new FormData(e.target).get('status'))});closeModal();await loadPage();toast('Статус обновлён');}catch(error){toast(error.message,true);}});}
+async function ticketForm(ticket){modal('Заявка GLPI #'+ticket.glpiId,`<p>${escape(ticket.username)} · ${escape(ticket.machineName)}</p><p>Филиал: ${escape(ticket.branchName||'Не указан')} · Кабинет: ${escape(ticket.room||'Не указан')}</p><pre class="audit-output">${escape(ticket.description)}</pre><div id="ticket-attachments-area"></div><div id="glpi-status"><small>Загрузка данных GLPI…</small></div>${can('tickets.manage')?'<form id="ticket-status-form" class="terminal-input"><select name="status"><option value="1">Новая</option><option value="2">В работе (назначена)</option><option value="3">В работе (запланирована)</option><option value="4">Ожидание</option><option value="5">Выполнена (решена)</option><option value="6">Закрыта</option></select><button class="primary">Изменить статус</button></form>':''}`);try{const detail=await api('/tickets/'+ticket.id);if($('#glpi-status'))$('#glpi-status').textContent='Текущий статус GLPI: '+ticketStatusName(detail.glpi.status);if(detail.attachments&&detail.attachments.length&&$('#ticket-attachments-area')){$('#ticket-attachments-area').innerHTML=`<div class="ticket-attachments-box" style="margin:12px 0;padding:10px;background:var(--bg-subtle,#f8fafc);border-radius:8px;border:1px solid var(--border,#e2e8f0)"><h4 style="margin:0 0 8px 0;font-size:13px">📎 Прикреплённые файлы (${detail.attachments.length})</h4><div style="display:flex;flex-wrap:wrap;gap:8px">${detail.attachments.map(a=>{const isImg=/\.(png|jpe?g|gif|bmp|webp)$/i.test(a.fileName);const url=`/api/tickets/${ticket.id}/attachments/${a.id}${token ? '?access_token=' + encodeURIComponent(token) : ''}`;return `<div style="border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px">${isImg?`<a href="${url}" target="_blank"><img src="${url}" style="width:36px;height:36px;object-fit:cover;border-radius:4px" alt="${escape(a.fileName)}"></a>`:`<span style="font-size:18px">📄</span>`}<div><a href="${url}" download="${escape(a.fileName)}" style="font-weight:600;font-size:12px;text-decoration:none;color:#2563eb">${escape(a.fileName)}</a><div style="font-size:11px;color:#64748b">${(a.fileSize/1024).toFixed(1)} КБ</div></div></div>`;}).join('')}</div></div>`;}}catch(e){if($('#glpi-status'))$('#glpi-status').textContent=e.message;}if($('#ticket-status-form'))$('#ticket-status-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/tickets/'+ticket.id+'/status','PUT',{status:Number(new FormData(e.target).get('status'))});closeModal();await loadPage();toast('Статус обновлён');}catch(error){toast(error.message,true);}});}
 async function remove(path,text){if(!confirm(text))return;try{await api(path,'DELETE');await loadPage();}catch(e){toast(e.message,true);}}
 if(token)enter().catch(()=>logout());
 
@@ -354,7 +354,7 @@ function renderSecuritySettings(data){
         Включить проверку фишинговых ссылок на всех ПК
       </label>
       <div style="margin-top:1rem;display:flex;gap:1rem;align-items:center">
-        <a id="btn-download-gpo" href="/api/settings/security/gpo-script" download="Deploy-WebGuardGpo.ps1" class="secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem">
+        <a id="btn-download-gpo" href="/api/settings/security/gpo-script${token ? `?access_token=${encodeURIComponent(token)}` : ''}" download="Deploy-WebGuardGpo.ps1" class="secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem">
           ⬇ Скачать GPO-скрипт WebGuard (.ps1)
         </a>
       </div>
@@ -467,18 +467,41 @@ function renderSecuritySettings(data){
         </label>
       </div>
 
-      <!-- Исключения от сканирования -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem">
-        <div>
-          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Исключаемые расширения файлов:</label>
-          <input id="av-excluded-ext" type="text" value="${escape(s.excludedExtensions || '.iso, .vmdk, .bak, .1cd, .log')}" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
-          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Файлы с указанными расширениями пропускаются при сканировании.</small>
+      <!-- Исключения из сканирования (файлы и папки) -->
+      <div style="background:var(--bg-secondary,#F8FAFC);border:1px solid var(--border,#CBD5E1);border-radius:8px;padding:1rem;margin-bottom:1.25rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;margin-bottom:0.75rem">
+          <div>
+            <strong style="font-size:0.95rem;display:flex;align-items:center;gap:6px">
+              📂 Исключения из сканирования (файлы и папки)
+            </strong>
+            <span style="font-size:0.83rem;color:var(--text-muted,#64748B)">
+              Файлы и каталоги, которые PixelGuard AV пропускает при автоматической и фоновой проверке.
+            </span>
+          </div>
+          <button id="btn-manage-exclusions" type="button" class="secondary" style="font-size:0.88rem;padding:6px 14px;display:inline-flex;align-items:center;gap:6px;font-weight:600">
+            ⚙️ Исключаемые файлы и папки…
+          </button>
         </div>
-        <div>
-          <label style="display:block;font-weight:600;margin-bottom:0.35rem;font-size:0.9rem">Исключаемые пути и папки:</label>
-          <input id="av-excluded-paths" type="text" placeholder="C:\\Bases\\1C; D:\\Backups" value="${escape(s.excludedPaths || '')}" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#CBD5E1)">
-          <small style="color:var(--text-muted,#64748B);font-size:0.8rem">Разделитель путей — точка с запятой (;).</small>
+
+        <!-- Превью исключений -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:0.75rem;background:#fff;border:1px solid var(--border,#E2E8F0);border-radius:6px;padding:0.75rem">
+          <div>
+            <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted,#475569);margin-bottom:4px">
+              Исключаемые типы файлов (<span id="exclusions-ext-count">0</span>):
+            </div>
+            <div id="exclusions-ext-preview" style="display:flex;flex-wrap:wrap;gap:4px;font-size:0.8rem"></div>
+          </div>
+          <div>
+            <div style="font-weight:600;font-size:0.82rem;color:var(--text-muted,#475569);margin-bottom:4px">
+              Исключаемые пути и папки (<span id="exclusions-path-count">0</span>):
+            </div>
+            <div id="exclusions-path-preview" style="display:flex;flex-wrap:wrap;gap:4px;font-size:0.8rem"></div>
+          </div>
         </div>
+
+        <!-- Скрытые поля для передачи на сервер -->
+        <input id="av-excluded-ext" type="hidden" value="${escape(s.excludedExtensions || '.iso, .vmdk, .bak, .1cd, .log')}">
+        <input id="av-excluded-paths" type="hidden" value="${escape(s.excludedPaths || '')}">
       </div>
 
       <!-- Доверие Windows Defender GPO -->
@@ -487,7 +510,7 @@ function renderSecuritySettings(data){
           <strong>Политика доверия Windows Defender (GPO):</strong><br>
           <span style="font-size:0.85rem;color:var(--text-muted,#64748B)">Исключает PixelHelper и его антивирусные базы из проверок защитника Windows Defender во избежание конфликтов.</span>
         </div>
-        <a href="/api/settings/security/antivirus-gpo-script" download="Deploy-AntivirusTrustGpo.ps1" class="secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem">
+        <a id="btn-download-av-gpo" href="/api/settings/security/antivirus-gpo-script${token ? `?access_token=${encodeURIComponent(token)}` : ''}" download="Deploy-AntivirusTrustGpo.ps1" class="secondary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem">
           ⬇ Скачать GPO доверия Defender (.ps1)
         </a>
       </div>
@@ -725,6 +748,298 @@ function renderSecuritySettings(data){
     } finally {
       btn.disabled = false;
     }
+  });
+
+  const downloadGpoScript = async (url, filename) => {
+    try {
+      const res = await fetch(url, {
+        headers: token ? { Authorization: 'Bearer ' + token } : {}
+      });
+      if (!res.ok) {
+        if (res.status === 401) logout();
+        throw new Error(`Сервер вернул ошибку: ${res.status}`);
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      toast(`Скрипт ${filename} успешно скачан`);
+    } catch (e) {
+      toast(`Ошибка скачивания: ${e.message}`, true);
+    }
+  };
+
+  $('#btn-download-gpo')?.addEventListener('click', e => {
+    e.preventDefault();
+    downloadGpoScript('/api/settings/security/gpo-script', 'Deploy-WebGuardGpo.ps1');
+  });
+
+  $('#btn-download-av-gpo')?.addEventListener('click', e => {
+    e.preventDefault();
+    downloadGpoScript('/api/settings/security/antivirus-gpo-script', 'Deploy-AntivirusTrustGpo.ps1');
+  });
+
+  function parseExts(str) {
+    if (!str) return [];
+    return str.split(/[,;\s]+/)
+      .map(x => x.trim().toLowerCase())
+      .filter(Boolean)
+      .map(x => x.startsWith('.') ? x : '.' + x)
+      .filter((v, i, a) => a.indexOf(v) === i);
+  }
+
+  function parsePaths(str) {
+    if (!str) return [];
+    return str.split(';')
+      .map(x => x.trim())
+      .filter(Boolean)
+      .filter((v, i, a) => a.findIndex(item => item.toLowerCase() === v.toLowerCase()) === i);
+  }
+
+  function updateExclusionsPreview() {
+    const extInput = $('#av-excluded-ext');
+    const pathInput = $('#av-excluded-paths');
+    const extCount = $('#exclusions-ext-count');
+    const pathCount = $('#exclusions-path-count');
+    const extPreview = $('#exclusions-ext-preview');
+    const pathPreview = $('#exclusions-path-preview');
+    if (!extInput || !pathInput) return;
+
+    const exts = parseExts(extInput.value);
+    const paths = parsePaths(pathInput.value);
+
+    if (extCount) extCount.textContent = exts.length;
+    if (pathCount) pathCount.textContent = paths.length;
+
+    if (extPreview) {
+      if (!exts.length) {
+        extPreview.innerHTML = '<span style="color:var(--text-muted,#94A3B8)">Нет исключений</span>';
+      } else {
+        extPreview.innerHTML = exts.slice(0, 8).map(e =>
+          `<span style="background:#E0F2FE;color:#0369A1;padding:2px 6px;border-radius:4px;font-family:Consolas,monospace">${escape(e)}</span>`
+        ).join('') + (exts.length > 8 ? `<span style="color:var(--text-muted,#64748B);font-size:0.75rem">+ещё ${exts.length - 8}</span>` : '');
+      }
+    }
+
+    if (pathPreview) {
+      if (!paths.length) {
+        pathPreview.innerHTML = '<span style="color:var(--text-muted,#94A3B8)">Нет исключений</span>';
+      } else {
+        pathPreview.innerHTML = paths.slice(0, 3).map(p =>
+          `<span style="background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;padding:2px 6px;border-radius:4px;font-family:Consolas,monospace;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escape(p)}">${escape(p)}</span>`
+        ).join('') + (paths.length > 3 ? `<span style="color:var(--text-muted,#64748B);font-size:0.75rem">+ещё ${paths.length - 3}</span>` : '');
+      }
+    }
+  }
+
+  updateExclusionsPreview();
+
+  $('#btn-manage-exclusions')?.addEventListener('click', () => {
+    let currentExts = parseExts($('#av-excluded-ext')?.value || '');
+    let currentPaths = parsePaths($('#av-excluded-paths')?.value || '');
+
+    const renderModalExtList = () => {
+      const container = $('#modal-ext-list');
+      if (!container) return;
+      if (!currentExts.length) {
+        container.innerHTML = '<div style="color:var(--text-muted,#94A3B8);font-size:0.82rem;text-align:center;padding:25px">Нет исключённых расширений</div>';
+        return;
+      }
+      container.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">` + currentExts.map(e => `
+        <span style="display:inline-flex;align-items:center;gap:6px;background:#E0F2FE;color:#0369A1;padding:4px 8px;border-radius:6px;font-size:0.83rem;font-weight:600">
+          <code>${escape(e)}</code>
+          <button type="button" class="btn-del-ext" data-ext="${escape(e)}" title="Удалить расширение" style="background:none;border:none;color:#0284C7;cursor:pointer;padding:0;font-size:13px;line-height:1;font-weight:bold">✕</button>
+        </span>
+      `).join('') + `</div>`;
+
+      container.querySelectorAll('.btn-del-ext').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = btn.dataset.ext;
+          currentExts = currentExts.filter(x => x !== target);
+          renderModalExtList();
+        });
+      });
+    };
+
+    const renderModalPathList = () => {
+      const container = $('#modal-path-list');
+      if (!container) return;
+      if (!currentPaths.length) {
+        container.innerHTML = '<div style="color:var(--text-muted,#94A3B8);font-size:0.82rem;text-align:center;padding:25px">Нет исключённых путей</div>';
+        return;
+      }
+      container.innerHTML = currentPaths.map(p => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:#F8FAFC;border:1px solid #E2E8F0;padding:6px 10px;border-radius:6px;margin-bottom:5px;font-size:0.82rem">
+          <span style="font-family:Consolas,monospace;word-break:break-all">${escape(p)}</span>
+          <button type="button" class="btn-del-path" data-path="${escape(p)}" title="Удалить путь" style="background:none;border:none;color:#DC2626;cursor:pointer;padding:2px 6px;font-size:13px;line-height:1;font-weight:bold">✕</button>
+        </div>
+      `).join('');
+
+      container.querySelectorAll('.btn-del-path').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = btn.dataset.path;
+          currentPaths = currentPaths.filter(x => x.toLowerCase() !== target.toLowerCase());
+          renderModalPathList();
+        });
+      });
+    };
+
+    modal('Исключаемые файлы и папки', `
+      <div style="min-width:320px;max-width:750px">
+        <p style="margin:0 0 1rem 0;font-size:0.85rem;color:var(--text-muted,#64748B)">
+          Управление белым списком исключений PixelGuard AV. Объекты из этого списка не проверяются сканером и не отправляются в карантин.
+        </p>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:1rem;margin-bottom:1rem">
+          <!-- Левая сторона: Файлы и типы -->
+          <div style="background:#F8FAFC;border:1px solid #CBD5E1;border-radius:8px;padding:0.9rem;display:flex;flex-direction:column">
+            <div style="font-weight:700;font-size:0.92rem;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+              📄 Исключаемые типы файлов
+            </div>
+            <p style="font-size:0.78rem;color:var(--text-muted,#64748B);margin:0 0 0.5rem 0">
+              Добавляйте по 1 типу (например: <code>.iso</code> или <code>bak</code>).
+            </p>
+
+            <div style="display:flex;gap:6px;margin-bottom:0.5rem">
+              <input type="text" id="modal-new-ext" placeholder=".iso, .1cd или log" style="flex:1;padding:6px 10px;font-size:0.85rem">
+              <button type="button" id="modal-add-ext" class="secondary" style="padding:6px 12px;font-size:0.85rem;font-weight:600">
+                ➕ Добавить
+              </button>
+            </div>
+
+            <div style="margin-bottom:0.6rem">
+              <small style="color:var(--text-muted,#64748B);font-size:0.75rem;display:block;margin-bottom:3px">Популярные:</small>
+              <div style="display:flex;flex-wrap:wrap;gap:4px">
+                ${['.1cd', '.bak', '.iso', '.vmdk', '.log', '.tmp', '.mdf'].map(e => `
+                  <button type="button" class="btn-suggest-ext" data-ext="${e}" style="padding:2px 6px;font-size:0.75rem;background:#fff;border:1px dashed #CBD5E1;border-radius:4px;cursor:pointer">
+                    +${e}
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+
+            <div id="modal-ext-list" style="flex:1;min-height:160px;max-height:220px;overflow-y:auto;background:#fff;border:1px solid #E2E8F0;border-radius:6px;padding:8px"></div>
+          </div>
+
+          <!-- Правая сторона: Пути и папки -->
+          <div style="background:#F8FAFC;border:1px solid #CBD5E1;border-radius:8px;padding:0.9rem;display:flex;flex-direction:column">
+            <div style="font-weight:700;font-size:0.92rem;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+              📁 Исключаемые папки и пути
+            </div>
+            <p style="font-size:0.78rem;color:var(--text-muted,#64748B);margin:0 0 0.5rem 0">
+              Добавляйте по 1 пути (например: <code>C:\\Bases\\1C</code>).
+            </p>
+
+            <div style="display:flex;gap:6px;margin-bottom:0.5rem">
+              <input type="text" id="modal-new-path" placeholder="C:\\Bases\\1C" style="flex:1;padding:6px 10px;font-size:0.85rem">
+              <button type="button" id="modal-add-path" class="secondary" style="padding:6px 12px;font-size:0.85rem;font-weight:600">
+                ➕ Добавить
+              </button>
+            </div>
+
+            <div style="margin-bottom:0.6rem">
+              <small style="color:var(--text-muted,#64748B);font-size:0.75rem;display:block;margin-bottom:3px">Примеры:</small>
+              <div style="display:flex;flex-wrap:wrap;gap:4px">
+                ${['C:\\Bases\\1C', 'D:\\Backups', 'C:\\NCALayer'].map(p => `
+                  <button type="button" class="btn-suggest-path" data-path="${escape(p)}" style="padding:2px 6px;font-size:0.75rem;background:#fff;border:1px dashed #CBD5E1;border-radius:4px;cursor:pointer">
+                    +${escape(p)}
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+
+            <div id="modal-path-list" style="flex:1;min-height:160px;max-height:220px;overflow-y:auto;background:#fff;border:1px solid #E2E8F0;border-radius:6px;padding:8px"></div>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:10px;border-top:1px solid #E2E8F0;padding-top:0.75rem">
+          <button type="button" id="modal-cancel-exclusions" class="secondary" style="padding:8px 16px">Отмена</button>
+          <button type="button" id="modal-save-exclusions" class="primary" style="padding:8px 20px">Применить</button>
+        </div>
+      </div>
+    `);
+
+    renderModalExtList();
+    renderModalPathList();
+
+    const doAddExt = (val) => {
+      if (!val) return;
+      const parsed = parseExts(val);
+      let added = false;
+      parsed.forEach(e => {
+        if (!currentExts.includes(e)) {
+          currentExts.push(e);
+          added = true;
+        }
+      });
+      if (added) {
+        renderModalExtList();
+      }
+      const inp = $('#modal-new-ext');
+      if (inp) { inp.value = ''; inp.focus?.(); }
+    };
+
+    $('#modal-add-ext')?.addEventListener('click', () => {
+      doAddExt($('#modal-new-ext')?.value?.trim());
+    });
+    $('#modal-new-ext')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doAddExt($('#modal-new-ext')?.value?.trim());
+      }
+    });
+
+    document.querySelectorAll('.btn-suggest-ext').forEach(b => {
+      b.addEventListener('click', () => doAddExt(b.dataset.ext));
+    });
+
+    const doAddPath = (val) => {
+      if (!val) return;
+      const parsed = parsePaths(val);
+      let added = false;
+      parsed.forEach(p => {
+        if (!currentPaths.some(x => x.toLowerCase() === p.toLowerCase())) {
+          currentPaths.push(p);
+          added = true;
+        }
+      });
+      if (added) {
+        renderModalPathList();
+      }
+      const inp = $('#modal-new-path');
+      if (inp) { inp.value = ''; inp.focus?.(); }
+    };
+
+    $('#modal-add-path')?.addEventListener('click', () => {
+      doAddPath($('#modal-new-path')?.value?.trim());
+    });
+    $('#modal-new-path')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doAddPath($('#modal-new-path')?.value?.trim());
+      }
+    });
+
+    document.querySelectorAll('.btn-suggest-path').forEach(b => {
+      b.addEventListener('click', () => doAddPath(b.dataset.path));
+    });
+
+    $('#modal-cancel-exclusions')?.addEventListener('click', closeModal);
+
+    $('#modal-save-exclusions')?.addEventListener('click', () => {
+      const extInput = $('#av-excluded-ext');
+      const pathInput = $('#av-excluded-paths');
+      if (extInput) extInput.value = currentExts.join(', ');
+      if (pathInput) pathInput.value = currentPaths.join('; ');
+      updateExclusionsPreview();
+      closeModal();
+      toast('Исключения обновлены. Нажмите «Сохранить параметры безопасности» для отправки на ПК.');
+    });
   });
 }
 

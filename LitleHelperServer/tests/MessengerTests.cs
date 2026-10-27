@@ -36,14 +36,14 @@ public static class MessengerTests
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:SigningKey"] = new string('k', 48), ["Jwt:Issuer"] = "test", ["Jwt:Audience"] = "test", ["Messenger:SettingsFile"] = Path.Combine(folder, "messenger.json") });
         string? postgres = Environment.GetEnvironmentVariable("HELPER_CHAT_TEST_POSTGRES");
         builder.Services.AddDbContext<HelperDb>(o => { if (string.IsNullOrEmpty(postgres)) o.UseSqlite("Data Source=" + Path.Combine(folder, "chat.db")); else o.UseNpgsql(postgres); });
-        builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSingleton<CallSessionRegistry>(); builder.Services.AddSignalR();
+        builder.Services.AddSingleton<IAdAuthentication, Ad>(); builder.Services.AddSingleton<PanelSessions>(); builder.Services.AddSingleton<ChatPresence>(); builder.Services.AddSingleton<MessengerSettings>(); builder.Services.AddSingleton<CallSessionRegistry>(); builder.Services.AddSingleton<LiveKitService>(); builder.Services.AddSignalR();
         builder.Services.AddSingleton<IMessengerKerberos, Kerberos>(); builder.Services.AddSingleton<IMessengerWindowsDirectory, WindowsDirectory>();
         builder.Services.AddSingleton<ChatGroupGate>();
         builder.Services.AddRateLimiter(o => o.AddPolicy("login", c => RateLimitPartition.GetNoLimiter("test")));
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
         {
             o.TokenValidationParameters = new() { ValidateIssuerSigningKey = true, IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(new string('k', 48))), ValidateIssuer = true, ValidIssuer = "test", ValidateAudience = true, ValidAudience = "test", ValidateLifetime = true };
-            o.Events = new JwtBearerEvents { OnMessageReceived = c => { if (c.Request.Path.StartsWithSegments("/messengerHub")) c.Token = c.Request.Query["access_token"]; return Task.CompletedTask; } };
+            o.Events = new JwtBearerEvents { OnMessageReceived = c => { if (c.Request.Path.StartsWithSegments("/messengerHub") && c.Request.Query.TryGetValue("access_token", out var t) && !string.IsNullOrEmpty(t)) c.Token = t; return Task.CompletedTask; } };
         });
         builder.Services.AddAuthorization(o => { o.AddPolicy("Panel", p => p.RequireAuthenticatedUser().RequireRole(Roles.All)); o.AddPolicy("settings.manage", p => p.RequireClaim("permission", "settings.manage")); });
         await using var app = builder.Build();
@@ -321,6 +321,9 @@ public static class MessengerTests
             var peerHub = new HubConnectionBuilder()
                 .WithUrl(address.TrimEnd('/') + "/messengerHub", o => o.AccessTokenProvider = () => Task.FromResult<string?>(charlie.Token))
                 .Build();
+            var peerHub2 = new HubConnectionBuilder()
+                .WithUrl(address.TrimEnd('/') + "/messengerHub", o => o.AccessTokenProvider = () => Task.FromResult<string?>(charlie.Token))
+                .Build();
 
             string testCallId = "call_" + Guid.NewGuid().ToString("N");
             var incomingTcs = new TaskCompletionSource<(string CallId, int CallerId, bool IsVideo)>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -344,9 +347,9 @@ public static class MessengerTests
                 acceptedTcs.TrySetResult((callId, userId));
             });
 
-            peerHub.On<string>("CallAnsweredElsewhere", callId =>
+            peerHub2.On<string>("CallAnsweredElsewhere", callId =>
             {
-                Console.WriteLine($"[TEST] peerHub received CallAnsweredElsewhere: callId={callId}");
+                Console.WriteLine($"[TEST] peerHub2 received CallAnsweredElsewhere: callId={callId}");
                 answeredElsewhereTcs.TrySetResult(callId);
             });
 
@@ -382,6 +385,7 @@ public static class MessengerTests
 
             await aliceHub.StartAsync();
             await peerHub.StartAsync();
+            await peerHub2.StartAsync();
             Console.WriteLine($"[TEST] Hubs started: aliceHub.State={aliceHub.State}, peerHub.State={peerHub.State}");
 
             // 1. StartCall with 3 arguments
@@ -433,6 +437,7 @@ public static class MessengerTests
 
             await aliceHub.DisposeAsync();
             await peerHub.DisposeAsync();
+            await peerHub2.DisposeAsync();
             Console.WriteLine("PASS WebRTC signaling two-way handshakes passed");
         }
 

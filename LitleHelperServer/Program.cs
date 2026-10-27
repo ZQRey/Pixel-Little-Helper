@@ -56,7 +56,21 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             OnMessageReceived = context =>
             {
-                if (context.Request.Path.StartsWithSegments("/helperHub") || context.Request.Path.StartsWithSegments("/messengerHub")) context.Token = context.Request.Query["access_token"];
+                if (context.Request.Path.StartsWithSegments("/helperHub") || context.Request.Path.StartsWithSegments("/messengerHub"))
+                {
+                    if (context.Request.Query.TryGetValue("access_token", out var hubToken) && !string.IsNullOrEmpty(hubToken))
+                    {
+                        context.Token = hubToken;
+                    }
+                }
+                else if (string.IsNullOrEmpty(context.Token))
+                {
+                    if (context.Request.Query.TryGetValue("access_token", out var queryToken) ||
+                        context.Request.Query.TryGetValue("token", out queryToken))
+                    {
+                        context.Token = queryToken;
+                    }
+                }
                 return Task.CompletedTask;
             },
             OnTokenValidated = async context =>

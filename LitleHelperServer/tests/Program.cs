@@ -327,6 +327,7 @@ try
     Check((await pushed.Task.WaitAsync(TimeSpan.FromSeconds(10))).EnumerateArray().Count(b => !b.GetProperty("isSystem").GetBoolean()) == 5, "button changes broadcast to agent");
     int ticketId = await agent.InvokeAsync<int>("CreateTicket", "Test issue", "Integration test description");
     Check(ticketId == 7001 && requester == 42 && content.Contains("TEST-PC") && content.Contains("alice"), "GLPI ticket requester and PC identity");
+    for (int i = 0; i < 20 && killCount < initCount; i++) await Task.Delay(50);
     Check(initCount == killCount && initCount == 1, "GLPI session always released");
     var ownTickets = await Json("/tickets", staffTokens["alice"]); Check(ownTickets.GetArrayLength() == 1, "User sees own agent-created ticket");
     await Json("/tickets", staffTokens["operator"], new { title = "Operator ticket", description = "Operator issue" });
@@ -455,6 +456,14 @@ try
         await Json("/settings/updates", admin, new { enabled = false }, HttpMethod.Put);
         using var paused = await http.GetAsync("/api/client-updates/latest"); Check(paused.StatusCode == HttpStatusCode.NoContent, "administrator can pause client updates");
     }
+    using var gpoBearer = await Call("/settings/security/gpo-script", admin);
+    Check(gpoBearer.IsSuccessStatusCode && (await gpoBearer.Content.ReadAsStringAsync()).Contains("Web Guard"), "admin can download WebGuard GPO script with Bearer token");
+    using var gpoQuery = await http.GetAsync("/api/settings/security/gpo-script?access_token=" + admin);
+    Check(gpoQuery.IsSuccessStatusCode && (await gpoQuery.Content.ReadAsStringAsync()).Contains("Web Guard"), "admin can download WebGuard GPO script with query access_token");
+    using var avGpoQuery = await http.GetAsync("/api/settings/security/antivirus-gpo-script?access_token=" + admin);
+    Check(avGpoQuery.IsSuccessStatusCode && (await avGpoQuery.Content.ReadAsStringAsync()).Contains("PixelHelper"), "admin can download Defender AV GPO script with query access_token");
+    using var gpoAnon = await http.GetAsync("/api/settings/security/gpo-script");
+    Check(gpoAnon.StatusCode == HttpStatusCode.Unauthorized, "anonymous GPO script download rejected with 401");
     var branch = await Json("/branches", admin, new { name = "Clinic", isActive = true }); int branchId = branch.GetProperty("id").GetInt32();
     using var deniedBranch = await Call("/branches", staffTokens["operator"], new { name = "Denied", isActive = true }); Check(deniedBranch.StatusCode == HttpStatusCode.Forbidden, "operator cannot change branch directory");
     using var noLocation = await Call("/tickets", admin, new { title = "Missing location", description = "Test" }); Check(noLocation.StatusCode == HttpStatusCode.BadRequest, "new tickets require configured branch and room");

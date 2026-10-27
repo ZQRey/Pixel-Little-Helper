@@ -89,6 +89,7 @@ public sealed class ReportHealth { public DateTime? LastAttempt { get; set; } pu
 public record ReportFilter(DateOnly From, DateOnly To, string Basis, int? BranchId, int? Technician, int? Requester, int? Status, string Search, string? Snapshot)
 {
     public int? Reaction { get; init; }
+    public int? Score { get; init; }
     public string Comparison { get; init; } = "previous";
     public DateOnly? CompareFrom { get; init; }
     public DateOnly? CompareTo { get; init; }
@@ -103,6 +104,7 @@ public record ReportFilter(DateOnly From, DateOnly To, string Basis, int? Branch
         if (to < from || to == DateOnly.MaxValue || to.DayNumber - from.DayNumber > 3660 || basis is not ("created" or "solved" or "closed" or "answered")) throw new ArgumentException("Неверный период или основа даты");
         var status = Number("status"); if (status is not null && status is < 1 or > 6) throw new ArgumentException("Неверный статус");
         var reaction = Number("reaction"); if (reaction is < 0 or > 5) throw new ArgumentException("Неверный интервал времени реакции");
+        var score = Number("score"); if (score is not null && score is < 1 or > 5) throw new ArgumentException("Неверная оценка");
         string comparison = q["compare"].FirstOrDefault() ?? "previous";
         string periodKind = q["period"].FirstOrDefault() ?? "auto";
         if (periodKind is not ("auto" or "day" or "week" or "month" or "year" or "custom")) throw new ArgumentException("Неверный тип периода");
@@ -113,12 +115,13 @@ public record ReportFilter(DateOnly From, DateOnly To, string Basis, int? Branch
             compareFrom=Read("compareFrom",from); compareTo=Read("compareTo",to);
             if (compareTo < compareFrom || compareTo == DateOnly.MaxValue || compareTo.Value.DayNumber-compareFrom.Value.DayNumber>3660) throw new ArgumentException("Неверный период сравнения");
         }
-        return new(from, to, basis, Number("branchId"), Number("technician"), Number("requester"), status, q["search"].ToString().Trim()[..Math.Min(q["search"].ToString().Trim().Length, 200)], q["snapshot"].FirstOrDefault()) { Reaction = reaction, Comparison=comparison,CompareFrom=compareFrom,CompareTo=compareTo,PeriodKind=periodKind };
+        return new(from, to, basis, Number("branchId"), Number("technician"), Number("requester"), status, q["search"].ToString().Trim()[..Math.Min(q["search"].ToString().Trim().Length, 200)], q["snapshot"].FirstOrDefault()) { Reaction = reaction, Score = score, Comparison=comparison,CompareFrom=compareFrom,CompareTo=compareTo,PeriodKind=periodKind };
     }
     public DateTime Start => TimeZoneInfo.ConvertTimeToUtc(From.ToDateTime(TimeOnly.MinValue), ReportMath.Zone);
     public DateTime End => TimeZoneInfo.ConvertTimeToUtc(To.AddDays(1).ToDateTime(TimeOnly.MinValue), ReportMath.Zone);
     public DateTime? Date(ReportTicket t) => Basis switch { "solved" => t.SolvedAt, "closed" => t.ClosedAt, "answered" => t.AnsweredAt, _ => t.CreatedAt };
     public bool Matches(ReportTicket t) => !t.Deleted && Date(t) >= Start && Date(t) < End && (Reaction == null || GlpiReportReaction.Bucket(t.AcceptanceSeconds) == Reaction) &&
+        (Score == null || (t.CurrentScore.HasValue && (int)Math.Round(t.CurrentScore.Value) == Score.Value)) &&
         (BranchId == null || t.BranchId == BranchId) && (Technician == null || t.Responsible?.Id == Technician || t.Assignees.Any(a => a.Id == Technician)) &&
         (Requester == null || t.Requesters.Any(a => a.Id == Requester)) && (Status == null || t.Status == Status) &&
         (Search.Length == 0 || t.Title.Contains(Search, StringComparison.OrdinalIgnoreCase) || t.Id.ToString().Contains(Search, StringComparison.Ordinal));
@@ -264,8 +267,10 @@ public sealed class GlpiReports(HelperDb db, GlpiService glpi, IntegrationSettin
         var serviceIds = rawVisible.SelectMany(ReportMath.Actors).Where(a=>!ReportMath.IsPerson(a)).Select(a=>a.Id).ToHashSet();
         var visible = rawVisible.Select(ReportMath.ForPresentation).ToArray();
         if (entities != null) visible = visible.Where(t => entities.Contains(t.EntityId)).ToArray();
-        var reactionScope = visible.Where((filter with { Reaction = null }).Matches).ToArray();
-        var rows = reactionScope.Where(filter.Matches).OrderByDescending(t => filter.Date(t)).ToArray();
+        var baseScope = visible.Where((filter with { Reaction = null, Score = null }).Matches).ToArray();
+        var reactionScope = baseScope.Where((filter with { Reaction = null }).Matches).ToArray();
+        var scoreScope = baseScope.Where((filter with { Score = null }).Matches).ToArray();
+        var rows = baseScope.Where(filter.Matches).OrderByDescending(t => filter.Date(t)).ToArray();
         var invitations = await db.TicketSurveyInvitations.AsNoTracking().Where(i=>i.Source==Source).ToListAsync(ct);
         var surveyReport = SurveyReportData.Build(invitations.Where(i=>!serviceIds.Contains(i.RequesterId)
             && !ReportDeployment.Current.IsService(i.RequesterId,i.Owner)),rows,DateTime.UtcNow);
@@ -275,10 +280,11 @@ public sealed class GlpiReports(HelperDb db, GlpiService glpi, IntegrationSettin
             coverageFrom = visible.Where(t => !t.Deleted).Select(t => t.CreatedAt).Min(), currentOpen = visible.Count(t => !t.Deleted && t.Status < 5),
             comparison = GlpiReportComparison.Build(visible,filter,DateTime.UtcNow),
             surveyReport, summary = ReportMath.Summary(rows), technicians = ReportMath.People(rows, true), requesters = ReportMath.People(rows, false), tickets = rows,
+            ratings = new[] { 5, 4, 3, 2, 1 }.Select(n => new { score = n, count = scoreScope.Count(t => t.CurrentScore.HasValue && (int)Math.Round(t.CurrentScore.Value) == n) }).ToArray(),
             reaction = GlpiReportReaction.Distribution(reactionScope), reactionMissing = reactionScope.Count(t => GlpiReportReaction.Bucket(t.AcceptanceSeconds) == null),
             choices = new { branches = visible.Where(t => t.BranchId != null).DistinctBy(t => t.BranchId).Select(t => new { id = t.BranchId, name = t.Branch }),
                 technicians = visible.SelectMany(t => t.Assignees).Concat(visible.Where(t => t.Responsible != null).Select(t => t.Responsible!)).Where(ReportMath.IsTechnician).DistinctBy(a => a.Id), requesters = visible.SelectMany(t => t.Requesters).DistinctBy(a => a.Id) },
-            timeline = visible.Where(t => !t.Deleted && (filter.Reaction == null || GlpiReportReaction.Bucket(t.AcceptanceSeconds) == filter.Reaction) && (filter.BranchId == null || t.BranchId == filter.BranchId) && (filter.Technician == null || t.Assignees.Any(a => a.Id == filter.Technician) || t.Responsible?.Id == filter.Technician) && (filter.Requester == null || t.Requesters.Any(a => a.Id == filter.Requester)) && (filter.Status == null || t.Status == filter.Status) && (filter.Search.Length == 0 || t.Title.Contains(filter.Search, StringComparison.OrdinalIgnoreCase) || t.Id.ToString().Contains(filter.Search))).SelectMany(t => new[] { (Kind: "created", At: t.CreatedAt), (Kind: "solved", At: t.SolvedAt), (Kind: "closed", At: t.ClosedAt) }).Where(e => e.At >= filter.Start && e.At < filter.End)
+            timeline = visible.Where(t => !t.Deleted && (filter.Reaction == null || GlpiReportReaction.Bucket(t.AcceptanceSeconds) == filter.Reaction) && (filter.Score == null || (t.CurrentScore.HasValue && (int)Math.Round(t.CurrentScore.Value) == filter.Score.Value)) && (filter.BranchId == null || t.BranchId == filter.BranchId) && (filter.Technician == null || t.Assignees.Any(a => a.Id == filter.Technician) || t.Responsible?.Id == filter.Technician) && (filter.Requester == null || t.Requesters.Any(a => a.Id == filter.Requester)) && (filter.Status == null || t.Status == filter.Status) && (filter.Search.Length == 0 || t.Title.Contains(filter.Search, StringComparison.OrdinalIgnoreCase) || t.Id.ToString().Contains(filter.Search))).SelectMany(t => new[] { (Kind: "created", At: t.CreatedAt), (Kind: "solved", At: t.SolvedAt), (Kind: "closed", At: t.ClosedAt) }).Where(e => e.At >= filter.Start && e.At < filter.End)
                 .GroupBy(e => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(e.At!.Value, ReportMath.Zone))).OrderBy(g => g.Key).Select(g => new { day = g.Key, created = g.Count(e => e.Kind == "created"), solved = g.Count(e => e.Kind == "solved"), closed = g.Count(e => e.Kind == "closed") }) };
     }
     public static async Task EnsureSchema(HelperDb db)

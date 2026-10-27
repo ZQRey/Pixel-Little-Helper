@@ -22,7 +22,7 @@ public static class GlpiReportExport
     static string Text(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind != JsonValueKind.Null ? v.ToString() : "";
     static string Score(double? v) => v.HasValue ? v.Value.ToString("0.00", Ru) + " / 5" : "Нет оценок";
     static string Clean(string s) => new(s.Where(XmlConvert.IsXmlChar).Take(32767).ToArray());
-    static string Filters(ReportFilter f) => $"Филиал: {f.BranchId?.ToString() ?? "все"}; специалист: {f.Technician?.ToString() ?? "все"}; заявитель: {f.Requester?.ToString() ?? "все"}; статус: {(f.Status.HasValue ? Status(f.Status.Value) : "все")}; поиск: {(f.Search.Length == 0 ? "не задан" : f.Search)}" + (f.Reaction.HasValue ? "; реакция: " + GlpiReportReaction.Ranges[f.Reaction.Value] : "");
+    static string Filters(ReportFilter f) => $"Филиал: {f.BranchId?.ToString() ?? "все"}; специалист: {f.Technician?.ToString() ?? "все"}; заявитель: {f.Requester?.ToString() ?? "все"}; статус: {(f.Status.HasValue ? Status(f.Status.Value) : "все")}; поиск: {(f.Search.Length == 0 ? "не задан" : f.Search)}" + (f.Reaction.HasValue ? "; реакция: " + GlpiReportReaction.Ranges[f.Reaction.Value] : "") + (f.Score.HasValue ? $"; оценка: {f.Score.Value} ★" : "");
     const string Method = "Исполнение: принята → закрыта; жизнь: создана → закрыта. Календарное время, включая ожидание. Нет данных ≠ ноль. Оценки относятся к текущему закрытию. При менее 5 ответах выборка мала.";
     record Metric(string Label, object? Value, int Style, string Display, string Note);
     record Section(string Title, string[] Headers, object?[][] Rows);
@@ -47,7 +47,13 @@ public static class GlpiReportExport
             return new("Динамика обращений", points.Length == 0 ? ["Нет событий"] : points.Select(p => Text(p,"day")).ToArray(),
                 new[] { ("created","Созданы","4169E1"), ("solved","Решены","D99524"), ("closed","Закрыты","249677") }.Select(s => new ChartSeries(s.Item2, points.Length == 0 ? [0] : points.Select(p => Number(p,s.Item1) ?? 0).ToArray(), s.Item3)).ToArray());
         }
-        public Chart Ratings() => new("Оценки пользователей", ["5", "4", "3", "2", "1"], [new("Ответов", new[] {5,4,3,2,1}.Select(n => (double)tickets.Count(t => t.Status == 6 && t.CurrentScore.HasValue && Math.Floor(t.CurrentScore.Value + .5) == n)).ToArray(), "4169E1")], true);
+        public Chart Ratings()
+        {
+            var ratings = data.TryGetProperty("ratings", out var r) && r.ValueKind == JsonValueKind.Array ? r : default;
+            if (ratings.ValueKind == JsonValueKind.Array)
+                return new("Оценки пользователей", ["5", "4", "3", "2", "1"], [new("Ответов", ratings.EnumerateArray().Select(b => Number(b, "count") ?? 0).ToArray(), "4169E1")], true);
+            return new("Оценки пользователей", ["5", "4", "3", "2", "1"], [new("Ответов", new[] {5,4,3,2,1}.Select(n => (double)tickets.Count(t => t.Status == 6 && t.CurrentScore.HasValue && Math.Floor(t.CurrentScore.Value + .5) == n)).ToArray(), "4169E1")], true);
+        }
         public Chart Reaction()
         {
             var buckets = data.TryGetProperty("reaction", out var r) ? r : JsonSerializer.SerializeToElement(GlpiReportReaction.Distribution(tickets), Json);

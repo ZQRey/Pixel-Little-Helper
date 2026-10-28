@@ -69,8 +69,8 @@ public static class PanelApi
             }
 
             // Auto-detection:
-            var localUser = await db.Users.SingleOrDefaultAsync(u => u.Username == login && u.AuthSource != "AD", token);
-            if (localUser != null)
+            var localUser = await db.Users.SingleOrDefaultAsync(u => u.Username == login, token);
+            if (localUser != null && localUser.AuthSource != "AD")
             {
                 if (localUser.IsActive && request.Password.Length <= 72 && BCrypt.Net.BCrypt.Verify(request.Password, localUser.PasswordHash))
                 {
@@ -446,8 +446,8 @@ public static class PanelApi
     private static async Task<IResult> AuthenticateLocalAsync(LoginRequest request, string login, HelperDb db, IConfiguration config)
     {
         if (request.Password.Length > 72) return Results.Unauthorized();
-        var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login && u.AuthSource != "AD");
-        if (user == null || !user.IsActive || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
+        var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login);
+        if (user == null || !user.IsActive || user.AuthSource == "AD" || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
         user.IsSweetheart = Access.IsSweetheart(config, user.Username);
         return Results.Ok(new { token = Security.Token(user, config), user });
     }

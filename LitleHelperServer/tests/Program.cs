@@ -467,7 +467,18 @@ try
     using var adCreate = await Call("/tickets", adToken, new { title = "Denied", description = "Denied" }); Check(adCreate.StatusCode == HttpStatusCode.Forbidden, "AD default User has read-only ticket access");
     using var adPassword = await Call("/auth/change-password", adToken, new { currentPassword = "AD-test-password", newPassword = "New-password" }); Check(adPassword.StatusCode == HttpStatusCode.BadRequest, "AD password cannot be changed locally");
     var autoAdLogin = await Json("/auth/login", body: new { username = "alice@ad.test", password = "AD-test-password" }); Check(autoAdLogin.GetProperty("user").GetProperty("authSource").GetString() == "AD", "unified /auth/login auto-detects and authenticates AD user");
-    using var localAdLogin = await Call("/auth/login", body: new { username = "alice@ad.test", password = "AD-test-password", provider = "local" }); Check(localAdLogin.StatusCode == HttpStatusCode.Unauthorized, "AD account cannot authenticate through local password endpoint when provider is local");
+    using var localAdLogin = await Call("/auth/login", body: new { username = "alice@ad.test", password = "AD-test-password", provider = "local" });
+    if (localAdLogin.StatusCode == HttpStatusCode.TooManyRequests)
+    {
+        Console.WriteLine("Waiting for login rate-limit window before local-provider check");
+        await Task.Delay(TimeSpan.FromSeconds(60));
+        using var retriedLocal = await Call("/auth/login", body: new { username = "alice@ad.test", password = "AD-test-password", provider = "local" });
+        Check(retriedLocal.StatusCode == HttpStatusCode.Unauthorized, "AD account cannot authenticate through local password endpoint when provider is local");
+    }
+    else
+    {
+        Check(localAdLogin.StatusCode == HttpStatusCode.Unauthorized, "AD account cannot authenticate through local password endpoint when provider is local");
+    }
     await Json("/users/" + adId, admin, new { username = "alice@ad.test", fullName = "Alice AD", role = "User", isActive = false }, HttpMethod.Put);
     using var revokedAd = await Call("/tickets", adToken); Check(revokedAd.StatusCode == HttpStatusCode.Unauthorized, "disabled AD user token revoked immediately");
     using var blockedAd = await Call("/auth/ad", body: new { username = "alice@ad.test", password = "AD-test-password" });

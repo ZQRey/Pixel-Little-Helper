@@ -80,8 +80,8 @@ function initRobotInteractions(){
         if(mouth) mouth.textContent='o';
       }
       const rect=face.getBoundingClientRect(),cx=rect.left+rect.width/2,cy=rect.top+rect.height/2,dx=e.clientX-cx,dy=e.clientY-cy;
-      face.style.setProperty('--eye-x',`${Math.max(-9,Math.min(9,Math.round(dx/22)))}px`);
-      face.style.setProperty('--eye-y',`${Math.max(-7,Math.min(7,Math.round(dy/22)))}px`);
+      face.style.setProperty('--eye-x',`${Math.max(-13,Math.min(13,Math.round(dx/18)))}px`);
+      face.style.setProperty('--eye-y',`${Math.max(-9,Math.min(9,Math.round(dy/18)))}px`);
       face.style.setProperty('--head-x',`${Math.max(-12,Math.min(12,Math.round(dx/35)))}px`);
       face.style.setProperty('--head-y',`${Math.max(-10,Math.min(10,Math.round(dy/35)))}px`);
       face.style.setProperty('--tilt-x',`${Math.max(-12,Math.min(12,Math.round(-dy/25)))}deg`);

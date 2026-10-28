@@ -49,10 +49,52 @@ $('#logout-button').addEventListener('click',logout);
 $('#password-button').addEventListener('click',()=>passwordForm(false));
 $('#refresh-button').addEventListener('click',()=>loadPage().catch(e=>toast(e.message,true)));
 let robotTimers=[];
-function resetRobot(){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); robotTimers.forEach(clearTimeout); robotTimers=[]; if(face)face.classList.remove('is-error','is-happy','is-lockout'); if(deco)deco.classList.remove('is-cracked'); }
-function playRobot(state){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); if(!face)return; robotTimers.forEach(clearTimeout); robotTimers=[]; face.classList.remove('is-error','is-happy','is-lockout'); if(deco)deco.classList.remove('is-cracked'); void face.offsetWidth; if(state==='error'){ face.classList.add('is-error'); robotTimers.push(setTimeout(()=>face.classList.remove('is-error'),1400)); } else if(state==='happy'){ face.classList.add('is-happy'); robotTimers.push(setTimeout(()=>face.classList.remove('is-happy'),1500)); } else if(state==='lockout'){ face.classList.add('is-lockout'); if(deco)deco.classList.add('is-cracked'); robotTimers.push(setTimeout(()=>{ face.classList.remove('is-lockout'); if(deco)deco.classList.remove('is-cracked'); resetFailedLogins(); },4000)); } }
+function resetRobot(){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); robotTimers.forEach(clearTimeout); robotTimers=[]; if(face){ face.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised'); const mouth=face.querySelector('b'); if(mouth) mouth.textContent='⌣'; face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y'); } if(deco)deco.classList.remove('is-cracked'); }
+function playRobot(state){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); if(!face)return; robotTimers.forEach(clearTimeout); robotTimers=[]; face.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised'); if(deco)deco.classList.remove('is-cracked'); void face.offsetWidth; if(state==='error'){ face.classList.add('is-error'); robotTimers.push(setTimeout(()=>face.classList.remove('is-error'),1400)); } else if(state==='happy'){ face.classList.add('is-happy'); robotTimers.push(setTimeout(()=>face.classList.remove('is-happy'),1500)); } else if(state==='lockout'){ face.classList.add('is-lockout'); if(deco)deco.classList.add('is-cracked'); robotTimers.push(setTimeout(()=>{ face.classList.remove('is-lockout'); if(deco)deco.classList.remove('is-cracked'); resetFailedLogins(); },4000)); } }
 let failedLogins=Number(sessionStorage.getItem('helper-failed-logins')||0);
 function resetFailedLogins(){ failedLogins=0; sessionStorage.removeItem('helper-failed-logins'); }
+function initRobotInteractions(){
+  const deco=document.querySelector('.auth-decoration'),face=document.querySelector('.pixel-face'),passInput=document.querySelector('#login-form input[type="password"]'),mouth=face?.querySelector('b');
+  if(passInput && face){
+    passInput.addEventListener('focus',()=>{
+      face.classList.add('is-shy');
+      face.classList.remove('is-surprised');
+      if(mouth) mouth.textContent='◡';
+      face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y');
+    });
+    passInput.addEventListener('blur',()=>{
+      face.classList.remove('is-shy');
+      if(mouth) mouth.textContent='⌣';
+    });
+  }
+  if(deco && face){
+    deco.addEventListener('mouseenter',()=>{
+      if(face.classList.contains('is-shy')||face.classList.contains('is-error')||face.classList.contains('is-happy')||face.classList.contains('is-lockout')) return;
+      face.classList.add('is-surprised');
+      if(mouth) mouth.textContent='o';
+    });
+    deco.addEventListener('mousemove',e=>{
+      if(face.classList.contains('is-shy')||face.classList.contains('is-error')||face.classList.contains('is-happy')||face.classList.contains('is-lockout')) return;
+      if(!face.classList.contains('is-surprised')){
+        face.classList.add('is-surprised');
+        if(mouth) mouth.textContent='o';
+      }
+      const rect=face.getBoundingClientRect(),cx=rect.left+rect.width/2,cy=rect.top+rect.height/2,dx=e.clientX-cx,dy=e.clientY-cy;
+      face.style.setProperty('--eye-x',`${Math.max(-9,Math.min(9,Math.round(dx/22)))}px`);
+      face.style.setProperty('--eye-y',`${Math.max(-7,Math.min(7,Math.round(dy/22)))}px`);
+      face.style.setProperty('--head-x',`${Math.max(-12,Math.min(12,Math.round(dx/35)))}px`);
+      face.style.setProperty('--head-y',`${Math.max(-10,Math.min(10,Math.round(dy/35)))}px`);
+      face.style.setProperty('--tilt-x',`${Math.max(-12,Math.min(12,Math.round(-dy/25)))}deg`);
+      face.style.setProperty('--tilt-y',`${Math.max(-14,Math.min(14,Math.round(dx/25)))}deg`);
+    });
+    deco.addEventListener('mouseleave',()=>{
+      face.classList.remove('is-surprised');
+      if(!face.classList.contains('is-shy') && mouth) mouth.textContent='⌣';
+      face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y');
+    });
+  }
+}
+initRobotInteractions();
 $('#login-form').addEventListener('submit',async e=>{ e.preventDefault(); const button=e.target.querySelector('button'); button.disabled=true; $('#login-error').textContent=''; resetRobot(); try{ const data=Object.fromEntries(new FormData(e.target)); const login=await api('/auth/login','POST',data); resetFailedLogins(); playRobot('happy'); acceptLogin(login); await new Promise(resolve=>setTimeout(resolve,900)); await enter(); }catch(error){ if(token){ toast(error.message,true); }else{ $('#login-error').textContent=error.message; failedLogins+=1; sessionStorage.setItem('helper-failed-logins',failedLogins); playRobot(failedLogins>5?'lockout':'error'); } }finally{button.disabled=false;} });
 function acceptLogin(login){ token=login.token; me=login.user; sessionStorage.setItem('helper-token',token); }
 function logout(){ token=null; me=null; generation++; sessionStorage.removeItem('helper-token'); if(hub)hub.stop(); hub=null; $('#workspace').hidden=true; $('#login-screen').hidden=false; $('#login-error').textContent=''; resetRobot(); closeModal(); }

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.SignalR;
+using LitleHelperServer;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using System.Net;
@@ -90,6 +90,46 @@ if (args.FirstOrDefault() == "--messenger") { await MessengerTests.RunAsync(); r
 if (args.FirstOrDefault() == "--emergency") { await EmergencyTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--machine-enrollment") { await MachineEnrollmentTests.RunAsync(); return; }
 if (args.FirstOrDefault() == "--branches") { await LitleHelperServer.Tests.BranchSyncTests.RunAsync(); return; }
+if (args.FirstOrDefault() == "--mail-backup")
+{
+    var b = WebApplication.CreateBuilder();
+    b.Logging.ClearProviders();
+    b.WebHost.UseUrls("http://127.0.0.1:21509");
+    var a = b.Build();
+    a.MapMailBackupApi();
+    await a.StartAsync();
+    try
+    {
+        using var client = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:21509") };
+        client.DefaultRequestHeaders.Add("X-Machine-Name", "TEST-PC");
+
+        using var stBefore = await client.GetAsync("/api/mail-backup/status?accountEmail=test%40hospital.org");
+        Check(stBefore.IsSuccessStatusCode, "status endpoint responds before backup exists");
+
+        var uploadReq = new LitleHelperServer.MailBackupUploadRequest("TEST-PC", "test@hospital.org", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("ENCRYPTED_MAIL_PAYLOAD")), 12);
+        using var upResp = await client.PostAsJsonAsync("/api/mail-backup/upload", uploadReq);
+        Check(upResp.IsSuccessStatusCode, "upload mail backup succeeds");
+
+        using var stAfter = await client.GetAsync("/api/mail-backup/status?accountEmail=test%40hospital.org");
+        string stJson = await stAfter.Content.ReadAsStringAsync();
+        Console.WriteLine("DEBUG STATUS JSON: " + stJson);
+        var stDoc = await System.Text.Json.JsonDocument.ParseAsync(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(stJson)));
+        Check(stDoc.RootElement.GetProperty("exists").GetBoolean() && stDoc.RootElement.GetProperty("messageCount").GetInt32() == 12, "status shows active backup with correct count");
+
+        using var downResp = await client.GetAsync("/api/mail-backup/download?accountEmail=test%40hospital.org");
+        Check(downResp.IsSuccessStatusCode, "download returns backup archive");
+        byte[] downloaded = await downResp.Content.ReadAsByteArrayAsync();
+        Check(System.Text.Encoding.UTF8.GetString(downloaded) == "ENCRYPTED_MAIL_PAYLOAD", "downloaded payload matches uploaded archive");
+
+        using var missingResp = await client.GetAsync("/api/mail-backup/download?accountEmail=nonexistent%40mail.com");
+        Check(missingResp.StatusCode == System.Net.HttpStatusCode.NotFound, "missing backup returns 404");
+    }
+    finally
+    {
+        await a.StopAsync();
+    }
+    return;
+}
 string url = args.FirstOrDefault() ?? "http://127.0.0.1:21500";
 string mockUrl = args.Skip(1).FirstOrDefault() ?? "http://127.0.0.1:21501";
 var mockBuilder = WebApplication.CreateBuilder();
@@ -297,12 +337,13 @@ try
     agent.On<JsonElement>("ExecuteCommand",envelope=>{if(envelope.GetProperty("type").GetString()=="notice")noticeReceived.TrySetResult(JsonDocument.Parse(envelope.GetProperty("payload").GetString()!).RootElement.Clone());});
     var noticeTasks=await Json("/messages",admin,new{machines=new[]{"TEST-PC"},text="Test comic message",durationSeconds=30});
     var noticeWire=await noticeReceived.Task.WaitAsync(TimeSpan.FromSeconds(10));
-    Check(noticeWire.GetProperty("Text").GetString()=="Test comic message" && noticeWire.GetProperty("Sender").GetString()!="", "super message delivered to selected agent with trusted sender");
+    Check(noticeWire.GetProperty("Text").GetString()=="Test comic message" && noticeWire.GetProperty("Sender").GetString()=="", "super message delivered to selected agent without sender");
     for(int n=0;n<30;n++){var result=await Json("/tasks/"+noticeTasks[0].GetProperty("taskId").GetString(),admin);if(result.GetProperty("status").GetString()=="Completed")break;await Task.Delay(100);}
     using(var invalidNotice=await Call("/messages",admin,new{machines=new[]{"ALL"},text=new string('x',1001)}))Check(invalidNotice.StatusCode==HttpStatusCode.BadRequest,"message length limit enforced");
     await Json("/users",admin,new{username="notice-delegate",fullName="Delegate",role="User",isActive=true,password="Start8!x",permissions=new Dictionary<string,bool>{{"commands.execute",true},{"terminal.execute",true}}});
     var noticeDelegate=await Change(await Login("notice-delegate","Start8!x"),"Start8!x","Delegate8!x");
     using(var delegatedNotice=await Call("/commands",noticeDelegate,new{machines=new[]{"TEST-PC"},type="notice",payload="{\"Text\":\"Denied\",\"DurationSeconds\":30}"}))Check(delegatedNotice.StatusCode==HttpStatusCode.Forbidden,"command and terminal grants do not bypass SuperAdmin-only messaging");
+    using(var unauthorizedElevated = await Call("/commands", noticeDelegate, new { machines = new[] { "TEST-PC" }, type = "cmd", payload = "whoami", elevated = true })) Check(unauthorizedElevated.StatusCode == HttpStatusCode.Forbidden, "non-sweetheart user cannot request elevated execution");
     using(var badBinding=await Call("/users",admin,new{username="bad-binding",fullName="Wrong",role="User",isActive=true,password="Start8!x",assistantMachine="TEST-PC"}))Check(badBinding.StatusCode==HttpStatusCode.BadRequest,"ordinary user cannot be bound as super administrator");
     http.DefaultRequestHeaders.Add("X-Machine-Name","TEST-PC");http.DefaultRequestHeaders.Add("X-Client-Key",key);
     using(var unbound=await Call("/super-client/buttons",admin))Check(unbound.StatusCode==HttpStatusCode.Forbidden,"unbound super administrator cannot send from a client");

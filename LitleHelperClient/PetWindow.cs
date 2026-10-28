@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -153,6 +153,7 @@ public sealed partial class PetWindow : Window
             catch (Exception ex) { Settings.Log(ex); }
             InitializeHub();
         }
+        InitializeMailSubsystem();
         RenderOptions.SetBitmapScalingMode(robot, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetBitmapScalingMode(faceOverlay, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetBitmapScalingMode(hatOverlay, BitmapScalingMode.NearestNeighbor);
@@ -185,52 +186,7 @@ public sealed partial class PetWindow : Window
             e.Handled = true;
             if (mouseDown) return;
             Wake(); HideBubbles();
-            var menu = new ContextMenu { PlacementTarget = robot, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
-            if (hub?.IsOnline == true && superAvailable)
-            {
-                var admin = new MenuItem { Header = "Кнопки супер админа" };
-                admin.Click += (_, _) => OpenSuperAdminWindow();
-                menu.Items.Add(admin);
-            }
-            var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
-            quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
-            menu.Items.Add(quiet);
-            AddSkinMenu(menu);
-            AddSoundProfileMenu(menu);
-            AddBrowserMenu(menu);
-            AddMedicalStatusMenu(menu);
-
-            var hideItem = new MenuItem { Header = "🙈 " + Loc.T("DisplayHide") };
-            hideItem.Click += (_, _) => SetAssistantHidden(true);
-            menu.Items.Add(hideItem);
-
-            menu.Items.Add(new Separator());
-
-            var kbItem = new MenuItem { Header = "📚 База знаний / Инструкции" };
-            kbItem.Click += (_, _) => OpenKnowledgeWindow();
-            menu.Items.Add(kbItem);
-
-            var diagItem = new MenuItem { Header = "🩺 Экспресс-диагностика ПК" };
-            diagItem.Click += (_, _) => OpenDiagnosticWindow();
-            menu.Items.Add(diagItem);
-
-            var cleanItem = new MenuItem { Header = "🧹 Очистить временные файлы" };
-            cleanItem.Click += async (_, _) => await CleanTempAsync();
-            menu.Items.Add(cleanItem);
-
-            var certItem = new MenuItem { Header = "🔑 Проверить сертификаты ЭЦП" };
-            certItem.Click += (_, _) => CheckCertificatesMenu();
-            menu.Items.Add(certItem);
-
-            var spoolItem = new MenuItem { Header = "🖨️ Очистить очередь печати" };
-            spoolItem.Click += async (_, _) => { var res = await Task.Run(PrinterWatchdog.ClearPrintQueue); ShowNotice(res.Message); };
-            menu.Items.Add(spoolItem);
-
-            menu.Items.Add(new Separator());
-
-            var exit = new MenuItem { Header = "Выход" };
-            exit.Click += (_, _) => Close();
-            menu.Items.Add(exit);
+            var menu = BuildAssistantContextMenu(robot);
             menu.IsOpen = true;
         };
         robot.LostMouseCapture += (_, _) => { if (mouseDown) EndDrag(); };
@@ -242,6 +198,7 @@ public sealed partial class PetWindow : Window
             if (!diagnostics) unreadReminderTimer.Start();
             if (!diagnostics && settings.EnableEyeCareReminders) eyeCareTimer.Start();
             if (!diagnostics) hub?.Start();
+            StartMailSubsystem();
             if (!diagnostics && messenger != null) _ = messenger.StartAsync();
             if (!diagnostics && hub != null)
             {
@@ -353,6 +310,7 @@ public sealed partial class PetWindow : Window
         Closed += async (_, _) =>
         {
             StopPendingEmergency();
+            DisposeMailSubsystem();
             printerWatchdog?.Dispose();
             certWatchdog?.Dispose();
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
@@ -386,6 +344,7 @@ public sealed partial class PetWindow : Window
         });
         UpdateRegion();
         if (!diagnostics) hub?.Start();
+            StartMailSubsystem();
         if (!string.IsNullOrWhiteSpace(pendingScanPath))
         {
             string path = pendingScanPath;
@@ -677,36 +636,8 @@ public sealed partial class PetWindow : Window
     }
     private void ShowTrayMenu()
     {
-        var menu = new ContextMenu { Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
-        menu.Items.Add(new MenuItem { Header = "Помощник: " + (hub?.IsOnline == true ? "Online" : "Offline") + " · " + (hub?.Status ?? "Не запущен"), IsEnabled = false });
-        menu.Items.Add(new MenuItem { Header = "Мессенджер: " + (messenger?.ConnectionStatus ?? "Не запущен"), IsEnabled = false });
-        if (hub?.LastSuccess is DateTime success) menu.Items.Add(new MenuItem { Header = "Последняя связь: " + success.ToLocalTime().ToString("HH:mm:ss"), IsEnabled = false });
-        var chat = new MenuItem { Header = "Мессенджер" }; chat.Click += async (_, _) => await OpenMessengerAsync(); menu.Items.Add(chat);
-        if (hub?.IsOnline == true && superAvailable) { var admin = new MenuItem { Header = "Кнопки супер админа" }; admin.Click += (_, _) => OpenSuperAdminWindow(); menu.Items.Add(admin); }
-        var reconnect = new MenuItem { Header = "Повторить подключение", IsEnabled = !reconnecting }; reconnect.Click += async (_, _) => await ReconnectAsync(); menu.Items.Add(reconnect);
-        var toggleAssistant = new MenuItem
-        {
-            Header = settings.AssistantHidden ? ("👁️ " + Loc.T("DisplayShow")) : ("🙈 " + Loc.T("DisplayHide"))
-        };
-        toggleAssistant.Click += (_, _) => SetAssistantHidden(!settings.AssistantHidden);
-        menu.Items.Add(toggleAssistant);
-
-        var quiet = new MenuItem { Header = "Не беспокоить", IsCheckable = true, IsChecked = settings.ChatDoNotDisturb };
-        quiet.Click += (_, _) => { settings.ChatDoNotDisturb = quiet.IsChecked; settings.Save(); };
-        menu.Items.Add(quiet);
-        AddSkinMenu(menu);
-        AddSoundProfileMenu(menu);
-        AddBrowserMenu(menu);
-        AddAntivirusMenu(menu);
-        var langMenu = new MenuItem { Header = Loc.T("TrayLanguage") };
-        foreach (var lang in Enum.GetValues<AppLanguage>())
-        {
-            var item = new MenuItem { Header = Loc.DisplayName(lang), IsCheckable = true, IsChecked = Loc.CurrentLanguage == lang };
-            item.Click += (_, _) => { Loc.CurrentLanguage = lang; settings.Language = Loc.Code; settings.Save(); React(PetState.Twirl, 1.2); };
-            langMenu.Items.Add(item);
-        }
-        menu.Items.Add(langMenu);
-        menu.Items.Add(new Separator()); var exit = new MenuItem { Header = Loc.T("TrayExit") }; exit.Click += (_, _) => Close(); menu.Items.Add(exit); menu.IsOpen = true;
+        var menu = BuildAssistantContextMenu();
+        menu.IsOpen = true;
     }
     private void AddBrowserMenu(ContextMenu menu)
     {
@@ -1422,6 +1353,7 @@ public sealed partial class PetWindow : Window
 
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
         if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "messenger")) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
+        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "mail")) visibleActions.Add(new("mail", Loc.T("TrayMail"), "mail"));
         if (!diagnostics && hub?.IsOnline == true && SystemButtonVisibility.Enabled(systemButtons, "emergency")) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
         if (!diagnostics && pendingSurveys.Length > 0) visibleActions.Insert(0,new("pending-surveys","Ожидают оценки: " + pendingSurveys.Length,"surveys"));
         int count = visibleActions.Count;
@@ -1642,7 +1574,8 @@ public sealed partial class PetWindow : Window
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        panel.Children.Add(new TextBlock { Text = notice.Sender, FontWeight = FontWeights.Bold, Foreground = (Brush)new BrushConverter().ConvertFromString("#4F46E5")!, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 6) });
+        if (!string.IsNullOrWhiteSpace(notice.Sender))
+            panel.Children.Add(new TextBlock { Text = notice.Sender, FontWeight = FontWeights.Bold, Foreground = (Brush)new BrushConverter().ConvertFromString("#4F46E5")!, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 6) });
         var scroll = new ScrollViewer { Content = new TextBlock { Text = notice.Text, TextWrapping = TextWrapping.Wrap, Foreground = (Brush)new BrushConverter().ConvertFromString("#1E293B")!, FontSize = 14 }, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         Grid.SetRow(scroll, 1); panel.Children.Add(scroll);
         var close = MakeButton(Loc.T("Close")); close.Margin = new Thickness(0, 8, 0, 0); close.Click += (_, _) => { HideBubbles(); ShowNextAnnouncement(); }; Grid.SetRow(close, 2); panel.Children.Add(close);
@@ -1851,6 +1784,7 @@ public sealed partial class PetWindow : Window
                 case "forbidden" or "disabled":
                     ShowForbiddenNotice(); return Task.CompletedTask;
                 case "messenger": return OpenMessengerAsync();
+                case "mail": OpenMailWindow(); break;
                 case "surveys": return OpenSurveyQueue();
                 case "emergency": return OpenEmergencyDialogAsync();
                 case "knowledge_base": OpenKnowledgeWindow(); break;

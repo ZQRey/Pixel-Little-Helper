@@ -623,6 +623,622 @@ public static class Loc
             [AppLanguage.Kazakh] = "жазып жатыр…",
             [AppLanguage.English] = "is typing…",
             [AppLanguage.Chinese] = "正在输入…"
+        },
+        ["TrayMail"] = new()
+        {
+            [AppLanguage.Russian] = "Почта",
+            [AppLanguage.Kazakh] = "Пошта",
+            [AppLanguage.English] = "Mail",
+            [AppLanguage.Chinese] = "邮件"
+        },
+        ["TraySettings"] = new()
+        {
+            [AppLanguage.Russian] = "Настройки",
+            [AppLanguage.Kazakh] = "Баптаулар",
+            [AppLanguage.English] = "Settings",
+            [AppLanguage.Chinese] = "设置"
+        },
+        ["TrayReconnect"] = new()
+        {
+            [AppLanguage.Russian] = "Повторить подключение",
+            [AppLanguage.Kazakh] = "Қайта қосылу",
+            [AppLanguage.English] = "Reconnect",
+            [AppLanguage.Chinese] = "重新连接"
+        },
+        ["TrayDoNotDisturb"] = new()
+        {
+            [AppLanguage.Russian] = "Не беспокоить",
+            [AppLanguage.Kazakh] = "Мазаламау",
+            [AppLanguage.English] = "Do Not Disturb",
+            [AppLanguage.Chinese] = "请勿打扰"
+        },
+        ["SettingsWindowTitle"] = new()
+        {
+            [AppLanguage.Russian] = "PixelHelper — Настройки помощника",
+            [AppLanguage.Kazakh] = "PixelHelper — Көмекші баптаулары",
+            [AppLanguage.English] = "PixelHelper — Assistant Settings",
+            [AppLanguage.Chinese] = "PixelHelper — 助手设置"
+        },
+        ["SettingsWindowHeading"] = new()
+        {
+            [AppLanguage.Russian] = "⚙️ Настройки помощника",
+            [AppLanguage.Kazakh] = "⚙️ Көмекші баптаулары",
+            [AppLanguage.English] = "⚙️ Assistant Settings",
+            [AppLanguage.Chinese] = "⚙️ 助手设置"
+        },
+        ["SettingsTabTheme"] = new()
+        {
+            [AppLanguage.Russian] = "🎨  Тема помощника",
+            [AppLanguage.Kazakh] = "🎨  Көмекші тақырыбы",
+            [AppLanguage.English] = "🎨  Assistant Theme",
+            [AppLanguage.Chinese] = "🎨  助手主题"
+        },
+        ["SettingsTabNotifications"] = new()
+        {
+            [AppLanguage.Russian] = "🔔  Оповещение и звук",
+            [AppLanguage.Kazakh] = "🔔  Хабарландырулар мен дыбыс",
+            [AppLanguage.English] = "🔔  Notifications & Sound",
+            [AppLanguage.Chinese] = "🔔  通知与声音"
+        },
+        ["SettingsTabBrowser"] = new()
+        {
+            [AppLanguage.Russian] = "🌐  Основной браузер",
+            [AppLanguage.Kazakh] = "🌐  Негізгі шолғыш",
+            [AppLanguage.English] = "🌐  Default Browser",
+            [AppLanguage.Chinese] = "🌐  首选浏览器"
+        },
+        ["SettingsTabAntivirus"] = new()
+        {
+            [AppLanguage.Russian] = "🛡️  Антивирус PixelGuard AV",
+            [AppLanguage.Kazakh] = "🛡️  PixelGuard AV антивирусы",
+            [AppLanguage.English] = "🛡️  PixelGuard AV Antivirus",
+            [AppLanguage.Chinese] = "🛡️  PixelGuard AV 杀毒防护"
+        },
+        ["SettingsTabLanguage"] = new()
+        {
+            [AppLanguage.Russian] = "🌍  Язык",
+            [AppLanguage.Kazakh] = "🌍  Тіл",
+            [AppLanguage.English] = "🌍  Language",
+            [AppLanguage.Chinese] = "🌍  语言"
+        },
+        ["SettingsTabMail"] = new()
+        {
+            [AppLanguage.Russian] = "✉️  Настройка почтового клиента",
+            [AppLanguage.Kazakh] = "✉️  Пошта клиентін баптау",
+            [AppLanguage.English] = "✉️  Email Client Settings",
+            [AppLanguage.Chinese] = "✉️  邮件客户端设置"
+        },
+        ["SettingsThemeHeader"] = new()
+        {
+            [AppLanguage.Russian] = "🎨 Тема помощника",
+            [AppLanguage.Kazakh] = "🎨 Көмекші тақырыбы",
+            [AppLanguage.English] = "🎨 Assistant Theme",
+            [AppLanguage.Chinese] = "🎨 助手主题"
+        },
+        ["SettingsThemeSub"] = new()
+        {
+            [AppLanguage.Russian] = "Выберите внешний облик (скин) помощника и режим отображения на рабочем столе.",
+            [AppLanguage.Kazakh] = "Көмекшінің сыртқы келбетін (скинін) және жұмыс үстелінде көрсетілу режимін таңдаңыз.",
+            [AppLanguage.English] = "Choose the assistant skin and desktop display mode.",
+            [AppLanguage.Chinese] = "选择助手的形象皮肤及桌面显示模式。"
+        },
+        ["SettingsSkinTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Скин персонажа",
+            [AppLanguage.Kazakh] = "Кейіпкер скині",
+            [AppLanguage.English] = "Character Skin",
+            [AppLanguage.Chinese] = "角色皮肤"
+        },
+        ["SettingsDisplayModeTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Режим отображения окна",
+            [AppLanguage.Kazakh] = "Терезені көрсету режимі",
+            [AppLanguage.English] = "Window Display Mode",
+            [AppLanguage.Chinese] = "窗口显示模式"
+        },
+        ["SettingsTopmost"] = new()
+        {
+            [AppLanguage.Russian] = "Поверх всех окон (рекомендуется)",
+            [AppLanguage.Kazakh] = "Барлық терезелердің үстінде (ұсынылады)",
+            [AppLanguage.English] = "Always on top (Recommended)",
+            [AppLanguage.Chinese] = "置顶显示（推荐）"
+        },
+        ["SettingsNormalWindow"] = new()
+        {
+            [AppLanguage.Russian] = "Обычное окно",
+            [AppLanguage.Kazakh] = "Қалыпты терезе",
+            [AppLanguage.English] = "Normal window",
+            [AppLanguage.Chinese] = "普通窗口"
+        },
+        ["SettingsBackgroundWindow"] = new()
+        {
+            [AppLanguage.Russian] = "На заднем плане (у рабочего стола)",
+            [AppLanguage.Kazakh] = "Артқы фонда (жұмыс үстелі жанында)",
+            [AppLanguage.English] = "In background (on desktop)",
+            [AppLanguage.Chinese] = "置于底层（桌面背景）"
+        },
+        ["SettingsHideAssistant"] = new()
+        {
+            [AppLanguage.Russian] = "Скрыть помощника с экрана (оставить только иконку в системном трее)",
+            [AppLanguage.Kazakh] = "Көмекшіні экраннан жасыру (тек жүйелік трейдегі белгішені қалдыру)",
+            [AppLanguage.English] = "Hide assistant from screen (keep system tray icon only)",
+            [AppLanguage.Chinese] = "隐藏桌面助手（仅保留系统托盘图标）"
+        },
+        ["SettingsInteractiveClick"] = new()
+        {
+            [AppLanguage.Russian] = "Реакция на клики мыши и интерактивные анимации",
+            [AppLanguage.Kazakh] = "Тінтуір басуына реакция және интерактивті анимациялар",
+            [AppLanguage.English] = "Mouse click reactions and interactive animations",
+            [AppLanguage.Chinese] = "鼠标点击互动与动作反馈"
+        },
+        ["SettingsNotificationsHeader"] = new()
+        {
+            [AppLanguage.Russian] = "🔔 Оповещения и звук",
+            [AppLanguage.Kazakh] = "🔔 Хабарландырулар мен дыбыс",
+            [AppLanguage.English] = "🔔 Notifications & Sound",
+            [AppLanguage.Chinese] = "🔔 通知与声音"
+        },
+        ["SettingsNotificationsSub"] = new()
+        {
+            [AppLanguage.Russian] = "Настройка громкости, звуковых профилей оповещений и режима «Тихий час».",
+            [AppLanguage.Kazakh] = "Дыбыс деңгейін, хабарландыру профильдерін және «Тыныш уақыт» режимін баптау.",
+            [AppLanguage.English] = "Configure volume, sound profiles, and quiet hours.",
+            [AppLanguage.Chinese] = "配置提示音量、音效方案及静音时段。"
+        },
+        ["SettingsSoundProfilesTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Звуковые профили",
+            [AppLanguage.Kazakh] = "Дыбыстық профильдер",
+            [AppLanguage.English] = "Sound Profiles",
+            [AppLanguage.Chinese] = "提示音效方案"
+        },
+        ["SettingsQuietHoursTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Режим «Тихий час»",
+            [AppLanguage.Kazakh] = "«Тыныш уақыт» режимі",
+            [AppLanguage.English] = "Quiet Hours",
+            [AppLanguage.Chinese] = "免打扰时段"
+        },
+        ["SettingsQuietHoursEnable"] = new()
+        {
+            [AppLanguage.Russian] = "Не беспокоить и отключить звуки сообщений",
+            [AppLanguage.Kazakh] = "Мазаламау және хабарламалар дыбысын өшіру",
+            [AppLanguage.English] = "Do not disturb and mute message sounds",
+            [AppLanguage.Chinese] = "开启请勿打扰并静音消息提示"
+        },
+        ["SettingsEyeCareTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Забота о здоровье (Отдых для глаз)",
+            [AppLanguage.Kazakh] = "Денсаулыққа қамқорлық (Көз тынығуы)",
+            [AppLanguage.English] = "Health Care (Eye Rest Reminders)",
+            [AppLanguage.Chinese] = "健康关怀（护眼休息提醒）"
+        },
+        ["SettingsEyeCareEnable"] = new()
+        {
+            [AppLanguage.Russian] = "Периодически напоминать о перерыве и гимнастике для глаз",
+            [AppLanguage.Kazakh] = "Көз жаттығуы мен үзіліс туралы мезгіл-мезгіл еске салу",
+            [AppLanguage.English] = "Periodically remind to take breaks and do eye exercises",
+            [AppLanguage.Chinese] = "定时提醒休息和眼保健操"
+        },
+        ["SettingsBrowserHeader"] = new()
+        {
+            [AppLanguage.Russian] = "🌐 Основной веб-браузер",
+            [AppLanguage.Kazakh] = "🌐 Негізгі веб-шолғыш",
+            [AppLanguage.English] = "🌐 Default Web Browser",
+            [AppLanguage.Chinese] = "🌐 首选网页浏览器"
+        },
+        ["SettingsBrowserSub"] = new()
+        {
+            [AppLanguage.Russian] = "Выберите браузер, через который модуль WebGuard открывает безопасные ссылки.",
+            [AppLanguage.Kazakh] = "WebGuard модулі қауіпсіз сілтемелерді ашатын шолғышты таңдаңыз.",
+            [AppLanguage.English] = "Choose the browser that WebGuard will use to open verified safe links.",
+            [AppLanguage.Chinese] = "选择通过 WebGuard 验证后打开安全链接的首选浏览器。"
+        },
+        ["SettingsInstalledBrowsers"] = new()
+        {
+            [AppLanguage.Russian] = "Обнаруженные браузеры",
+            [AppLanguage.Kazakh] = "Табылған шолғыштар",
+            [AppLanguage.English] = "Detected Browsers",
+            [AppLanguage.Chinese] = "已检测到的浏览器"
+        },
+        ["SettingsBrowseCustom"] = new()
+        {
+            [AppLanguage.Russian] = "📂 Указать другой браузер вручную...",
+            [AppLanguage.Kazakh] = "📂 Басқа шолғышты қолмен көрсету...",
+            [AppLanguage.English] = "📂 Select another browser manually...",
+            [AppLanguage.Chinese] = "📂 手动选择其他浏览器可执行文件..."
+        },
+        ["SettingsAntivirusHeader"] = new()
+        {
+            [AppLanguage.Russian] = "🛡️ Антивирус PixelGuard AV",
+            [AppLanguage.Kazakh] = "🛡️ PixelGuard AV антивирусы",
+            [AppLanguage.English] = "🛡️ PixelGuard AV Antivirus",
+            [AppLanguage.Chinese] = "🛡️ PixelGuard AV 杀毒防护"
+        },
+        ["SettingsAntivirusSub"] = new()
+        {
+            [AppLanguage.Russian] = "Защита в реальном времени, проверка скачиваний, карантин угроз и сканирование диска.",
+            [AppLanguage.Kazakh] = "Нақты уақыттағы қорғаныс, жүктемелерді тексеру, қауіптерді оқшаулау және дискіні сканерлеу.",
+            [AppLanguage.English] = "Real-time protection, download scanning, threat quarantine, and disk scanning.",
+            [AppLanguage.Chinese] = "实时防御、下载检查、威胁隔离及磁盘扫描。"
+        },
+        ["SettingsRealtimeProtection"] = new()
+        {
+            [AppLanguage.Russian] = "Включить постоянную защиту файлов в реальном времени",
+            [AppLanguage.Kazakh] = "Файлдарды нақты уақыттағы тұрақты қорғауды қосу",
+            [AppLanguage.English] = "Enable continuous real-time file protection",
+            [AppLanguage.Chinese] = "开启常驻文件实时监控防护"
+        },
+        ["SettingsWebGuardStatus"] = new()
+        {
+            [AppLanguage.Russian] = "Защита WebGuard (блокировка фишинга и опасных ссылок)",
+            [AppLanguage.Kazakh] = "WebGuard қорғанысы (фишинг пен қауіпті сілтемелерді бұғаттау)",
+            [AppLanguage.English] = "WebGuard Protection (blocking phishing and malicious URLs)",
+            [AppLanguage.Chinese] = "WebGuard 防护（拦截钓鱼和恶意链接）"
+        },
+        ["SettingsMailShieldStatus"] = new()
+        {
+            [AppLanguage.Russian] = "PixelGuard Mail Shield (сканирование входящей почты и вложений)",
+            [AppLanguage.Kazakh] = "PixelGuard Mail Shield (кіріс пошта мен тіркемелерді тексеру)",
+            [AppLanguage.English] = "PixelGuard Mail Shield (inbox and attachment scanning)",
+            [AppLanguage.Chinese] = "PixelGuard Mail Shield（收件箱与附件安全扫描）"
+        },
+        ["SettingsQuickScan"] = new()
+        {
+            [AppLanguage.Russian] = "🔍 Быстрое сканирование важных папок",
+            [AppLanguage.Kazakh] = "🔍 Маңызды қалталарды жылдам сканерлеу",
+            [AppLanguage.English] = "🔍 Quick Scan Critical Folders",
+            [AppLanguage.Chinese] = "🔍 快速扫描关键目录"
+        },
+        ["SettingsCustomScan"] = new()
+        {
+            [AppLanguage.Russian] = "📁 Выбрать папку или диск для проверки…",
+            [AppLanguage.Kazakh] = "📁 Тексеру үшін қалтаны немесе дискіні таңдау…",
+            [AppLanguage.English] = "📁 Choose Folder or Drive to Scan…",
+            [AppLanguage.Chinese] = "📁 选择自定义目录或磁盘扫描…"
+        },
+        ["SettingsQuarantineTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Изолированные угрозы (Карантин)",
+            [AppLanguage.Kazakh] = "Оқшауланған қауіптер (Карантин)",
+            [AppLanguage.English] = "Isolated Threats (Quarantine)",
+            [AppLanguage.Chinese] = "已隔离威胁（隔离区）"
+        },
+        ["SettingsQuarantineEmpty"] = new()
+        {
+            [AppLanguage.Russian] = "Карантин пуст. Вредоносных файлов не обнаружено.",
+            [AppLanguage.Kazakh] = "Карантин бос. Зиянды файлдар табылған жоқ.",
+            [AppLanguage.English] = "Quarantine is empty. No malicious files detected.",
+            [AppLanguage.Chinese] = "隔离区为空。未发现恶意威胁文件。"
+        },
+        ["Restore"] = new()
+        {
+            [AppLanguage.Russian] = "Восстановить",
+            [AppLanguage.Kazakh] = "Қалпына келтіру",
+            [AppLanguage.English] = "Restore",
+            [AppLanguage.Chinese] = "恢复"
+        },
+        ["DeletePermanently"] = new()
+        {
+            [AppLanguage.Russian] = "Удалить навсегда",
+            [AppLanguage.Kazakh] = "Мүлдем жою",
+            [AppLanguage.English] = "Delete Permanently",
+            [AppLanguage.Chinese] = "永久粉碎"
+        },
+        ["SettingsLanguageHeader"] = new()
+        {
+            [AppLanguage.Russian] = "🌍 Язык интерфейса",
+            [AppLanguage.Kazakh] = "🌍 Интерфейс тілі",
+            [AppLanguage.English] = "🌍 Interface Language",
+            [AppLanguage.Chinese] = "🌍 界面语言"
+        },
+        ["SettingsLanguageSub"] = new()
+        {
+            [AppLanguage.Russian] = "Выберите язык отображения меню, подсказок и уведомлений помощника.",
+            [AppLanguage.Kazakh] = "Көмекшінің мәзірі, нұсқаулары мен хабарландырулары көрсетілетін тілді таңдаңыз.",
+            [AppLanguage.English] = "Choose the display language for menus, prompts, and assistant notifications.",
+            [AppLanguage.Chinese] = "选择桌面助手菜单、操作提示及通知的界面语言。"
+        },
+        ["SettingsAvailableLanguages"] = new()
+        {
+            [AppLanguage.Russian] = "Доступные языки",
+            [AppLanguage.Kazakh] = "Қолжетімді тілдер",
+            [AppLanguage.English] = "Available Languages",
+            [AppLanguage.Chinese] = "可用语言"
+        },
+        ["SettingsMailHeader"] = new()
+        {
+            [AppLanguage.Russian] = "✉️ Настройка почтового клиента (Pixel Mail)",
+            [AppLanguage.Kazakh] = "✉️ Пошта клиентін баптау (Pixel Mail)",
+            [AppLanguage.English] = "✉️ Email Client Settings (Pixel Mail)",
+            [AppLanguage.Chinese] = "✉️ 邮件客户端设置 (Pixel Mail)"
+        },
+        ["SettingsMailSub"] = new()
+        {
+            [AppLanguage.Russian] = "Подключение почтовых ящиков с автоопределением портов, режимом хранения писем и защитой PixelGuard AV.",
+            [AppLanguage.Kazakh] = "Порттарды автоматты анықтау, сақтау режимі және PixelGuard AV қорғанысымен пошта жәшіктерін қосу.",
+            [AppLanguage.English] = "Connect mailboxes with autodiscovery, storage modes, and PixelGuard AV protection.",
+            [AppLanguage.Chinese] = "配置邮箱账户、端口自动发现、存储方式及 PixelGuard AV 安全防护。"
+        },
+        ["SettingsConnectedAccounts"] = new()
+        {
+            [AppLanguage.Russian] = "Подключенные почтовые ящики ({0})",
+            [AppLanguage.Kazakh] = "Қосылған пошта жәшіктері ({0})",
+            [AppLanguage.English] = "Connected Mailboxes ({0})",
+            [AppLanguage.Chinese] = "已连接的邮箱账户 ({0})"
+        },
+        ["SettingsOpenMailClient"] = new()
+        {
+            [AppLanguage.Russian] = "📬 Открыть почтовый клиент",
+            [AppLanguage.Kazakh] = "📬 Пошта клиентін ашу",
+            [AppLanguage.English] = "📬 Open Email Client",
+            [AppLanguage.Chinese] = "📬 打开邮件客户端"
+        },
+        ["SettingsNoAccounts"] = new()
+        {
+            [AppLanguage.Russian] = "Пока не подключено ни одного почтового ящика. Заполните форму ниже и нажмите «⚡ Автонастройка».",
+            [AppLanguage.Kazakh] = "Әзірге бірде-бір пошта жәшігі қосылмаған. Төмендегі пішінді толтырып, «⚡ Автобаптау» түймесін басыңыз.",
+            [AppLanguage.English] = "No mailboxes connected yet. Fill out the form below and click \"⚡ Autodiscover\".",
+            [AppLanguage.Chinese] = "暂未添加任何邮箱账户。请填写下方表单并点击“⚡ 自动检测配置”。"
+        },
+        ["SettingsAddAccountTitle"] = new()
+        {
+            [AppLanguage.Russian] = "＋ Подключить почтовый ящик (Автоопределение портов и протоколов)",
+            [AppLanguage.Kazakh] = "＋ Пошта жәшігін қосу (Порттар мен хаттамаларды автоматты анықтау)",
+            [AppLanguage.English] = "＋ Connect Mailbox (Auto-detect ports and protocols)",
+            [AppLanguage.Chinese] = "＋ 添加邮箱账户（自动识别端口与协议）"
+        },
+        ["SettingsAutodiscoverBtn"] = new()
+        {
+            [AppLanguage.Russian] = "⚡ Автонастройка (Определить порты автоматически)",
+            [AppLanguage.Kazakh] = "⚡ Автобаптау (Порттарды автоматты анықтау)",
+            [AppLanguage.English] = "⚡ Autodiscover (Detect ports automatically)",
+            [AppLanguage.Chinese] = "⚡ 自动检测配置（自动识别服务器端口）"
+        },
+        ["SettingsSaveAccountBtn"] = new()
+        {
+            [AppLanguage.Russian] = "💾 Проверить и сохранить почтовый ящик",
+            [AppLanguage.Kazakh] = "💾 Пошта жәшігін тексеру және сақтау",
+            [AppLanguage.English] = "💾 Verify and Save Mailbox",
+            [AppLanguage.Chinese] = "💾 验证并保存邮箱配置"
+        },
+        ["SettingsEncryptionTitle"] = new()
+        {
+            [AppLanguage.Russian] = "🔐 Шифрование писем и фильтрация PixelGuard AV",
+            [AppLanguage.Kazakh] = "🔐 Хаттарды шифрлау және PixelGuard AV сүзгісі",
+            [AppLanguage.English] = "🔐 Message Encryption and PixelGuard AV Filtering",
+            [AppLanguage.Chinese] = "🔐 邮件端到端加密与 PixelGuard AV 防护过滤"
+        },
+        ["SettingsBlacklistTitle"] = new()
+        {
+            [AppLanguage.Russian] = "🚫 Черный список (Заблокированные)",
+            [AppLanguage.Kazakh] = "🚫 Қара тізім (Бұғатталғандар)",
+            [AppLanguage.English] = "🚫 Blacklist (Blocked Senders)",
+            [AppLanguage.Chinese] = "🚫 黑名单（已拦截发件人）"
+        },
+        ["SettingsWhitelistTitle"] = new()
+        {
+            [AppLanguage.Russian] = "✅ Белый список (Доверенные)",
+            [AppLanguage.Kazakh] = "✅ Ақ тізім (Сенімділер)",
+            [AppLanguage.English] = "✅ Whitelist (Trusted Senders)",
+            [AppLanguage.Chinese] = "✅ 白名单（受信任发件人）"
+        },
+        ["MailWindowTitle"] = new()
+        {
+            [AppLanguage.Russian] = "Pixel Mail — Защищённый почтовый клиент (PixelGuard AV)",
+            [AppLanguage.Kazakh] = "Pixel Mail — Қорғалған пошта клиенті (PixelGuard AV)",
+            [AppLanguage.English] = "Pixel Mail — Secure Email Client (PixelGuard AV)",
+            [AppLanguage.Chinese] = "Pixel Mail — 安全邮件客户端 (PixelGuard AV)"
+        },
+        ["MailComposeBtn"] = new()
+        {
+            [AppLanguage.Russian] = "✍️ Написать",
+            [AppLanguage.Kazakh] = "✍️ Жазу",
+            [AppLanguage.English] = "✍️ Compose",
+            [AppLanguage.Chinese] = "✍️ 写邮件"
+        },
+        ["MailSyncBtn"] = new()
+        {
+            [AppLanguage.Russian] = "🔄 Проверить почту",
+            [AppLanguage.Kazakh] = "🔄 Поштаны тексеру",
+            [AppLanguage.English] = "🔄 Check Mail",
+            [AppLanguage.Chinese] = "🔄 收取邮件"
+        },
+        ["MailReplyBtn"] = new()
+        {
+            [AppLanguage.Russian] = "↩️ Ответить",
+            [AppLanguage.Kazakh] = "↩️ Жауап беру",
+            [AppLanguage.English] = "↩️ Reply",
+            [AppLanguage.Chinese] = "↩️ 回复"
+        },
+        ["MailForwardBtn"] = new()
+        {
+            [AppLanguage.Russian] = "↪️ Переслать",
+            [AppLanguage.Kazakh] = "↪️ Қайта бағыттау",
+            [AppLanguage.English] = "↪️ Forward",
+            [AppLanguage.Chinese] = "↪️ 转发"
+        },
+        ["MailSettingsBtn"] = new()
+        {
+            [AppLanguage.Russian] = "⚙️ Настройки почты",
+            [AppLanguage.Kazakh] = "⚙️ Пошта баптаулары",
+            [AppLanguage.English] = "⚙️ Mail Settings",
+            [AppLanguage.Chinese] = "⚙️ 邮箱设置"
+        },
+        ["MailOpenFileBtn"] = new()
+        {
+            [AppLanguage.Russian] = "📂 Открыть файл",
+            [AppLanguage.Kazakh] = "📂 Файлды ашу",
+            [AppLanguage.English] = "📂 Open File",
+            [AppLanguage.Chinese] = "📂 打开文件"
+        },
+        ["MailSearchTooltip"] = new()
+        {
+            [AppLanguage.Russian] = "Поиск по теме, адресу, тексту или вложениям",
+            [AppLanguage.Kazakh] = "Тақырып, мекенжай, мәтін немесе тіркемелер бойынша іздеу",
+            [AppLanguage.English] = "Search by subject, sender, body, or attachments",
+            [AppLanguage.Chinese] = "按主题、发件人、正文或附件搜索"
+        },
+        ["MailboxesHeader"] = new()
+        {
+            [AppLanguage.Russian] = "ПОЧТОВЫЕ ЯЩИКИ",
+            [AppLanguage.Kazakh] = "ПОШТА ЖӘШІКТЕРІ",
+            [AppLanguage.English] = "MAILBOXES",
+            [AppLanguage.Chinese] = "邮箱账户"
+        },
+        ["AllMailboxes"] = new()
+        {
+            [AppLanguage.Russian] = "📬 Все ящики",
+            [AppLanguage.Kazakh] = "📬 Барлық жәшіктер",
+            [AppLanguage.English] = "📬 All Mailboxes",
+            [AppLanguage.Chinese] = "📬 全部邮箱"
+        },
+        ["FoldersHeader"] = new()
+        {
+            [AppLanguage.Russian] = "ПАПКИ",
+            [AppLanguage.Kazakh] = "ҚАЛТАЛАР",
+            [AppLanguage.English] = "FOLDERS",
+            [AppLanguage.Chinese] = "文件夹"
+        },
+        ["FolderUnifiedInbox"] = new()
+        {
+            [AppLanguage.Russian] = "📥 Все входящие",
+            [AppLanguage.Kazakh] = "📥 Барлық кіріс",
+            [AppLanguage.English] = "📥 Unified Inbox",
+            [AppLanguage.Chinese] = "📥 全部收件箱"
+        },
+        ["FolderInbox"] = new()
+        {
+            [AppLanguage.Russian] = "📨 Входящие",
+            [AppLanguage.Kazakh] = "📨 Кіріс хаттар",
+            [AppLanguage.English] = "📨 Inbox",
+            [AppLanguage.Chinese] = "📨 收件箱"
+        },
+        ["FolderSent"] = new()
+        {
+            [AppLanguage.Russian] = "📤 Отправленные",
+            [AppLanguage.Kazakh] = "📤 Жіберілгендер",
+            [AppLanguage.English] = "📤 Sent",
+            [AppLanguage.Chinese] = "📤 已发送"
+        },
+        ["FolderDrafts"] = new()
+        {
+            [AppLanguage.Russian] = "📝 Черновики",
+            [AppLanguage.Kazakh] = "📝 Нобайлар",
+            [AppLanguage.English] = "📝 Drafts",
+            [AppLanguage.Chinese] = "📝 草稿箱"
+        },
+        ["FolderSpam"] = new()
+        {
+            [AppLanguage.Russian] = "🛡️ Спам и Блокированные",
+            [AppLanguage.Kazakh] = "🛡️ Спам және Бұғатталғандар",
+            [AppLanguage.English] = "🛡️ Spam & Blocked",
+            [AppLanguage.Chinese] = "🛡️ 垃圾与拦截邮件"
+        },
+        ["FolderTrash"] = new()
+        {
+            [AppLanguage.Russian] = "🗑️ Корзина",
+            [AppLanguage.Kazakh] = "🗑️ Себет",
+            [AppLanguage.English] = "🗑️ Trash",
+            [AppLanguage.Chinese] = "🗑️ 已删除/废纸篓"
+        },
+        ["FolderLocalArchive"] = new()
+        {
+            [AppLanguage.Russian] = "💾 На компьютере (Архив)",
+            [AppLanguage.Kazakh] = "💾 Компьютерде (Архив)",
+            [AppLanguage.English] = "💾 Local PC Archive",
+            [AppLanguage.Chinese] = "💾 本地存档"
+        },
+        ["ConnectMailboxQuick"] = new()
+        {
+            [AppLanguage.Russian] = "＋ Подключить ящик",
+            [AppLanguage.Kazakh] = "＋ Жәшікті қосу",
+            [AppLanguage.English] = "＋ Connect Mailbox",
+            [AppLanguage.Chinese] = "＋ 添加邮箱"
+        },
+        ["FilterAll"] = new()
+        {
+            [AppLanguage.Russian] = "Все",
+            [AppLanguage.Kazakh] = "Барлығы",
+            [AppLanguage.English] = "All",
+            [AppLanguage.Chinese] = "全部"
+        },
+        ["FilterUnread"] = new()
+        {
+            [AppLanguage.Russian] = "Непрочитанные",
+            [AppLanguage.Kazakh] = "Оқылмағандар",
+            [AppLanguage.English] = "Unread",
+            [AppLanguage.Chinese] = "未读"
+        },
+        ["FilterAttachments"] = new()
+        {
+            [AppLanguage.Russian] = "📎 Вложения",
+            [AppLanguage.Kazakh] = "📎 Тіркемелер",
+            [AppLanguage.English] = "📎 Attachments",
+            [AppLanguage.Chinese] = "📎 附件"
+        },
+        ["FilterEncrypted"] = new()
+        {
+            [AppLanguage.Russian] = "🔒 Шифр",
+            [AppLanguage.Kazakh] = "🔒 Шифр",
+            [AppLanguage.English] = "🔒 Encrypted",
+            [AppLanguage.Chinese] = "🔒 加密邮件"
+        },
+        ["FilterThreats"] = new()
+        {
+            [AppLanguage.Russian] = "🛡️ Угрозы/Спам",
+            [AppLanguage.Kazakh] = "🛡️ Қауіптер/Спам",
+            [AppLanguage.English] = "🛡️ Threats/Spam",
+            [AppLanguage.Chinese] = "🛡️ 威胁与垃圾"
+        },
+        ["MailContextMarkUnread"] = new()
+        {
+            [AppLanguage.Russian] = "✉️ Отметить как непрочитанное",
+            [AppLanguage.Kazakh] = "✉️ Оқылмаған деп белгілеу",
+            [AppLanguage.English] = "✉️ Mark as unread",
+            [AppLanguage.Chinese] = "✉️ 标为未读"
+        },
+        ["MailContextMarkRead"] = new()
+        {
+            [AppLanguage.Russian] = "✉️ Отметить как прочитанное",
+            [AppLanguage.Kazakh] = "✉️ Оқылған деп белгілеу",
+            [AppLanguage.English] = "✉️ Mark as read",
+            [AppLanguage.Chinese] = "✉️ 标为已读"
+        },
+        ["MailContextSpam"] = new()
+        {
+            [AppLanguage.Russian] = "🛡️ Отправить в спам",
+            [AppLanguage.Kazakh] = "🛡️ Спамға жіберу",
+            [AppLanguage.English] = "🛡️ Send to Spam",
+            [AppLanguage.Chinese] = "🛡️ 移至垃圾箱"
+        },
+        ["MailContextDelete"] = new()
+        {
+            [AppLanguage.Russian] = "🗑️ Удалить",
+            [AppLanguage.Kazakh] = "🗑️ Жою",
+            [AppLanguage.English] = "🗑️ Delete",
+            [AppLanguage.Chinese] = "🗑️ 删除"
+        },
+        ["AssistantStatusLabel"] = new()
+        {
+            [AppLanguage.Russian] = "Помощник: {0}",
+            [AppLanguage.Kazakh] = "Көмекші: {0}",
+            [AppLanguage.English] = "Assistant: {0}",
+            [AppLanguage.Chinese] = "助手状态：{0}"
+        },
+        ["MessengerStatusLabel"] = new()
+        {
+            [AppLanguage.Russian] = "Мессенджер: {0}",
+            [AppLanguage.Kazakh] = "Мессенджер: {0}",
+            [AppLanguage.English] = "Messenger: {0}",
+            [AppLanguage.Chinese] = "即时通讯：{0}"
+        },
+        ["LastServerSyncLabel"] = new()
+        {
+            [AppLanguage.Russian] = "Последняя связь: {0}",
+            [AppLanguage.Kazakh] = "Соңғы байланыс: {0}",
+            [AppLanguage.English] = "Last connection: {0}",
+            [AppLanguage.Chinese] = "最后连通：{0}"
         }
     };
 }

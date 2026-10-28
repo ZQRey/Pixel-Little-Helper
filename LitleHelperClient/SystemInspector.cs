@@ -116,6 +116,12 @@ public static class SystemInspector
         return Environment.UserName;
     }
 
+    public static string ClientVersion()
+    {
+        var ver = typeof(SystemInspector).Assembly.GetName().Version;
+        return ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.2.79";
+    }
+
     public static MachineInfo Machine()
     {
         string ip = "";
@@ -129,7 +135,7 @@ public static class SystemInspector
             if (!string.IsNullOrEmpty(recovered)) user = recovered;
         }
 
-        return new(Environment.MachineName, user, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName());
+        return new(Environment.MachineName, user, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName(), ClientVersion: ClientVersion());
     }
     public static InventorySnapshot Collect()
     {

@@ -72,6 +72,7 @@ services:
       LiveKit__Url: ${LIVEKIT_URL:-ws://172.16.16.61:7880}
       LiveKit__ApiKey: ${LIVEKIT_API_KEY:-devkey}
       LiveKit__ApiSecret: ${LIVEKIT_API_SECRET:-secret_development_livekit_key_32bytes_min}
+      SWEETHEART: ${SWEETHEART:-zqrey3@gp1.loc,zqrey3}
     volumes:
       - server-data:/app/data
       - generated-secrets:/run/helper-secrets:ro

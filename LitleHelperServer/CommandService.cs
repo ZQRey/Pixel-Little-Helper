@@ -13,6 +13,8 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
         if (user == null || !user.IsActive || user.MustChangePassword || !principal.HasClaim("version", user.SecurityVersion.ToString()))
             throw new UnauthorizedAccessException("Требуется повторный вход");
         bool super = Access.Can(user, "terminal.execute");
+        if (request.Elevated && !Access.IsSweetheart(config, user.Username))
+            throw new UnauthorizedAccessException("Запуск от имени администратора разрешён только доверенным администраторам (SWEETHEART)");
         if (request.Type == "notice") { if (user.Role != Roles.SuperAdmin) throw new UnauthorizedAccessException("Сообщения доступны только SuperAdmin"); }
         else if (!Access.Can(user, "commands.execute")) throw new UnauthorizedAccessException("Недостаточно прав");
         if (request.Machines == null || request.Payload == null || request.Machines.Length is < 1 or > 500 || request.Payload.Length > 8000) throw new ArgumentException("Неверный размер команды");
@@ -23,7 +25,7 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
             try { notice = JsonSerializer.Deserialize<ClientNotice>(payload, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new ArgumentException("Введите сообщение"); }
             catch (JsonException) { throw new ArgumentException("Неверное сообщение"); }
             AnnouncementService.Validate(notice.Text, notice.DurationSeconds);
-            payload = JsonSerializer.Serialize(notice with { Sender = string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName });
+            payload = JsonSerializer.Serialize(notice with { Sender = "" });
         }
         else if (type is "cmd" or "powershell")
         {
@@ -67,7 +69,7 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
         foreach (var computer in computers)
         {
             var log = new AuditLog { AdminUsername = user.Username, MachineName = computer.MachineName,
-                CommandType = type, CommandPayload = request.Type == "script" ? request.Payload : payload,
+                CommandType = type + (request.Elevated ? ":elevated" : ""), CommandPayload = request.Type == "script" ? request.Payload : payload,
                 Status = computer.IsOnline && computer.ConnectionId != null ? "Pending" : "Offline", Result = computer.IsOnline ? "" : "ПК недоступен" };
             db.AuditLogs.Add(log); tasks.Add(log);
         }
@@ -76,7 +78,7 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
         {
             var computer = computers.Single(c => c.MachineName == log.MachineName);
             string wireType = type == "script" ? config[$"Scripts:{request.Payload}:Type"] ?? "cmd" : type;
-            await hub.Clients.Client(computer.ConnectionId!).SendAsync("ExecuteCommand", new CommandEnvelope(log.TaskId, wireType, payload), token);
+            await hub.Clients.Client(computer.ConnectionId!).SendAsync("ExecuteCommand", new CommandEnvelope(log.TaskId, wireType, payload, request.Elevated, user.Username), token);
         }
         return tasks;
     }

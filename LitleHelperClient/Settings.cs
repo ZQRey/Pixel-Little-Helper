@@ -59,6 +59,14 @@ public sealed class Settings
     public string AntivirusExcludedExtensions { get; set; } = ".iso, .vmdk, .bak, .1cd, .log";
     public string AntivirusExcludedPaths { get; set; } = "";
     public long AntivirusMaxScanSizeBytes { get; set; } = 262144000;
+    public List<MailAccountConfig> MailAccounts { get; set; } = new();
+    public bool MailNotifyWhenHidden { get; set; } = true;
+    public bool MailScanAntivirus { get; set; } = true;
+    public bool MailScanPhishing { get; set; } = true;
+    public bool MailFilterSpam { get; set; } = true;
+    public List<string> MailBlockedSenders { get; set; } = new();
+    public List<string> MailTrustedSenders { get; set; } = new();
+    public string MailSharedEncryptionKey { get; set; } = "";
     internal bool EnsureClientKey()
     {
         string? machineKey = MachineIdentity.Read(ServerUrl);

@@ -19,6 +19,7 @@ public class Computer
     public bool SupportsAiDiagnostics { get; set; }
     public string IpAddress { get; set; } = "";
     public string OsVersion { get; set; } = "";
+    public string ClientVersion { get; set; } = "";
     public bool IsOnline { get; set; }
     public DateTime LastSeen { get; set; }
     public string HardwareJson { get; set; } = "{}";
@@ -121,6 +122,7 @@ public class PanelUser
         set => PermissionOverrides = System.Text.Json.JsonSerializer.Serialize(value);
     }
     [System.ComponentModel.DataAnnotations.Schema.NotMapped] public string[] EffectivePermissions => Access.Effective(this);
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped] public bool IsSweetheart { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public bool MustChangePassword { get; set; }
@@ -295,12 +297,12 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
         b.Entity<AntivirusWhitelistItem>().HasIndex(x => x.Sha256);
     }
 }
-public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false);
-public record CommandEnvelope(string TaskId, string Type, string Payload);
+public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false, string ClientVersion = "");
+public record CommandEnvelope(string TaskId, string Type, string Payload, bool Elevated = false, string AdminUser = "");
 public record LoginRequest(string Username, string Password);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
 public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null, string? Room = null, int[]? BranchIds = null);
-public record CommandRequest(string[] Machines, string Type, string Payload);
+public record CommandRequest(string[] Machines, string Type, string Payload, bool Elevated = false);
 public record EnrollmentRequest(string MachineName);
 public record AgentRegistrationRequest(string MachineName, string ClientKey);
 public record TicketRequest(string Title, string Description, int? BranchId = null, string Room = "", string UserFullName = "");

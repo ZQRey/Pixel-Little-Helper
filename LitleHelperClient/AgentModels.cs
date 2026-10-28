@@ -1,6 +1,6 @@
 namespace PixelHelper;
 
-public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = true);
+public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = true, bool SupportsAiDiagnostics = true, string ClientVersion = "");
 public sealed record ActionButton(
     int Id,
     string Title,
@@ -32,7 +32,7 @@ public sealed record ActionButton(
         return Description;
     }
 }
-public sealed record CommandEnvelope(string TaskId, string Type, string Payload);
+public sealed record CommandEnvelope(string TaskId, string Type, string Payload, bool Elevated = false, string AdminUser = "");
 public sealed record MemorySlot(ulong CapacityBytes, string Manufacturer, uint SpeedMHz, string Slot);
 public sealed record LogicalDisk(string Name, ulong TotalBytes, ulong FreeBytes, string FileSystem);
 public sealed record PhysicalDisk(string Model, ulong SizeBytes, string InterfaceType);

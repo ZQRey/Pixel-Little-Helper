@@ -174,6 +174,10 @@ try
     Check(command.ExitCode == 0 && command.Output.Contains("PIXELHELPER_TEST") && streamed.ToString().Contains("PIXELHELPER_TEST"), "CMD output capture and streaming");
     var powershell = await executor.ExecuteAsync(new("ps", "powershell", "Write-Output 'PIXELHELPER_PS_TEST'"), _ => Task.CompletedTask, CancellationToken.None);
     Check(powershell.ExitCode == 0 && powershell.Output.Contains("PIXELHELPER_PS_TEST"), "PowerShell output capture");
+    var cyrillicCmd = await executor.ExecuteAsync(new("cyr-cmd", "cmd", "echo Тестовая строка кириллицы"), _ => Task.CompletedTask, CancellationToken.None);
+    Check(cyrillicCmd.ExitCode == 0 && cyrillicCmd.Output.Contains("Тестовая строка кириллицы"), "CMD Cyrillic output properly decoded");
+    var cyrillicPs = await executor.ExecuteAsync(new("cyr-ps", "powershell", "Write-Output 'Тестовая строка кириллицы PowerShell'"), _ => Task.CompletedTask, CancellationToken.None);
+    Check(cyrillicPs.ExitCode == 0 && cyrillicPs.Output.Contains("Тестовая строка кириллицы PowerShell"), "PowerShell Cyrillic output properly decoded");
     var errorCommand = await executor.ExecuteAsync(new("error", "cmd", "echo ERROR_TEST 1>&2 & exit /b 7"), _ => Task.CompletedTask, CancellationToken.None);
     Check(errorCommand.ExitCode == 7 && errorCommand.Output.Contains("ERROR_TEST"), "stderr and non-zero exit propagated");
     var snapshot = await Task.Run(SystemInspector.Collect);
@@ -391,6 +395,14 @@ try
     styleEditor.Undo();
     Check(styleEditor.Text == "Привет слово", "formatting is one undo action");
     styleEditor.Clear();
+    var broadcastWindow = new ChatBroadcastWindow(chatClient, new Settings());
+    broadcastWindow.InputBox.Text = "Внимание слово"; broadcastWindow.InputBox.Select(9, 5);
+    broadcastWindow.FormatSelection("**");
+    Check(broadcastWindow.InputBox.Text == "Внимание **слово**" && broadcastWindow.InputBox.SelectedText == "слово", "broadcast window formats selection with bold");
+    broadcastWindow.FormatSelection("*");
+    Check(broadcastWindow.InputBox.Text == "Внимание ***слово***" && broadcastWindow.InputBox.SelectedText == "слово", "broadcast window combines formatting with italic");
+    broadcastWindow.AlignSelection("center", false);
+    Check(broadcastWindow.InputBox.Text == "[align=center]Внимание ***слово***[/align]", "broadcast window aligns text");
     var styledBody = MessageFormatting.Render("[align=center]**жирный**[/align]\n`<b>код</b>`", 24, false, 14, System.Windows.Media.Brushes.Black);
     var styledLine = (System.Windows.Controls.TextBlock)styledBody.Children[0];
     Check(styledLine.TextAlignment == System.Windows.TextAlignment.Center && styledLine.Inlines.OfType<System.Windows.Documents.Span>().First().FontWeight == System.Windows.FontWeights.Bold, "WPF message displays alignment and bold runs");
@@ -1311,6 +1323,201 @@ try
     // Reset overrides
     QuarantineManager.OverrideBaseDir = null;
     AntivirusService.OverrideDbDir = null;
+
+    // ==========================================
+    // Mail Client, MailSecurityScanner, SettingsWindow & ContextMenu Tests
+    // ==========================================
+
+    // 1. Test simplified right-click ContextMenu (BuildAssistantContextMenu)
+    var ctxMenu = pet.BuildAssistantContextMenu();
+    var menuHeaders = ctxMenu.Items.OfType<System.Windows.Controls.MenuItem>().Select(m => m.Header?.ToString() ?? "").ToList();
+    Check(menuHeaders.Count == 9, $"BuildAssistantContextMenu has exactly 9 MenuItems (got {menuHeaders.Count})");
+    Check(menuHeaders[0].StartsWith("Помощник:"), "ContextMenu item 1: Статус помощника");
+    Check(menuHeaders[1].StartsWith("Мессенджер:"), "ContextMenu item 2: Статус мессенджера");
+    Check(menuHeaders[2].StartsWith("Последняя связь:"), "ContextMenu item 3: Статус последней связи с сервером");
+    Check(menuHeaders[3] == Loc.T("TrayMessenger"), "ContextMenu item 4: Мессенджер");
+    Check(menuHeaders[4] == Loc.T("TrayReconnect"), "ContextMenu item 5: Повторить подключение");
+    Check(menuHeaders[5].Contains(Loc.T("DisplayHide")) || menuHeaders[5].Contains(Loc.T("DisplayShow")), "ContextMenu item 6: Показать/Скрыть помощника");
+    Check(menuHeaders[6] == Loc.T("TrayDoNotDisturb"), "ContextMenu item 7: Не беспокоить");
+    Check(menuHeaders[7].Contains(Loc.T("TraySettings")), "ContextMenu item 8: Настройки");
+    Check(menuHeaders[8] == Loc.T("TrayExit"), "ContextMenu item 9: Выход");
+
+    // 2. Test MailCryptoService (DPAPI, AES-256-GCM local files, Pixel-AES-256 E2E envelope)
+    string rawPass = "MailSecret!2026";
+    string dpapiEnc = MailCryptoService.ProtectSecret(rawPass);
+    Check(!string.IsNullOrEmpty(dpapiEnc) && dpapiEnc != rawPass, "DPAPI encrypted password differs from plaintext");
+    Check(MailCryptoService.UnprotectSecret(dpapiEnc) == rawPass, "DPAPI roundtrip restores exact password");
+
+    string encTestFile = Path.Combine(temp, "test_mail.eml.enc");
+    byte[] sampleMimeBytes = System.Text.Encoding.UTF8.GetBytes("Subject: Encrypted Local Test\r\n\r\nHello Local Vault!");
+    MailCryptoService.EncryptToFile(sampleMimeBytes, encTestFile);
+    Check(File.Exists(encTestFile), "AES-256-GCM encrypted local file created");
+    byte[] decLocalBytes = MailCryptoService.DecryptFromFile(encTestFile);
+    Check(System.Text.Encoding.UTF8.GetString(decLocalBytes) == "Subject: Encrypted Local Test\r\n\r\nHello Local Vault!", "AES-256-GCM local file decryption matches");
+
+    string e2ePlain = "Секретное корпоративное письмо с медицинскими данными";
+    string e2eEnvelope = MailCryptoService.EncryptMessagePixelAes(e2ePlain, "SharedCorpKey#1");
+    Check(MailCryptoService.IsPixelAesEncrypted(e2eEnvelope), "Pixel-AES-256 envelope markers recognized");
+    Check(MailCryptoService.TryDecryptMessagePixelAes(e2eEnvelope, "SharedCorpKey#1", out string e2eDecrypted) && e2eDecrypted == e2ePlain, "Pixel-AES-256 E2E decryption succeeds with matching key");
+    Check(!MailCryptoService.TryDecryptMessagePixelAes(e2eEnvelope, "WrongKey", out _), "Pixel-AES-256 E2E decryption rejects wrong key");
+
+    // 3. Test MailAutodiscover (provider presets + domain resolution)
+    var yandexAuto = MailAutodiscover.DiscoverAsync("doctor@yandex.kz").GetAwaiter().GetResult();
+    Check(yandexAuto.Success && yandexAuto.IncomingHost == "imap.yandex.kz" && yandexAuto.IncomingPort == 993 && yandexAuto.SmtpPort == 465, "MailAutodiscover resolves yandex.kz preset");
+    var gmailAuto = MailAutodiscover.DiscoverAsync("user@gmail.com").GetAwaiter().GetResult();
+    Check(gmailAuto.Success && gmailAuto.IncomingHost == "imap.gmail.com" && gmailAuto.IncomingPort == 993, "MailAutodiscover resolves gmail.com preset");
+
+    // 4. Test MailProtocolClient MIME builder & parser
+    var testMailAcc = new MailAccountConfig
+    {
+        EmailAddress = "sender@gp1.loc",
+        DisplayName = "Д-р Иванов",
+        IncomingHost = "mail.gp1.loc",
+        IncomingPort = 993,
+        SmtpHost = "mail.gp1.loc",
+        SmtpPort = 465
+    };
+    var outgoingDraft = new MailMessageItem
+    {
+        Subject = "Отчёт по отделению",
+        BodyText = "Конфиденциальный текст отчёта.",
+        ToAddresses = ["chief@gp1.loc"],
+        IsEncrypted = true,
+        EncryptionType = MailEncryptionMode.PixelAes256
+    };
+    var attBytes = System.Text.Encoding.UTF8.GetBytes("Attachment content 123");
+    var rawBuiltMime = MailProtocolClient.BuildRawMime(
+        testMailAcc,
+        outgoingDraft,
+        [new ParsedAttachmentData("report.txt", "text/plain", attBytes)],
+        "CorpKey2026");
+    var parsedBack = MailProtocolClient.ParseMimeMessage(rawBuiltMime, testMailAcc.Id, testMailAcc.EmailAddress, "uid-101", "CorpKey2026");
+    Check(parsedBack.Message.Subject == "Отчёт по отделению", "MIME parser decodes UTF-8 subject");
+    Check(parsedBack.Message.IsEncrypted && parsedBack.Message.BodyText.Contains("Конфиденциальный текст отчёта"), "MIME parser transparently decrypts Pixel-AES-256 body");
+    Check(parsedBack.RawAttachments.Count == 1 && parsedBack.RawAttachments[0].FileName == "report.txt", "MIME parser extracts attachment");
+
+    // 5. Test MailSecurityScanner (Blacklist, Whitelist, Phishing, Spam, Malware Attachment)
+    var mailSecSettings = new Settings
+    {
+        MailScanAntivirus = true,
+        MailScanPhishing = true,
+        MailFilterSpam = true
+    };
+    MailSecurityScanner.AddToBlacklist("spammer@evil-domain.xyz", mailSecSettings);
+    Check(MailSecurityScanner.IsSenderBlocked("spammer@evil-domain.xyz", mailSecSettings), "Blacklist blocks exact email");
+    MailSecurityScanner.AddToWhitelist("@trusted-clinic.kz", mailSecSettings);
+    Check(MailSecurityScanner.IsSenderTrusted("chief@trusted-clinic.kz", mailSecSettings), "Whitelist trusts domain wildcard");
+    Check(MailSecurityScanner.IsSenderTrusted("admin@gp1.loc", mailSecSettings), "Internal gp1.loc domain is trusted by default");
+
+    // EICAR attachment detection
+    var eicarMsg = new MailMessageItem
+    {
+        FromName = "Attacker",
+        FromAddress = "hacker@unknown-host.org",
+        Subject = "Срочный счёт",
+        BodyText = "Откройте вложение"
+    };
+    var eicarAttItem = new MailAttachmentItem { FileName = "invoice.com" };
+    byte[] eicarBytes = System.Text.Encoding.ASCII.GetBytes(@"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*");
+    MailSecurityScanner.EvaluateMessageAsync(eicarMsg, [(eicarAttItem, eicarBytes)], mailSecSettings, avService).GetAwaiter().GetResult();
+    Check(eicarMsg.SecurityVerdict == MailSecurityVerdict.BlockedMalware && eicarAttItem.IsThreat, "MailSecurityScanner blocks EICAR virus attachment");
+
+    // Phishing display-name spoofing detection
+    var phishMsg = new MailMessageItem
+    {
+        FromName = "Сбербанк Безопасность",
+        FromAddress = "alert@random-scam-domain.xyz",
+        ReplyToAddress = "steal@hacker.xyz",
+        Subject = "Срочно подтвердите пароль",
+        BodyText = "Перейдите по ссылке http://194.58.112.5/login"
+    };
+    MailSecurityScanner.EvaluateMessageAsync(phishMsg, [], mailSecSettings, avService).GetAwaiter().GetResult();
+    Check(phishMsg.SecurityVerdict == MailSecurityVerdict.PhishingWarning && phishMsg.PhishingWarnings.Count >= 2, "MailSecurityScanner flags brand spoofing and Reply-To mismatch as PhishingWarning");
+
+    // Test Gmail / Google official mail is NOT flagged as phishing (false-positive fix)
+    var gmailMsg = new MailMessageItem
+    {
+        FromName = "Google Accounts",
+        FromAddress = "no-reply@accounts.google.com",
+        Subject = "Security Alert",
+        BodyText = "Your Google Account was accessed."
+    };
+    MailSecurityScanner.EvaluateMessageAsync(gmailMsg, [], mailSecSettings, avService).GetAwaiter().GetResult();
+    Check(gmailMsg.SecurityVerdict != MailSecurityVerdict.PhishingWarning && gmailMsg.PhishingWarnings.Count == 0, "MailSecurityScanner trusts official Google/Gmail email without false phishing flag");
+
+    var directGmailUserMsg = new MailMessageItem
+    {
+        FromName = "Colleague",
+        FromAddress = "colleague@gmail.com",
+        Subject = "Рабочий вопрос",
+        BodyText = "Привет, отправляю информацию по проекту."
+    };
+    MailSecurityScanner.EvaluateMessageAsync(directGmailUserMsg, [], mailSecSettings, avService).GetAwaiter().GetResult();
+    Check(directGmailUserMsg.SecurityVerdict != MailSecurityVerdict.PhishingWarning && directGmailUserMsg.PhishingWarnings.Count == 0, "MailSecurityScanner trusts direct @gmail.com sender without false phishing flag");
+
+    // Dynamic Localization checks
+    Loc.CurrentLanguage = AppLanguage.Kazakh;
+    Check(Loc.T("SettingsWindowTitle").Contains("Көмекші баптаулары"), "Loc translates SettingsWindowTitle to Kazakh");
+    Check(Loc.T("MailComposeBtn") == "✍️ Жазу", "Loc translates MailComposeBtn to Kazakh");
+    Loc.CurrentLanguage = AppLanguage.English;
+    Check(Loc.T("SettingsWindowTitle").Contains("Assistant Settings"), "Loc translates SettingsWindowTitle to English");
+    Check(Loc.T("MailComposeBtn") == "✍️ Compose", "Loc translates MailComposeBtn to English");
+    Loc.CurrentLanguage = AppLanguage.Russian;
+
+    // 6. Test MailStorageEngine (Ingest, KeepOnServer vs DownloadAllToComputer offload)
+    var mailEngine = new MailStorageEngine(mailSecSettings, avService);
+    var ingested = mailEngine.IngestRawMimeAsync(testMailAcc, "uid-500", rawBuiltMime).GetAwaiter().GetResult();
+    Check(ingested.Subject == "Отчёт по отделению", "MailStorageEngine ingests and indexes message");
+    var (offloadedCount, emlDir) = mailEngine.OffloadAccountToComputer(testMailAcc.Id, Path.Combine(temp, "exported-eml"), MailOffloadFormat.IndividualEml, testMailAcc.EmailAddress);
+    Check(offloadedCount >= 1 && Directory.GetFiles(emlDir, "*.eml").Length >= 1, "MailStorageEngine offloads .eml files to user computer");
+
+    string firstEml = Directory.GetFiles(emlDir, "*.eml")[0];
+    var loadedSingle = MailStorageEngine.LoadSingleEml(firstEml);
+    Check(loadedSingle != null && loadedSingle.Subject == "Отчёт по отделению", "MailStorageEngine.LoadSingleEml reads saved .eml correctly");
+
+    var (mboxCount, mboxFile) = mailEngine.OffloadAccountToComputer(testMailAcc.Id, Path.Combine(temp, "exported-mbox"), MailOffloadFormat.SingleFileMbox, testMailAcc.EmailAddress);
+    Check(mboxCount >= 1 && File.Exists(mboxFile), "MailStorageEngine offloads to single .mbox archive file");
+
+    var loadedMbox = MailStorageEngine.LoadMbox(mboxFile);
+    Check(loadedMbox.Count >= 1 && loadedMbox[0].Subject == "Отчёт по отделению", "MailStorageEngine.LoadMbox parses .mbox container correctly");
+
+    Check(!string.IsNullOrWhiteSpace(SystemInspector.ClientVersion()), "SystemInspector reports non-empty client version");
+
+    var adminRes = AdminCommandPipe.TryExecuteAsync(new CommandEnvelope("test-adm", "powershell", "Get-Process -Name svchost | Select-Object -First 1", true, "admin"), _ => Task.CompletedTask, CancellationToken.None).GetAwaiter().GetResult();
+    Check(adminRes.Handled, "AdminCommandPipe handles elevated execution via pipe");
+    Check(!string.IsNullOrWhiteSpace(adminRes.Output), "AdminCommandPipe returns non-empty output");
+
+    // Test Encrypted Mail Backup & Restore
+    byte[] backupPackage = MailCryptoService.CreateEncryptedMailBackupAsync(testMailAcc.Id, testMailAcc.EmailAddress, "SecretP@ss123", mailEngine).GetAwaiter().GetResult();
+    Check(backupPackage.Length > 52, "Encrypted mail backup creates valid package");
+
+    var (wrongSuccess, wrongCount, wrongErr) = MailCryptoService.RestoreFromEncryptedMailBackupAsync(backupPackage, "WrongPassword!", testMailAcc, mailEngine).GetAwaiter().GetResult();
+    Check(!wrongSuccess && wrongCount == 0, "Restore rejects incorrect archive password");
+
+    var (rightSuccess, rightCount, rightErr) = MailCryptoService.RestoreFromEncryptedMailBackupAsync(backupPackage, "SecretP@ss123", testMailAcc, mailEngine).GetAwaiter().GetResult();
+    Check(rightSuccess && rightCount >= 1, "Restore succeeds with correct archive password and imports messages");
+
+    // Test MarkAsRead toggling
+    mailEngine.MarkAsRead(ingested.Id, false);
+    var unreadMsg = mailEngine.GetMessageById(ingested.Id);
+    Check(unreadMsg != null && !unreadMsg.IsRead, "Message can be marked as unread in storage");
+    mailEngine.MarkAsRead(ingested.Id, true);
+    var readMsg = mailEngine.GetMessageById(ingested.Id);
+    Check(readMsg != null && readMsg.IsRead, "Message can be marked as read in storage");
+
+    // 7. Test SettingsWindow and MailWindow instantiation
+    var settingsWin = new SettingsWindow(testSettings, pet, avService, mailEngine, "mail");
+    Check(settingsWin != null, "SettingsWindow instantiated on 'mail' tab");
+    settingsWin.SwitchTab("theme");
+    settingsWin.SwitchTab("notifications");
+    settingsWin.SwitchTab("browser");
+    settingsWin.SwitchTab("antivirus");
+    settingsWin.SwitchTab("language");
+    settingsWin.Close();
+
+    var mailWin = new MailWindow(testSettings, mailEngine, avService, () => { });
+    Check(mailWin != null, "MailWindow instantiated successfully");
+    mailWin.Close();
 
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });

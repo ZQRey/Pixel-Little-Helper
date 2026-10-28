@@ -175,6 +175,7 @@ using (var scope = app.Services.CreateScope())
     await SurveyAlerts.EnsureSchema(db);
     await EmergencyEvents.EnsureAsync(db);
     await ChatBroadcasts.Column(db,"Computers","AdMachineObjectId","TEXT NOT NULL DEFAULT ''");
+    await ChatBroadcasts.Column(db,"Computers","ClientVersion","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","Description","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","TitleTranslationsJson","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","DescriptionTranslationsJson","TEXT NOT NULL DEFAULT ''");
@@ -237,6 +238,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
+app.MapMailBackupApi();
 app.MapMedicalStatuses();
 app.MapEmergencyRecipients();
 app.MapEmergencyDirectorySync();

@@ -36,11 +36,26 @@ public partial class App : Application
         EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler((sender,args) => { if (sender is Window window && ReferenceEquals(args.OriginalSource,window) && window.Icon==null) window.Icon=appIcon; }));
         string? guardUrl = null;
         string? scanTarget = null;
+        string? mailTarget = null;
         for (int i = 0; i < e.Args.Length; i++)
         {
             if ((e.Args[i] == "--scan" || e.Args[i] == "-scan") && i + 1 < e.Args.Length)
             {
                 scanTarget = e.Args[i + 1];
+                continue;
+            }
+            if ((e.Args[i] == "--open-mail" || e.Args[i] == "-mail") && i + 1 < e.Args.Length)
+            {
+                mailTarget = e.Args[i + 1];
+                continue;
+            }
+            if (e.Args[i].EndsWith(".eml", StringComparison.OrdinalIgnoreCase) || e.Args[i].EndsWith(".mbox", StringComparison.OrdinalIgnoreCase))
+            {
+                if (System.IO.File.Exists(e.Args[i]))
+                {
+                    mailTarget = e.Args[i];
+                    continue;
+                }
                 continue;
             }
             if (e.Args[i] == "--guard-url" && i + 1 < e.Args.Length)
@@ -86,6 +101,10 @@ public partial class App : Application
             if (!string.IsNullOrWhiteSpace(guardUrl))
             {
                 Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).HandleGuardedUrl(guardUrl));
+            }
+            if (!string.IsNullOrWhiteSpace(mailTarget))
+            {
+                Dispatcher.InvokeAsync(() => ((PetWindow)MainWindow).OpenMailFile(mailTarget));
             }
         }
         MainWindow.Show();

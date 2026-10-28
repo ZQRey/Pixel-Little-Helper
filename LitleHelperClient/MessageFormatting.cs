@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -158,5 +158,37 @@ HTML-теги не исполняются. Максимальная длина �
         }
         if (Parse(text).Any(line => line.Alignment != TextAlignment.Left)) panel.MinWidth = 220;
         return panel;
+    }
+
+    internal static bool TryApplyShortcut(TextBox box, System.Windows.Input.KeyEventArgs e)
+    {
+        var mod = System.Windows.Input.Keyboard.Modifiers;
+        bool ctrl = (mod & System.Windows.Input.ModifierKeys.Control) != 0;
+        bool shift = (mod & System.Windows.Input.ModifierKeys.Shift) != 0;
+        bool alt = (mod & System.Windows.Input.ModifierKeys.Alt) != 0;
+        if (!ctrl) return false;
+
+        try
+        {
+            MessageEdit? edit = null;
+            if (!alt && !shift && e.Key == System.Windows.Input.Key.B) edit = Toggle(box.Text, box.SelectionStart, box.SelectionLength, "**");
+            else if (!alt && !shift && e.Key == System.Windows.Input.Key.I) edit = Toggle(box.Text, box.SelectionStart, box.SelectionLength, "*");
+            else if (!alt && !shift && e.Key == System.Windows.Input.Key.U) edit = Toggle(box.Text, box.SelectionStart, box.SelectionLength, "__");
+            else if (!alt && shift && e.Key == System.Windows.Input.Key.X) edit = Toggle(box.Text, box.SelectionStart, box.SelectionLength, "~~");
+            else if (!alt && !shift && e.Key == System.Windows.Input.Key.E) edit = Toggle(box.Text, box.SelectionStart, box.SelectionLength, "");
+            else if (!alt && shift && e.Key == System.Windows.Input.Key.E) edit = Toggle(box.Text, box.SelectionStart, box.SelectionLength, "`");
+            else if (alt && e.Key == System.Windows.Input.Key.L) edit = Align(box.Text, box.SelectionStart, box.SelectionLength, "left", shift);
+            else if (alt && e.Key == System.Windows.Input.Key.E) edit = Align(box.Text, box.SelectionStart, box.SelectionLength, "center", shift);
+            else if (alt && e.Key == System.Windows.Input.Key.R) edit = Align(box.Text, box.SelectionStart, box.SelectionLength, "right", shift);
+
+            if (edit != null)
+            {
+                box.Text = edit.Text;
+                box.Select(edit.Start, edit.Length);
+                return true;
+            }
+        }
+        catch { }
+        return false;
     }
 }

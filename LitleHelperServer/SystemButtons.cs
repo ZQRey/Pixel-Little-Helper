@@ -26,7 +26,7 @@ public static class SystemButtons
             await db.Database.CloseConnectionAsync();
         }
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_Buttons_SystemKey\" ON \"Buttons\" (\"SystemKey\")");
-        foreach (var item in new[] { ("messenger", "Мессенджер"), ("emergency", "Экстренное оповещение") })
+        foreach (var item in new[] { ("messenger", "Мессенджер"), ("emergency", "Экстренное оповещение"), ("mail", "Почта") })
             if (!await db.Buttons.AnyAsync(b => b.SystemKey == item.Item1))
                 db.Buttons.Add(new() { SystemKey = item.Item1, IsSystem = true, Title = item.Item2, ActionType = item.Item1, IconName = item.Item1, OrderIndex = 10000 });
         await db.SaveChangesAsync();

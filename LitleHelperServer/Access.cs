@@ -48,6 +48,16 @@ public static class Access
     {
         if (permissions != null && permissions.Keys.Any(key => !Catalog.ContainsKey(key))) throw new ArgumentException("Неизвестное право доступа");
     }
+    public static bool IsSweetheart(IConfiguration config, string? username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return false;
+        string? raw = config["SWEETHEART"] ?? config["SWEETHEARTS"];
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var allowed = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return allowed.Any(u => string.Equals(u, username, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(u.Split('@')[0], username.Split('@')[0], StringComparison.OrdinalIgnoreCase));
+    }
+
     public static async Task EnsureSchema(HelperDb db)
     {
         if (db.Database.IsNpgsql())

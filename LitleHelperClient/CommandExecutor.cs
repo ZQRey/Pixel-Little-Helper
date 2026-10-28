@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -8,6 +10,28 @@ namespace PixelHelper;
 public sealed class CommandExecutor(Settings settings)
 {
     private readonly SemaphoreSlim serial = new(1, 1);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetOEMCP();
+
+    public static Encoding GetConsoleEncoding()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        try
+        {
+            uint oem = GetOEMCP();
+            if (oem > 0) return Encoding.GetEncoding((int)oem);
+        }
+        catch { }
+        try
+        {
+            int oem = CultureInfo.CurrentCulture.TextInfo.OEMCodePage;
+            if (oem > 0) return Encoding.GetEncoding(oem);
+        }
+        catch { }
+        return Encoding.UTF8;
+    }
+
     public async Task<(string Output, int ExitCode)> ExecuteAsync(CommandEnvelope task, Func<string, Task> emit, CancellationToken token)
     {
         if (!settings.EnableAdministrativeCommands) return ("Административные команды отключены в конфигурации клиента.", 5);
@@ -44,7 +68,45 @@ public sealed class CommandExecutor(Settings settings)
                 }
                 return ($"Завершено процессов: {count}", 0);
             }
-            var start = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            if (task.Elevated && task.Type is "cmd" or "powershell")
+            {
+                var pipeResult = await AdminCommandPipe.TryExecuteAsync(task, emit, token);
+                if (pipeResult.Handled)
+                {
+                    return (pipeResult.Output, pipeResult.ExitCode);
+                }
+
+                bool isRunningAsAdmin = false;
+                try
+                {
+                    using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                    var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                    isRunningAsAdmin = principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                }
+                catch { }
+
+                if (!isRunningAsAdmin)
+                {
+                    string serviceMissingMsg = "Ошибка выполнения с правами Администратора: служба повышенных привилегий PixelHelperUpdater недоступна (не запущена или не установлена), а помощник запущен с обычными правами пользователя.";
+                    await emit(serviceMissingMsg);
+                    return (serviceMissingMsg, 5);
+                }
+            }
+            var consoleEncoding = GetConsoleEncoding();
+            var start = new ProcessStartInfo
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = consoleEncoding,
+                StandardErrorEncoding = consoleEncoding
+            };
+            if (task.Elevated && !string.IsNullOrWhiteSpace(task.AdminUser))
+            {
+                start.Environment["REMOTE_ADMIN"] = task.AdminUser;
+                start.Environment["PIXELHELPER_ELEVATED"] = "1";
+            }
             switch (task.Type)
             {
                 case "cmd":
@@ -52,7 +114,8 @@ public sealed class CommandExecutor(Settings settings)
                     start.Arguments = "/d /s /c \"" + task.Payload + "\""; break;
                 case "powershell":
                     start.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
-                    foreach (string arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", task.Payload }) start.ArgumentList.Add(arg);
+                    string setupEncoding = $"[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding({consoleEncoding.CodePage}); $OutputEncoding = [Console]::OutputEncoding; ";
+                    foreach (string arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", setupEncoding + task.Payload }) start.ArgumentList.Add(arg);
                     break;
                 case "reboot": case "shutdown":
                     start.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shutdown.exe");

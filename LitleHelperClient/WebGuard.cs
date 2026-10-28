@@ -26,9 +26,9 @@ public static class WebGuard
 {
     private static readonly HashSet<string> DefaultTrustedHosts = new(StringComparer.OrdinalIgnoreCase)
     {
-        "google.com", "www.google.com", "google.ru", "www.google.ru",
+        "google.com", "www.google.com", "google.ru", "www.google.ru", "gmail.com", "www.gmail.com", "googlemail.com", "mail.google.com", "accounts.google.com", "drive.google.com", "docs.google.com",
         "yandex.ru", "www.yandex.ru", "ya.ru", "yandex.kz", "www.yandex.kz", "dzen.ru",
-        "mail.ru", "e.mail.ru", "cloud.mail.ru",
+        "mail.ru", "e.mail.ru", "cloud.mail.ru", "inbox.ru", "bk.ru", "list.ru", "internet.ru", "outlook.com", "hotmail.com", "live.com",
         "vk.com", "m.vk.com",
         "gosuslugi.ru", "esia.gosuslugi.ru", "gu-st.ru",
         "egov.kz", "my.egov.kz",
@@ -163,6 +163,10 @@ public static class WebGuard
         foreach (var brand in SensitiveBrands)
         {
             if (labelWithoutTld.Equals(brand, StringComparison.OrdinalIgnoreCase)) continue;
+            if (brand == "mail" && (labelWithoutTld.Equals("gmail", StringComparison.OrdinalIgnoreCase) ||
+                                    labelWithoutTld.Equals("email", StringComparison.OrdinalIgnoreCase) ||
+                                    labelWithoutTld.Equals("googlemail", StringComparison.OrdinalIgnoreCase) ||
+                                    labelWithoutTld.Equals("webmail", StringComparison.OrdinalIgnoreCase))) continue;
 
             if (leetNormalized.Equals(brand, StringComparison.OrdinalIgnoreCase))
             {

@@ -60,9 +60,10 @@ public static class PanelApi
             string login = Security.Login(request.Username);
             var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login);
             if (user == null || !user.IsActive || user.AuthSource == "AD" || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
+            user.IsSweetheart = Access.IsSweetheart(config, user.Username);
             return Results.Ok(new { token = Security.Token(user, config), user });
         }).RequireRateLimiting("login");
-        app.MapGet("/api/auth/me", async (ClaimsPrincipal p, HelperDb db) => Results.Ok(await db.Users.SingleAsync(u => u.Username == p.Identity!.Name))).RequireAuthorization("Panel");
+        app.MapGet("/api/auth/me", async (ClaimsPrincipal p, HelperDb db, IConfiguration config) => { var u = await db.Users.SingleAsync(x => x.Username == p.Identity!.Name); u.IsSweetheart = Access.IsSweetheart(config, u.Username); return Results.Ok(u); }).RequireAuthorization("Panel");
         app.MapPost("/api/auth/change-password", async (PasswordRequest request, ClaimsPrincipal p, HelperDb db, IConfiguration config, PanelSessions sessions) =>
         {
             var user = await db.Users.SingleAsync(u => u.Username == p.Identity!.Name);
@@ -70,7 +71,8 @@ public static class PanelApi
             if (!Security.PasswordValid(request.NewPassword) || request.NewPassword == request.CurrentPassword || !BCrypt.Net.BCrypt.Verify(request.CurrentPassword, user.PasswordHash))
                 return Results.BadRequest(new { error = "Проверьте текущий пароль. Новый пароль: 8–72 символа, до 72 байт UTF-8." });
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword, 12); user.MustChangePassword = false; user.SecurityVersion++;
-            await db.SaveChangesAsync(); sessions.Revoke(user.Id); return Results.Ok(new { token = Security.Token(user, config), user });
+            await db.SaveChangesAsync(); sessions.Revoke(user.Id); user.IsSweetheart = Access.IsSweetheart(config, user.Username);
+            return Results.Ok(new { token = Security.Token(user, config), user });
         }).RequireAuthorization("Panel");
 
         app.MapGet("/api/computers", async (ClaimsPrincipal p, HelperDb db) =>
@@ -149,7 +151,20 @@ public static class PanelApi
             return task == null || (!Access.Can(p, "audit.all") && task.AdminUsername != p.Identity!.Name) ? Results.NotFound() : Results.Ok(task);
         }).RequireAuthorization("commands.execute");
 
-        app.MapGet("/api/buttons", async (HelperDb db) => Results.Ok(await db.Buttons.AsNoTracking().OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).ToListAsync())).RequireAuthorization("buttons.manage");
+        app.MapGet("/api/buttons", async (HelperDb db) =>
+        {
+            bool added = false;
+            foreach (var item in new[] { ("messenger", "Мессенджер"), ("emergency", "Экстренное оповещение"), ("mail", "Почта") })
+            {
+                if (!await db.Buttons.AnyAsync(b => b.SystemKey == item.Item1))
+                {
+                    db.Buttons.Add(new() { SystemKey = item.Item1, IsSystem = true, Title = item.Item2, ActionType = item.Item1, IconName = item.Item1, OrderIndex = 10000 });
+                    added = true;
+                }
+            }
+            if (added) await db.SaveChangesAsync();
+            return Results.Ok(await db.Buttons.AsNoTracking().OrderBy(b => b.OrderIndex).ThenBy(b => b.Id).ToListAsync());
+        }).RequireAuthorization("buttons.manage");
         app.MapPost("/api/buttons", async (ActionButton button, ClaimsPrincipal p, HelperDb db) =>
         {
             if (button.IsSystem || button.SystemKey != null) return Results.BadRequest("Системные кнопки создаются сервером");
@@ -380,7 +395,7 @@ public static class PanelApi
     private static void ValidateButton(ActionButton b, ClaimsPrincipal p)
     {
         if (string.IsNullOrWhiteSpace(b.Title) || b.Title.Length > 100 || b.Payload.Length > 8000 || b.IconName.Length > 50 || b.TargetGroup.Length > 120 || b.OrderIndex is < 0 or > 10000 ||
-            b.ActionType is not ("open_folder" or "open_url" or "run_command" or "ticket" or "companion")) throw new ArgumentException("Неверные поля кнопки");
+            b.ActionType is not ("open_folder" or "open_url" or "run_command" or "ticket" or "companion" or "mail")) throw new ArgumentException("Неверные поля кнопки");
         if (b.TargetGroup != "All" && !b.TargetGroup.StartsWith("domain:", StringComparison.OrdinalIgnoreCase) && !b.TargetGroup.StartsWith("pc:", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Группа: All, domain:DOMAIN или pc:PCNAME");
         if (b.ActionType == "run_command" && !Access.Can(p, "terminal.execute")) throw new UnauthorizedAccessException("Не выдано право настройки командных кнопок");

@@ -49,32 +49,146 @@ $('#logout-button').addEventListener('click',logout);
 $('#password-button').addEventListener('click',()=>passwordForm(false));
 $('#refresh-button').addEventListener('click',()=>loadPage().catch(e=>toast(e.message,true)));
 let robotTimers=[];
-function resetRobot(){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); robotTimers.forEach(clearTimeout); robotTimers=[]; if(face){ face.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised'); const mouth=face.querySelector('b'); if(mouth) mouth.textContent='⌣'; face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y'); } if(deco)deco.classList.remove('is-cracked'); }
-function playRobot(state){ const face=document.querySelector('.pixel-face'),deco=document.querySelector('.auth-decoration'); if(!face)return; robotTimers.forEach(clearTimeout); robotTimers=[]; face.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised'); if(deco)deco.classList.remove('is-cracked'); void face.offsetWidth; if(state==='error'){ face.classList.add('is-error'); robotTimers.push(setTimeout(()=>face.classList.remove('is-error'),1400)); } else if(state==='happy'){ face.classList.add('is-happy'); robotTimers.push(setTimeout(()=>face.classList.remove('is-happy'),1500)); } else if(state==='lockout'){ face.classList.add('is-lockout'); if(deco)deco.classList.add('is-cracked'); robotTimers.push(setTimeout(()=>{ face.classList.remove('is-lockout'); if(deco)deco.classList.remove('is-cracked'); resetFailedLogins(); },4000)); } }
+let lockoutInterval=null;
+function resetRobot(){
+  const face=document.querySelector('.pixel-face'),screen=document.querySelector('#login-screen'),cracks=document.querySelector('.screen-cracks');
+  robotTimers.forEach(clearTimeout); robotTimers=[];
+  clearInterval(lockoutInterval);
+  if(face){
+    face.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised','is-angry','is-smashing','is-dizzy','is-booting');
+    const mouth=face.querySelector('b');
+    if(mouth) mouth.textContent='⌣';
+    face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y');
+  }
+  if(screen) screen.classList.remove('is-shaking','is-impact');
+  if(cracks) cracks.classList.remove('is-shattered','is-healing');
+}
+function playRobot(state){
+  const face=document.querySelector('.pixel-face'); if(!face)return;
+  robotTimers.forEach(clearTimeout); robotTimers=[];
+  face.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised','is-angry','is-smashing','is-dizzy','is-booting');
+  void face.offsetWidth;
+  if(state==='error'){
+    face.classList.add('is-error');
+    robotTimers.push(setTimeout(()=>face.classList.remove('is-error'),1400));
+  } else if(state==='happy'){
+    face.classList.add('is-happy');
+    robotTimers.push(setTimeout(()=>face.classList.remove('is-happy'),1500));
+  }
+}
+function startLockout(seconds=60){
+  const face=document.querySelector('.pixel-face'),screen=document.querySelector('#login-screen'),cracks=document.querySelector('.screen-cracks'),form=document.querySelector('#login-form'),mouth=face?.querySelector('b');
+  const inputs=form?.querySelectorAll('input, button');
+  inputs?.forEach(el=>el.disabled=true);
+  robotTimers.forEach(clearTimeout); robotTimers=[];
+  clearInterval(lockoutInterval);
+  face?.classList.remove('is-error','is-happy','is-lockout','is-shy','is-surprised','is-angry','is-smashing','is-dizzy','is-booting');
+  screen?.classList.remove('is-shaking','is-impact');
+  cracks?.classList.remove('is-shattered','is-healing');
+
+  const until=Date.now()+seconds*1000;
+  sessionStorage.setItem('helper-lockout-until',until);
+
+  let remaining=seconds;
+  const updateCountdown=()=>{
+    const err=$('#login-error');
+    if(err) err.innerHTML=`Превышено число попыток. Блокировка: <strong>${remaining}</strong> сек.`;
+  };
+  updateCountdown();
+
+  lockoutInterval=setInterval(()=>{
+    remaining=Math.max(0,Math.ceil((until-Date.now())/1000));
+    if(remaining>0) updateCountdown();
+  },1000);
+  robotTimers.push(lockoutInterval);
+
+  if(seconds>=58 && face && screen && cracks){
+    face.classList.add('is-angry');
+    if(mouth) mouth.textContent='ʌ';
+
+    robotTimers.push(setTimeout(()=>{
+      face.classList.remove('is-angry');
+      face.classList.add('is-smashing');
+
+      robotTimers.push(setTimeout(()=>{
+        screen.classList.add('is-impact');
+        screen.classList.add('is-shaking');
+        cracks.classList.add('is-shattered');
+      },280));
+    },1400));
+
+    robotTimers.push(setTimeout(()=>{
+      face.classList.remove('is-smashing');
+      face.classList.add('is-dizzy');
+      screen.classList.remove('is-impact');
+      if(mouth) mouth.textContent='o';
+    },1900));
+
+    robotTimers.push(setTimeout(()=>{
+      screen.classList.remove('is-shaking');
+    },2500));
+  } else if(face && cracks){
+    cracks.classList.add('is-shattered');
+    face.classList.add('is-dizzy');
+    if(mouth) mouth.textContent='o';
+  }
+
+  const healDelay=Math.max(0,(seconds-1.8)*1000);
+  robotTimers.push(setTimeout(()=>{
+    cracks?.classList.remove('is-shattered');
+    cracks?.classList.add('is-healing');
+  },healDelay));
+
+  const endDelay=seconds*1000;
+  robotTimers.push(setTimeout(()=>{
+    clearInterval(lockoutInterval);
+    sessionStorage.removeItem('helper-lockout-until');
+    resetFailedLogins();
+
+    cracks?.classList.remove('is-healing','is-shattered');
+    screen?.classList.remove('is-shaking','is-impact');
+    face?.classList.remove('is-dizzy','is-smashing','is-angry');
+
+    face?.classList.add('is-booting');
+    if(mouth) mouth.textContent='⌣';
+    robotTimers.push(setTimeout(()=>{
+      face?.classList.remove('is-booting');
+    },850));
+
+    inputs?.forEach(el=>el.disabled=false);
+    if($('#login-error')) $('#login-error').textContent='';
+  },endDelay));
+}
 let failedLogins=Number(sessionStorage.getItem('helper-failed-logins')||0);
 function resetFailedLogins(){ failedLogins=0; sessionStorage.removeItem('helper-failed-logins'); }
+function isLockedOut(){
+  const until=Number(sessionStorage.getItem('helper-lockout-until')||0);
+  return until>Date.now();
+}
 function initRobotInteractions(){
   const deco=document.querySelector('.auth-decoration'),face=document.querySelector('.pixel-face'),passInput=document.querySelector('#login-form input[type="password"]'),mouth=face?.querySelector('b');
   if(passInput && face){
     passInput.addEventListener('focus',()=>{
+      if(isLockedOut()||face.classList.contains('is-angry')||face.classList.contains('is-smashing')||face.classList.contains('is-dizzy')||face.classList.contains('is-booting')) return;
       face.classList.add('is-shy');
       face.classList.remove('is-surprised');
       if(mouth) mouth.textContent='◡';
       face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y');
     });
     passInput.addEventListener('blur',()=>{
+      if(isLockedOut()) return;
       face.classList.remove('is-shy');
       if(mouth) mouth.textContent='⌣';
     });
   }
   if(deco && face){
     deco.addEventListener('mouseenter',()=>{
-      if(face.classList.contains('is-shy')||face.classList.contains('is-error')||face.classList.contains('is-happy')||face.classList.contains('is-lockout')) return;
+      if(isLockedOut()||face.classList.contains('is-shy')||face.classList.contains('is-error')||face.classList.contains('is-happy')||face.classList.contains('is-angry')||face.classList.contains('is-smashing')||face.classList.contains('is-dizzy')||face.classList.contains('is-booting')) return;
       face.classList.add('is-surprised');
       if(mouth) mouth.textContent='o';
     });
     deco.addEventListener('mousemove',e=>{
-      if(face.classList.contains('is-shy')||face.classList.contains('is-error')||face.classList.contains('is-happy')||face.classList.contains('is-lockout')) return;
+      if(isLockedOut()||face.classList.contains('is-shy')||face.classList.contains('is-error')||face.classList.contains('is-happy')||face.classList.contains('is-angry')||face.classList.contains('is-smashing')||face.classList.contains('is-dizzy')||face.classList.contains('is-booting')) return;
       if(!face.classList.contains('is-surprised')){
         face.classList.add('is-surprised');
         if(mouth) mouth.textContent='o';
@@ -88,14 +202,48 @@ function initRobotInteractions(){
       face.style.setProperty('--tilt-y',`${Math.max(-14,Math.min(14,Math.round(dx/25)))}deg`);
     });
     deco.addEventListener('mouseleave',()=>{
+      if(isLockedOut()) return;
       face.classList.remove('is-surprised');
       if(!face.classList.contains('is-shy') && mouth) mouth.textContent='⌣';
       face.style.removeProperty('--eye-x'); face.style.removeProperty('--eye-y'); face.style.removeProperty('--head-x'); face.style.removeProperty('--head-y'); face.style.removeProperty('--tilt-x'); face.style.removeProperty('--tilt-y');
     });
   }
+  const savedUntil=Number(sessionStorage.getItem('helper-lockout-until')||0);
+  if(savedUntil>Date.now()){
+    startLockout(Math.ceil((savedUntil-Date.now())/1000));
+  }
 }
 initRobotInteractions();
-$('#login-form').addEventListener('submit',async e=>{ e.preventDefault(); const button=e.target.querySelector('button'); button.disabled=true; $('#login-error').textContent=''; resetRobot(); try{ const data=Object.fromEntries(new FormData(e.target)); const login=await api('/auth/login','POST',data); resetFailedLogins(); playRobot('happy'); acceptLogin(login); await new Promise(resolve=>setTimeout(resolve,900)); await enter(); }catch(error){ if(token){ toast(error.message,true); }else{ $('#login-error').textContent=error.message; failedLogins+=1; sessionStorage.setItem('helper-failed-logins',failedLogins); playRobot(failedLogins>5?'lockout':'error'); } }finally{button.disabled=false;} });
+$('#login-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if(isLockedOut()) return;
+  const button=e.target.querySelector('button'); button.disabled=true; $('#login-error').textContent=''; resetRobot();
+  try{
+    const data=Object.fromEntries(new FormData(e.target));
+    const login=await api('/auth/login','POST',data);
+    resetFailedLogins();
+    sessionStorage.removeItem('helper-lockout-until');
+    playRobot('happy');
+    acceptLogin(login);
+    await new Promise(resolve=>setTimeout(resolve,900));
+    await enter();
+  }catch(error){
+    if(token){
+      toast(error.message,true);
+    }else{
+      $('#login-error').textContent=error.message;
+      failedLogins+=1;
+      sessionStorage.setItem('helper-failed-logins',failedLogins);
+      if(failedLogins>=5){
+        startLockout(60);
+      }else{
+        playRobot('error');
+      }
+    }
+  }finally{
+    if(!isLockedOut()) button.disabled=false;
+  }
+});
 function acceptLogin(login){ token=login.token; me=login.user; sessionStorage.setItem('helper-token',token); }
 function logout(){ token=null; me=null; generation++; sessionStorage.removeItem('helper-token'); if(hub)hub.stop(); hub=null; $('#workspace').hidden=true; $('#login-screen').hidden=false; $('#login-error').textContent=''; resetRobot(); closeModal(); }
 async function enter(){ me=await api('/auth/me'); $('#login-screen').hidden=true; $('#workspace').hidden=false; $('#password-button').hidden=me.authSource==='AD'; $('#identity').innerHTML=`${escape(me.fullName||me.username)}<small>${escape(roleName(me.role))}</small>`; const nav=['computers','buttons','super-buttons','messages','tickets','reports','surveys','knowledge','users','audit','settings'].filter(n=>n==='tickets'||n==='surveys'||(n==='ai-chat'&&can('ai.chat'))||(n==='reports'&&can('reports.glpi.view'))||n==='knowledge'||(['messages','super-buttons'].includes(n)&&me.role==='SuperAdmin')||(n==='settings'&&(can('settings.manage')||can('updates.manage')||can('ai.settings.manage')))||can(({computers:'computers.view',buttons:'buttons.manage',users:'users.manage',audit:'audit.view'})[n])); $('#navigation').innerHTML=nav.map(n=>`<button data-page="${n}">${({computers:'▦',buttons:'◇',messages:'✉','super-buttons':'★',users:'♙',audit:'≡',tickets:'▤',reports:'▥',surveys:'☆',knowledge:'📚','ai-chat':'✦',settings:'⚙'})[n]} &nbsp; ${titles[n][0]}</button>`).join(''); $('#navigation').querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{page=b.dataset.page;loadPage().catch(e=>toast(e.message,true));})); if(me.mustChangePassword){passwordForm(true);return;} if(new URLSearchParams(location.search).get('returnTo')==='/guard-white.html' && can('emergency.manage')){location.replace('/guard-white.html');return;} const requestedPage=new URLSearchParams(location.search).get('page');if(requestedPage&&nav.includes(requestedPage))page=requestedPage;page=nav.includes(page)?page:nav[0]; if(manage())scripts=await api('/scripts'); await connectHub(); startSurveyAdminAlerts(); await loadPage(); }

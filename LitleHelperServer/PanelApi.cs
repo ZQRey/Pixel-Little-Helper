@@ -54,14 +54,38 @@ public static class PanelApi
             try { settings.SaveRegistration(request); return Results.Ok(settings.RegistrationView()); }
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         }).RequireAuthorization("settings.manage");
-        app.MapPost("/api/auth/login", async (LoginRequest request, HelperDb db, IConfiguration config) =>
+        app.MapPost("/api/auth/login", async (LoginRequest request, HelperDb db, IConfiguration config, IAdAuthentication ad, IntegrationSettings integrationSettings, CancellationToken token) =>
         {
-            if (request.Username.Length > 100 || request.Password.Length > 72) return Results.Unauthorized();
+            if (request.Username.Length > 100 || request.Password.Length > 256) return Results.Unauthorized();
             string login = Security.Login(request.Username);
-            var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login);
-            if (user == null || !user.IsActive || user.AuthSource == "AD" || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
-            user.IsSweetheart = Access.IsSweetheart(config, user.Username);
-            return Results.Ok(new { token = Security.Token(user, config), user });
+
+            if (request.Provider == "ad")
+            {
+                return await AuthenticateAdAsync(request, ad, db, config, token);
+            }
+            if (request.Provider == "local")
+            {
+                return await AuthenticateLocalAsync(request, login, db, config);
+            }
+
+            // Auto-detection:
+            var localUser = await db.Users.SingleOrDefaultAsync(u => u.Username == login && u.AuthSource != "AD", token);
+            if (localUser != null)
+            {
+                if (localUser.IsActive && request.Password.Length <= 72 && BCrypt.Net.BCrypt.Verify(request.Password, localUser.PasswordHash))
+                {
+                    localUser.IsSweetheart = Access.IsSweetheart(config, localUser.Username);
+                    return Results.Ok(new { token = Security.Token(localUser, config), user = localUser });
+                }
+                return Results.Unauthorized();
+            }
+
+            if (integrationSettings.Ad().Enabled)
+            {
+                return await AuthenticateAdAsync(request, ad, db, config, token);
+            }
+
+            return Results.Unauthorized();
         }).RequireRateLimiting("login");
         app.MapGet("/api/auth/me", async (ClaimsPrincipal p, HelperDb db, IConfiguration config) => { var u = await db.Users.SingleAsync(x => x.Username == p.Identity!.Name); u.IsSweetheart = Access.IsSweetheart(config, u.Username); return Results.Ok(u); }).RequireAuthorization("Panel");
         app.MapPost("/api/auth/change-password", async (PasswordRequest request, ClaimsPrincipal p, HelperDb db, IConfiguration config, PanelSessions sessions) =>
@@ -402,6 +426,32 @@ public static class PanelApi
         if (b.ActionType == "open_url" && (!Uri.TryCreate(b.Payload, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http" or "search-ms")))
             throw new ArgumentException("Разрешены HTTP(S) и search-ms");
     }
+    private static async Task<IResult> AuthenticateAdAsync(LoginRequest request, IAdAuthentication ad, HelperDb db, IConfiguration config, CancellationToken token)
+    {
+        AdIdentity identity;
+        try { identity = await ad.AuthenticateAsync(request, token); }
+        catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
+        catch (Exception) { return Results.Unauthorized(); }
+
+        PanelUser user;
+        try { user = await Messenger.ResolveAdUserAsync(identity, db, token); }
+        catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
+        catch (Exception) { return Results.Unauthorized(); }
+
+        if (!user.IsActive) return Results.Unauthorized();
+        user.IsSweetheart = Access.IsSweetheart(config, user.Username);
+        return Results.Ok(new { token = Security.Token(user, config), user });
+    }
+
+    private static async Task<IResult> AuthenticateLocalAsync(LoginRequest request, string login, HelperDb db, IConfiguration config)
+    {
+        if (request.Password.Length > 72) return Results.Unauthorized();
+        var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login && u.AuthSource != "AD");
+        if (user == null || !user.IsActive || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
+        user.IsSweetheart = Access.IsSweetheart(config, user.Username);
+        return Results.Ok(new { token = Security.Token(user, config), user });
+    }
+
     public record ButtonActive(bool IsActive);
     public record TicketStatus(int Status);
     public record UpdateComputerLocationRequest(string? Room, int? BranchId);

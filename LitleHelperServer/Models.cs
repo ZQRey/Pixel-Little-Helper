@@ -299,7 +299,7 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
 }
 public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false, string ClientVersion = "");
 public record CommandEnvelope(string TaskId, string Type, string Payload, bool Elevated = false, string AdminUser = "");
-public record LoginRequest(string Username, string Password);
+public record LoginRequest(string Username, string Password, string? Provider = null);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
 public record UserRequest(string Username, string FullName, string Role, bool IsActive, string? Password, Dictionary<string, bool>? Permissions = null, string? AssistantMachine = null, int? BranchId = null, string? Room = null, int[]? BranchIds = null);
 public record CommandRequest(string[] Machines, string Type, string Payload, bool Elevated = false);

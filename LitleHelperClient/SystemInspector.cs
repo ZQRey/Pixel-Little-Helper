@@ -119,7 +119,7 @@ public static class SystemInspector
     public static string ClientVersion()
     {
         var ver = typeof(SystemInspector).Assembly.GetName().Version;
-        return ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.2.80";
+        return ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.2.81";
     }
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]

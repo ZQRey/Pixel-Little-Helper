@@ -174,6 +174,7 @@ using (var scope = app.Services.CreateScope())
     await GlpiReports.EnsureSchema(db);
     await SurveyAlerts.EnsureSchema(db);
     await EmergencyEvents.EnsureAsync(db);
+    await AntiTheftSchema.EnsureAsync(db);
     await ChatBroadcasts.Column(db,"Computers","AdMachineObjectId","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Computers","ClientVersion","TEXT NOT NULL DEFAULT ''");
     await ChatBroadcasts.Column(db,"Buttons","Description","TEXT NOT NULL DEFAULT ''");

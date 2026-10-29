@@ -81,9 +81,14 @@ public static class AntiTheftSchema
                 "LockLevelPin" {boolean},
                 "LockMessage" TEXT NOT NULL DEFAULT '',
                 "TemporaryLockPin" TEXT NOT NULL DEFAULT '',
-                "IsSirenActive" {boolean}
+                "IsSirenActive" {boolean},
+                "ApiKeyHash" TEXT NOT NULL DEFAULT '',
+                "CreatedAt" {time} NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """);
         await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_MobileDevices_DeviceId\" ON \"MobileDevices\" (\"DeviceId\")");
+
+        await ChatBroadcasts.Column(db, "MobileDevices", "ApiKeyHash", "TEXT NOT NULL DEFAULT ''");
+        await ChatBroadcasts.Column(db, "MobileDevices", "CreatedAt", $"{time} NOT NULL DEFAULT CURRENT_TIMESTAMP");
     }
 }

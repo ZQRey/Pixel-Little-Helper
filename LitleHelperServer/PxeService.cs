@@ -80,6 +80,22 @@ public class PxeService
         return response.IsSuccessStatusCode;
     }
 
+    public async Task<JsonElement?> UploadImageAsync(HttpRequest request, CancellationToken token = default)
+    {
+        var client = CreateClient();
+        client.Timeout = TimeSpan.FromHours(2);
+        
+        using var streamContent = new StreamContent(request.Body);
+        if (request.ContentType != null)
+        {
+            streamContent.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(request.ContentType);
+        }
+
+        using var response = await client.PostAsync("/api/upload", streamContent, token);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
+    }
+
     public async Task<JsonElement?> GetLogsAsync(string service, CancellationToken token = default)
     {
         var client = CreateClient();

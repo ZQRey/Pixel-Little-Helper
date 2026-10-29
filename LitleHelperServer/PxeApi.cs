@@ -99,6 +99,26 @@ public static class PxeApi
             }
         });
 
+        // Upload image (Streaming Proxy to PXE server)
+        group.MapPost("/upload", async (HttpContext context, PxeService pxe, CancellationToken token) =>
+        {
+            var maxRequestBodySizeFeature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (maxRequestBodySizeFeature != null)
+            {
+                maxRequestBodySizeFeature.MaxRequestBodySize = null;
+            }
+
+            try
+            {
+                var res = await pxe.UploadImageAsync(context.Request, token);
+                return Results.Ok(res);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
+        }).DisableAntiforgery();
+
         // Logs
         group.MapGet("/logs/{service}", async (string service, PxeService pxe, CancellationToken token) =>
         {

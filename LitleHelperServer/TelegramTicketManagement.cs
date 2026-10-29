@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Novell.Directory.Ldap;
 using System.ComponentModel.DataAnnotations;
@@ -64,9 +64,25 @@ public class TicketManagement(HelperDb db, GlpiService glpi, TicketManagementGat
     public static string StatusName(int n) => n switch { 1 => "Новая", 2 => "В работе (назначена)", 3 => "В работе (запланирована)", 4 => "Ожидание", 5 => "Выполнена (решена)", 6 => "Закрыта", _ => "Неизвестно" };
     private async Task SyncUnlockedAsync(TicketRecord ticket, CancellationToken token)
     {
-        var data = await glpi.GetTicketAsync(ticket.GlpiId, token);
+        JsonElement data;
+        try
+        {
+            data = await glpi.GetTicketAsync(ticket.GlpiId, token);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            ticket.Status = "6";
+            ticket.SyncedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(token);
+            throw new InvalidOperationException("Заявка не найдена или удалена в GLPI.");
+        }
         if (data.TryGetProperty("is_deleted", out var deleted) && GlpiService.Number(deleted) != 0)
+        {
+            ticket.Status = "6";
+            ticket.SyncedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(token);
             throw new InvalidOperationException("Заявка удалена в GLPI.");
+        }
         ticket.Status = GlpiService.Number(data.GetProperty("status")).ToString();
         int[] assignees = await glpi.AssigneesAsync(ticket.GlpiId, token);
         if (!assignees.Contains(ticket.AssignedGlpiUserId)) { ticket.AssignedGlpiUserId = assignees.FirstOrDefault(); ticket.AssignedUsername = ""; }
@@ -354,7 +370,14 @@ public class TelegramBotHandler(HelperDb db, ITelegramDirectory directory, GlpiS
                 var all = await db.Tickets.Where(t => t.Status != "6").OrderByDescending(t => t.CreatedAt).ToListAsync(token);
                 bool showAll = command is "/open" or "Открытые заявки";
                 var mine = new List<TicketRecord>();
-                foreach (var ticket in all.Where(t => Branches.CanHandle(actor.User, t))) { await tickets.SyncAsync(ticket, token); if (TicketManagement.Status(ticket.Status) < 5 && (showAll || (await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId))) mine.Add(ticket); }
+                foreach (var ticket in all.Where(t => Branches.CanHandle(actor.User, t)))
+                {
+                    try { await tickets.SyncAsync(ticket, token); }
+                    catch (InvalidOperationException) { continue; }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { continue; }
+                    if (TicketManagement.Status(ticket.Status) < 5 && (showAll || (await glpi.AssigneesAsync(ticket.GlpiId, token)).Contains(actor.GlpiUserId)))
+                        mine.Add(ticket);
+                }
                 var rows = mine.Select(t => new[] { Button("#" + t.GlpiId + " · " + TicketManagement.StatusName(TicketManagement.Status(t.Status)) + " · " + t.Title, "open:" + t.Id) }).Chunk(80);
                 if (mine.Count == 0) await telegram.SendToAsync(sender.ToString(), showAll ? "Открытых заявок в доступных филиалах нет." : "Активных заявок на вас нет. /open — открытые заявки; /my — мои заявки; /cancel — отмена ввода ответа.", null, token);
                 else foreach (var chunk in rows) await telegram.SendToAsync(sender.ToString(), showAll ? "Открытые заявки (" + mine.Count + "). Выберите заявку:" : "Ваши активные заявки:", new { inline_keyboard = chunk }, token);

@@ -222,6 +222,30 @@ public sealed class HubConnectionService : IAsyncDisposable
         }
         catch (Exception ex) { Settings.Log(ex); }
     }
+    public async Task<List<UserTicketSummaryDto>> GetUserTicketsAsync(CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        return await connection.InvokeAsync<List<UserTicketSummaryDto>>("GetUserTickets", timeout.Token);
+    }
+
+    public async Task<UserTicketDetailDto?> GetUserTicketDetailAsync(int ticketId, CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        return await connection.InvokeAsync<UserTicketDetailDto?>("GetUserTicketDetail", ticketId, timeout.Token);
+    }
+
+    public async Task<bool> RateUserTicketAsync(int ticketId, int score, string? comment, CancellationToken token = default)
+    {
+        if (!IsOnline) throw new InvalidOperationException("Сервер недоступен.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        return await connection.InvokeAsync<bool>("RateUserTicket", ticketId, score, comment, timeout.Token);
+    }
+
     public async Task<int> CreateTicketAsync(string title, string description, CancellationToken token)
     {
         if (!IsOnline) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
@@ -339,3 +363,28 @@ public sealed class HubConnectionService : IAsyncDisposable
         lifetime.Dispose();
     }
 }
+
+public sealed record UserTicketSummaryDto(
+    int Id,
+    int GlpiId,
+    string Title,
+    string Description,
+    string Status,
+    string StatusName,
+    string BranchName,
+    string Room,
+    string AssignedSpecialist,
+    DateTime CreatedAt,
+    DateTime? ClosedAt,
+    double? Score,
+    string? ScoreComment,
+    bool CanRate,
+    int FollowupsCount
+);
+
+public sealed record UserTicketDetailDto(
+    UserTicketSummaryDto Ticket,
+    List<StaffTicketFollowup> Followups,
+    List<StaffTicketSolution> Solutions,
+    List<StaffTicketAttachmentInfo> Attachments
+);

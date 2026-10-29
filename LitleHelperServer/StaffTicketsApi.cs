@@ -54,6 +54,8 @@ public record StaffStatusRequest(int Status);
 
 public static class StaffTicketsApi
 {
+    public static int StatusCode(string status) => TicketManagement.Status(status);
+
     public static string StatusName(string status)
     {
         return TicketManagement.Status(status) switch
@@ -408,3 +410,4 @@ public static class StaffTicketsApi
         }).RequireAuthorization("Panel");
     }
 }
+

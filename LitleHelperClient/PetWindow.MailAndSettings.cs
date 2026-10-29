@@ -125,11 +125,18 @@ public sealed partial class PetWindow
         };
         menu.Items.Add(quietItem);
 
+        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "user_tickets"))
+        {
+            var userTicketsItem = new MenuItem { Header = "📋 Заявки" };
+            userTicketsItem.Click += (_, _) => OpenUserTicketsWindow();
+            menu.Items.Add(userTicketsItem);
+        }
+
         if (!diagnostics && (adminAvailable || superAvailable))
         {
-            var ticketsItem = new MenuItem { Header = "📋 Заявки" };
-            ticketsItem.Click += (_, _) => OpenStaffTicketsWindow();
-            menu.Items.Add(ticketsItem);
+            var staffTicketsItem = new MenuItem { Header = "💼 Заявки (Админ)" };
+            staffTicketsItem.Click += (_, _) => OpenStaffTicketsWindow();
+            menu.Items.Add(staffTicketsItem);
         }
 
         menu.Items.Add(new Separator());

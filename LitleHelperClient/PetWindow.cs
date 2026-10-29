@@ -81,6 +81,7 @@ public sealed partial class PetWindow : Window
     private SuperAdminWindow? superWindow;
     private EmergencyAlertWindow? activeAlertWindow;
     private StaffTicketsWindow? staffTicketsWindow;
+    private UserTicketsWindow? userTicketsWindow;
     private bool superAvailable, adminAvailable, announcementVisible;
     private MessengerClient? messenger;
     private MessengerWindow? messengerWindow;
@@ -315,7 +316,7 @@ public sealed partial class PetWindow : Window
             printerWatchdog?.Dispose();
             certWatchdog?.Dispose();
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
-            lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); staffTicketsWindow?.Close(); source?.RemoveHook(Hook);
+            lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); staffTicketsWindow?.Close(); userTicketsWindow?.Close(); source?.RemoveHook(Hook);
             messengerWindow?.Close();
             tray?.Dispose();
             if (messenger != null) await messenger.DisposeAsync();
@@ -1354,11 +1355,12 @@ public sealed partial class PetWindow : Window
         Wake();
 
         var visibleActions = actions.Where(a => a.Type != "exit").ToList();
+        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "user_tickets")) visibleActions.Add(new("user_tickets", "📋 Заявки", "user_tickets"));
         if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "messenger")) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
         if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "mail")) visibleActions.Add(new("mail", Loc.T("TrayMail"), "mail"));
         if (!diagnostics && hub?.IsOnline == true && SystemButtonVisibility.Enabled(systemButtons, "emergency")) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
         if (!diagnostics && pendingSurveys.Length > 0) visibleActions.Insert(0,new("pending-surveys","Ожидают оценки: " + pendingSurveys.Length,"surveys"));
-        if (!diagnostics && (adminAvailable || superAvailable)) visibleActions.Add(new("staff_tickets", "📋 Заявки", "staff_tickets"));
+        if (!diagnostics && (adminAvailable || superAvailable)) visibleActions.Add(new("staff_tickets", "💼 Заявки (Админ)", "staff_tickets"));
         int count = visibleActions.Count;
 
         const double winW = 500;
@@ -1424,6 +1426,31 @@ public sealed partial class PetWindow : Window
         outsideClick.Start();
     }
     
+        internal void OpenUserTicketsWindow(int initialTab = 0)
+    {
+        if (hub == null) return;
+        if (userTicketsWindow != null)
+        {
+            if (userTicketsWindow.WindowState == WindowState.Minimized)
+                userTicketsWindow.WindowState = WindowState.Normal;
+            userTicketsWindow.Activate();
+            return;
+        }
+
+        try
+        {
+            userTicketsWindow = new UserTicketsWindow(settings, hub, this) { Owner = this, Topmost = true };
+            userTicketsWindow.Closed += (_, _) => userTicketsWindow = null;
+            userTicketsWindow.Show();
+            userTicketsWindow.Activate();
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+            ShowNotice("Не удалось открыть заявки: " + ex.Message);
+        }
+    }
+
     private void OpenStaffTicketsWindow()
     {
         if (hub?.IsOnline != true && !adminAvailable && !superAvailable) return;
@@ -1813,6 +1840,7 @@ public sealed partial class PetWindow : Window
                 case "forbidden" or "disabled":
                     ShowForbiddenNotice(); return Task.CompletedTask;
                 case "staff_tickets": OpenStaffTicketsWindow(); return Task.CompletedTask;
+                case "user_tickets" or "it_ticket": OpenUserTicketsWindow(); return Task.CompletedTask;
                 case "messenger": return OpenMessengerAsync();
                 case "mail": OpenMailWindow(); break;
                 case "surveys": return OpenSurveyQueue();
@@ -1822,20 +1850,7 @@ public sealed partial class PetWindow : Window
                 case "clean_temp": _ = CleanTempAsync(); break;
                 case "clear_printers": return ClearPrintersAsync();
                 case "exit": Application.Current.Shutdown(); break;
-                case "it_ticket":
-                    if (hub?.IsOnline != true) throw new InvalidOperationException("Сервер недоступен. Заявка не отправлена.");
-                    if (ticket != null) return Task.CompletedTask;
-                    if (!EnsureCabinetSpecified()) return Task.CompletedTask;
-                    ticket = new TicketWindow(hub.CreateTicketAtWithFilesAsync, hub.GetTicketContextAsync, settings, lifetime.Token) { Owner = this, Topmost = true };
-                    ticket.TicketCreated += id => { ticket?.Close(); ShowNotice($"Заявка №{id} успешно создана!"); };
-                    ticket.Submitting += () => ChangeState(PetState.Busy);
-                    ticket.SubmissionFailed += () => React(PetState.Error, 4);
-                    ticket.TicketCreated += _ => React(PetState.Success, 4);
-                    ticket.Closed += (_, _) => { ticket = null; Wake(); if (state == PetState.Busy) ChangeState(PetState.Idle); };
-                    ticket.Show();
-                    ticket.Activate();
-                    ticket.Focus();
-                    break;
+
                 case "open_path":
                     var path = Environment.ExpandEnvironmentVariables(action.Target ?? "");
                     if (!Path.IsPathFullyQualified(path) || (!File.Exists(path) && !Directory.Exists(path)))

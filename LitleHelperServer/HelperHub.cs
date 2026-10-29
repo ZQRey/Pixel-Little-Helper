@@ -252,6 +252,32 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         }
         return article;
     }
+        public async Task<List<UserTicketSummary>> GetUserTickets()
+    {
+        var c = await Agent();
+        var verifiedUser = await AgentUserSessions.UserAsync(c, db);
+        string owner = verifiedUser != null ? Security.TicketUser(verifiedUser.Username) : "unverified:" + c.MachineName;
+        return await UserTicketsApi.GetUserTicketsCoreAsync(db, glpi, c, owner, Context.ConnectionAborted);
+    }
+
+    public async Task<UserTicketDetail?> GetUserTicketDetail(int ticketId)
+    {
+        var c = await Agent();
+        var verifiedUser = await AgentUserSessions.UserAsync(c, db);
+        string owner = verifiedUser != null ? Security.TicketUser(verifiedUser.Username) : "unverified:" + c.MachineName;
+        return await UserTicketsApi.GetUserTicketDetailCoreAsync(db, glpi, c, owner, ticketId, Context.ConnectionAborted);
+    }
+
+    public async Task<bool> RateUserTicket(int ticketId, int score, string? comment)
+    {
+        var c = await Agent();
+        var verifiedUser = await AgentUserSessions.UserAsync(c, db);
+        string owner = verifiedUser != null ? Security.TicketUser(verifiedUser.Username) : "unverified:" + c.MachineName;
+        var surveys = Context.GetHttpContext()?.RequestServices.GetService<TicketSurveys>();
+        if (surveys == null) return false;
+        return await UserTicketsApi.RateUserTicketCoreAsync(db, glpi, surveys, c, owner, ticketId, score, comment, Context.ConnectionAborted);
+    }
+
     public async Task<int> CreateTicketAt(string title, string description, int? branchId, string room, string? userFullName = null)
         => await CreateTicketAtWithFiles(title, description, branchId, room, userFullName, null);
 

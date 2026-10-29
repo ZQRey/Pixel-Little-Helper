@@ -474,7 +474,7 @@ public static class PanelApi
         app.MapGet("/api/buttons", async (HelperDb db) =>
         {
             bool added = false;
-            foreach (var item in new[] { ("messenger", "Мессенджер"), ("emergency", "Экстренное оповещение"), ("mail", "Почта") })
+            foreach (var item in new[] { ("user_tickets", "Заявки"), ("messenger", "Мессенджер"), ("emergency", "Экстренное оповещение"), ("mail", "Почта") })
             {
                 if (!await db.Buttons.AnyAsync(b => b.SystemKey == item.Item1))
                 {

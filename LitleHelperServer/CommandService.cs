@@ -13,7 +13,7 @@ public class CommandService(HelperDb db, IHubContext<HelperHub> hub, IConfigurat
         if (user == null || !user.IsActive || user.MustChangePassword || !principal.HasClaim("version", user.SecurityVersion.ToString()))
             throw new UnauthorizedAccessException("Требуется повторный вход");
         bool super = Access.Can(user, "terminal.execute");
-        if (request.Elevated && !Access.IsSweetheart(config, user.Username))
+        if (request.Elevated && !Access.IsSweetheart(config, user.Username) && user.Role != Roles.SuperAdmin)
             throw new UnauthorizedAccessException("Запуск от имени администратора разрешён только доверенным администраторам (SWEETHEART)");
         if (request.Type == "notice") { if (user.Role != Roles.SuperAdmin) throw new UnauthorizedAccessException("Сообщения доступны только SuperAdmin"); }
         else if (!Access.Can(user, "commands.execute")) throw new UnauthorizedAccessException("Недостаточно прав");

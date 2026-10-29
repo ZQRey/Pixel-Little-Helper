@@ -241,6 +241,7 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
 app.MapStaffTicketsApi();
+app.MapUserTicketsApi();
 app.MapPxeApi();
 app.MapMailBackupApi();
 app.MapMedicalStatuses();

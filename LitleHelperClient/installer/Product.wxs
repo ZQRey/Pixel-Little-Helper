@@ -20,6 +20,8 @@
           </File>
           <ServiceInstall Id="InstallUpdater" Name="PixelHelperUpdater" DisplayName="PixelHelper — обновления" Description="Проверка и установка подписанных обновлений клиента PixelHelper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--update-service" />
           <ServiceControl Id="ControlUpdater" Name="PixelHelperUpdater" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+          <ServiceInstall Id="InstallAntiTheft" Name="PixelAntiTheft" DisplayName="Pixel Anti-Theft — служба защиты" Description="Фоновая служба геолокации, мониторинга Wi-Fi сетей и защиты переносных устройств Pixel Little Helper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--anti-theft-service" />
+          <ServiceControl Id="ControlAntiTheft" Name="PixelAntiTheft" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
           <RemoveFolder Id="RemoveStartMenu" Directory="StartMenuFolder" On="uninstall" />
         </Component>
       </Directory></Directory>

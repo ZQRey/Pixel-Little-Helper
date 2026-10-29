@@ -154,6 +154,11 @@ public static class SystemInspector
 
     public static bool DetectIsPortable()
     {
+        try
+        {
+            if (Settings.Load().IsPortable) return true;
+        }
+        catch { }
         var (percent, isCharging, hasBattery) = GetBatteryStatus();
         if (hasBattery || percent >= 0) return true;
         try
@@ -223,7 +228,9 @@ public static class SystemInspector
             if (!string.IsNullOrEmpty(recovered)) user = recovered;
         }
 
-        bool isPortable = DetectIsPortable();
+        bool isPortable = false;
+        try { isPortable = Settings.Load().IsPortable; }
+        catch { isPortable = DetectIsPortable(); }
         return new(Environment.MachineName, user, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName(), ClientVersion: ClientVersion(), IsPortable: isPortable);
     }
     public static InventorySnapshot Collect()

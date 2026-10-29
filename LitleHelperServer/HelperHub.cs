@@ -110,7 +110,7 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         c.SupportsAiDiagnostics = info.SupportsAiDiagnostics;
         c.OsVersion = info.OsVersion;
         if (!string.IsNullOrWhiteSpace(info.ClientVersion)) c.ClientVersion = info.ClientVersion;
-        if (info.IsPortable) c.IsPortable = true;
+        c.IsPortable = info.IsPortable;
         c.LastSeen = DateTime.UtcNow;
 
         var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
@@ -157,6 +157,13 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
     }
     public async Task Heartbeat() { var c = await Agent(); c.LastSeen = DateTime.UtcNow; await db.SaveChangesAsync(); await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName)); }
+    public async Task SetPortableMode(bool isPortable)
+    {
+        var c = await Agent();
+        c.IsPortable = isPortable;
+        await db.SaveChangesAsync();
+        await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
+    }
     public async Task UpdateHardwareAndSoftware(JsonElement hardware, JsonElement software)
     {
         var c = await Agent();

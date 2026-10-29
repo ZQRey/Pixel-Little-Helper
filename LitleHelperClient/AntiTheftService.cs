@@ -129,7 +129,9 @@ public static class AntiTheftService
     {
         var (connectedSsid, connectedBssid, visibleNetworks) = ScanWifiNetworks();
         var (batteryPercent, isCharging, hasBattery) = SystemInspector.GetBatteryStatus();
-        bool isPortable = SystemInspector.DetectIsPortable();
+        bool isPortable = false;
+        try { isPortable = Settings.Load().IsPortable; }
+        catch { isPortable = SystemInspector.DetectIsPortable(); }
         string hardwareUuid = SystemInspector.GetHardwareUuid();
         bool wireGuardActive = WireGuardCrypto.IsTunnelActive();
 
@@ -291,4 +293,26 @@ public static class AntiTheftService
         catch { return ""; }
     }
 }
+
+internal sealed class AntiTheftWindowsService : System.ServiceProcess.ServiceBase
+{
+    internal const string Name = "PixelAntiTheft";
+    private CancellationTokenSource? stop;
+
+    internal AntiTheftWindowsService()
+    {
+        ServiceName = Name;
+        CanStop = true;
+        AutoLog = false;
+    }
+
+    protected override void OnStart(string[] args)
+    {
+        stop = new();
+        _ = Task.Run(() => AntiTheftService.RunSystemWorkerAsync(stop.Token));
+    }
+
+    protected override void OnStop() => stop?.Cancel();
+}
+
 

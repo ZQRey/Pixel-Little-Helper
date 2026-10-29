@@ -21,6 +21,10 @@ public partial class App : Application
         {
             System.ServiceProcess.ServiceBase.Run(new UpdateService()); Shutdown(); return;
         }
+        if (e.Args.Contains("--anti-theft-service"))
+        {
+            System.ServiceProcess.ServiceBase.Run(new AntiTheftWindowsService()); Shutdown(); return;
+        }
         if (e.Args.Contains("--cleanup-machine"))
         {
             Shutdown(MachineCleanup.Run());

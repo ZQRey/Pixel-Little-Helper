@@ -1198,6 +1198,7 @@ public sealed class SettingsWindow : Window
         }
 
         // Section 1: Laptop Device Mode
+        Border? wgCard = null;
         var deviceCard = CardContainer();
         var deviceStack = new StackPanel();
         deviceStack.Children.Add(SubTitle("💻 Режим переносного устройства (Ноутбук)"));
@@ -1213,8 +1214,10 @@ public sealed class SettingsWindow : Window
         };
         chkPortable.Click += (_, _) =>
         {
-            settings.IsPortable = chkPortable.IsChecked == true;
+            bool isPort = chkPortable.IsChecked == true;
+            settings.IsPortable = isPort;
             settings.Save();
+            if (wgCard != null) wgCard.Visibility = isPort ? Visibility.Visible : Visibility.Collapsed;
             _ = AntiTheftService.SendTelemetryAsync(settings.ServerUrl ?? "https://helper.gp1.loc");
         };
         deviceStack.Children.Add(chkPortable);
@@ -1232,7 +1235,8 @@ public sealed class SettingsWindow : Window
         panel.Children.Add(deviceCard);
 
         // Section 2: WireGuard Tunnel
-        var wgCard = CardContainer();
+        wgCard = CardContainer();
+        wgCard.Visibility = settings.IsPortable ? Visibility.Visible : Visibility.Collapsed;
         var wgStack = new StackPanel();
 
         var wgTitleRow = new DockPanel();

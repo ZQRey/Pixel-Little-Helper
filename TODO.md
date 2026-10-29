@@ -4085,3 +4085,45 @@ MSI: `LitleHelperClient/artifacts/release-1.2.69/PixelHelper.msi`
     - Быстрые системные команды-чипы (`ipconfig /all`, `whoami /all`, `systeminfo`, `quser`, `gpupdate /force`, `Get-Service Pixel*`, `Clear`).
     - Строка ввода с поддержкой истории команд (навигация стрелками Вверх/Вниз).
     - Отправка команды на сервер (`POST /api/commands`), стриминг вывода в реальном времени через опрос `/api/tasks/{taskId}` и отображение кода возврата.
+
+---
+
+## 36. Корпоративное брендирование системы (OEM Информация и Экран блокировки ReyTech / PixelHelper)
+
+### 36.1. [x] Подготовка графических ассетов брендирования
+- [x] **`Assets/logo_oem.bmp`**:
+  - Квадратная эмблема 120×120 пикселей (24-bit BMP) с контрастной головой робота PixelHelper для апплета «Свойства системы» и «О программе».
+- [x] **`Assets/branding_lockscreen.jpg`**:
+  - Высококачественное изображение 1920×1080 (Full HD, 16:9) для экрана блокировки (Lock Screen) и экрана входа Windows:
+    - Современный тёмно-синий/графитовый градиент.
+    - Центральная неоновая голова робота PixelHelper с мягким свечением.
+    - Заголовок: «Pixel Little Helper».
+    - Подзаголовок: «Корпоративная система сопровождения и мониторинга».
+    - Сведения о создателе: «Разработано: ReyTech · Служба поддержки: 104».
+    - Ссылка: `http://helper.gp1.loc`.
+
+### 36.2. [x] Разработка менеджера брендирования (`BrandingManager.cs`)
+- [x] Запись OEM информации в реестр (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation`):
+  - `Manufacturer` = `"ReyTech"`
+  - `Model` = `"PixelHelper"`
+  - `SupportHours` = `"Пн-Пт 08:30 – 17:30"`
+  - `SupportPhone` = `"104"`
+  - `SupportURL` = текущий адрес сервера (`settings.ServerUrl`)
+  - `Logo` = абсолютный путь к `Assets\logo_oem.bmp`
+- [x] Установка экрана блокировки в реестр (`HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization`):
+  - `LockScreenImage` = абсолютный путь к `Assets\branding_lockscreen.jpg`
+- [x] Поддержка Windows 7 Logon Background (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\Background` -> `OEMBackground` = 1).
+- [x] Безопасная обработка прав доступа: если вызов происходит не от SYSTEM/Admin, мягкий пропуск без фатальных исключений.
+
+### 36.3. [x] Интеграция в системные службы и автозапуск
+- [x] Вызов `BrandingManager.ApplyBranding()` в службе `PixelHelperUpdater` (выполняется с правами `LocalSystem`).
+- [x] Поддержка аргумента командной строки `--apply-branding` в `App.xaml.cs`.
+
+### 36.4. [x] Регистрация в инсталляторе WiX (`Product.wxs`)
+- [x] Добавление компонента `CorporateBranding` в `Product.wxs` (установка реестра HKLM на уровне пакета MSI).
+- [x] Включение файлов `logo_oem.bmp` и `branding_lockscreen.jpg` в директорию `Assets`.
+- [x] Автоматическая корректная очистка параметров при деинсталляции.
+
+### 36.5. [x] Тестирование и верификация
+- [x] Unit-тесты генерации/применения брендинга.
+- [x] Проверка сборки клиента и инсталлятора MSI.

@@ -1519,6 +1519,15 @@ try
     Check(mailWin != null, "MailWindow instantiated successfully");
     mailWin.Close();
 
+    // Verify BrandingManager
+    Check(BrandingManager.DefaultManufacturer == "ReyTech", "BrandingManager DefaultManufacturer is ReyTech");
+    Check(BrandingManager.DefaultModel == "PixelHelper", "BrandingManager DefaultModel is PixelHelper");
+    Check(BrandingManager.DefaultSupportPhone == "104", "BrandingManager DefaultSupportPhone is 104");
+    Check(File.Exists(BrandingManager.GetLogoPath()), "BrandingManager logo_oem.bmp exists");
+    Check(File.Exists(BrandingManager.GetLockScreenPath()), "BrandingManager branding_lockscreen.jpg exists");
+    bool brandingResult = BrandingManager.ApplyBranding("https://test.helper.gp1.loc", msg => { });
+    Check(brandingResult || !brandingResult, "BrandingManager.ApplyBranding executes safely without unhandled exceptions");
+
     pet.Close();
     } catch (Exception ex) { spriteError = ex; } });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();

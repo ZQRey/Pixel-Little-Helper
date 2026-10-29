@@ -25,6 +25,18 @@ internal sealed class UpdateService : ServiceBase
         _ = Task.Run(() => MachineIdentity.RunAsync(stop.Token));
         _ = Task.Run(() => AdminCommandPipe.RunServerAsync(stop.Token));
         _ = Task.Run(BrowserExtensionDeployer.EnsureDeployed);
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                string? serverUrl = Registry.LocalMachine.OpenSubKey(@"Software\PixelHelper")?.GetValue("ServerUrl") as string;
+                BrandingManager.ApplyBranding(serverUrl, msg => Log(msg));
+            }
+            catch (Exception ex)
+            {
+                Log("Ошибка применения брендирования: " + ex.Message);
+            }
+        });
     }
     protected override void OnStop() => stop?.Cancel();
     private static async Task Loop(CancellationToken token)

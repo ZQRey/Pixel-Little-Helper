@@ -36,6 +36,13 @@ public partial class App : Application
             Shutdown();
             return;
         }
+        if (e.Args.Contains("--apply-branding"))
+        {
+            string? serverUrl = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"Software\PixelHelper")?.GetValue("ServerUrl") as string;
+            bool ok = BrandingManager.ApplyBranding(serverUrl, Console.WriteLine);
+            Shutdown(ok ? 0 : 1);
+            return;
+        }
         var appIcon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/PixelHelper;component/Assets/PixelHelper.ico")); appIcon.Freeze();
         EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler((sender,args) => { if (sender is Window window && ReferenceEquals(args.OriginalSource,window) && window.Icon==null) window.Icon=appIcon; }));
         string? guardUrl = null;

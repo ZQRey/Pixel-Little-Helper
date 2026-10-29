@@ -100,6 +100,25 @@
             <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
           </RegistryKey>
         </Component>
+        <Component Id="CorporateBranding" Guid="7C3F2A1E-8B9D-4F2A-B6D1-0C9E8A7F6E5D" Win64="yes">
+          <!-- OEM Information in System Properties -->
+          <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\OEMInformation">
+            <RegistryValue Name="Manufacturer" Type="string" Value="ReyTech" KeyPath="yes" />
+            <RegistryValue Name="Model" Type="string" Value="PixelHelper" />
+            <RegistryValue Name="SupportHours" Type="string" Value="Пн-Пт 08:30 – 17:30" />
+            <RegistryValue Name="SupportPhone" Type="string" Value="104" />
+            <RegistryValue Name="SupportURL" Type="string" Value="[SERVERURL]" />
+            <RegistryValue Name="Logo" Type="string" Value="[INSTALLFOLDER]Assets\logo_oem.bmp" />
+          </RegistryKey>
+          <!-- Windows 10/11 Lock Screen Policy -->
+          <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\Personalization">
+            <RegistryValue Name="LockScreenImage" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+          </RegistryKey>
+          <!-- Windows 7 Logon Background Support -->
+          <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\Background">
+            <RegistryValue Name="OEMBackground" Type="integer" Value="1" />
+          </RegistryKey>
+        </Component>
       </DirectoryRef>
     <Feature Id="Complete" Title="PixelHelper" Level="1">
       <ComponentGroupRef Id="PublishedFiles" />
@@ -110,6 +129,7 @@
       <ComponentRef Id="WebGuardBrowserRegistration" />
       <ComponentRef Id="BrowserExtensionPolicies" />
       <ComponentRef Id="ExplorerContextMenu" />
+      <ComponentRef Id="CorporateBranding" />
     </Feature>
     <CustomAction Id="CleanUserProfiles" FileKey="MainExecutable" ExeCommand="--cleanup-machine" Execute="deferred" Impersonate="no" Return="check" />
     <InstallExecuteSequence>

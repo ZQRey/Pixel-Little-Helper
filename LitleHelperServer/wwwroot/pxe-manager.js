@@ -719,211 +719,193 @@ function showUnattendedCustomizerModal(images) {
 }
 
 // -----------------------------------------------------------------------------
-// TAB 3: Boot Menu & Configs Editor (IDE Split View)
+// TAB 3: Boot Menu & Configs Editor
 // -----------------------------------------------------------------------------
-const PXE_CONFIGS_CATALOG = [
-    {
-        id: 'grub',
-        name: 'grub.cfg',
-        title: 'GRUB2 Boot Menu',
-        platform: 'UEFI x64',
-        badgeClass: 'blue',
-        icon: '🖥️',
-        desc: 'Главное меню для современных компьютеров и серверов с UEFI (64-бит). Определяет запуск WinPE, инсталляторов и ISO.',
-        defaultPath: '/srv/tftp/grub/grub.cfg',
+const PXE_CONFIGS_INFO = {
+    grub: {
+        title: 'grub.cfg (UEFI x64)',
+        path: '/srv/tftp/grub/grub.cfg',
+        desc: 'Основное меню для современных компьютеров с UEFI (64-бит)',
         snippets: [
             {
-                label: '＋ Пункт: Windows 11/10 PE (Сетевая автоустановка)',
-                code: `\nmenuentry "Windows Setup (Автоматическая сетевая установка)" --class windows {\n    echo "Загрузка сетевого ядра WinPE..."\n    linux /images/wimboot\n    initrd /images/bootmgr bootmgr\n    initrd /images/boot/bcd bcd\n    initrd /images/boot/boot.sdi boot.sdi\n    initrd /images/sources/boot.wim boot.wim\n}\n`
+                label: '＋ Windows 11/10 PE (Сетевая автоустановка)',
+                code: `\nmenuentry "Windows Setup (Автоматическая сетевая установка)" --class windows {\n    echo "Загрузка ядра WinPE..."\n    linux /images/wimboot\n    initrd /images/bootmgr bootmgr\n    initrd /images/boot/bcd bcd\n    initrd /images/boot/boot.sdi boot.sdi\n    initrd /images/sources/boot.wim boot.wim\n}\n`
             },
             {
-                label: '＋ Пункт: Debian 12 Netboot (Preseed)',
-                code: `\nmenuentry "Debian 12 Netboot (Тихая автоматическая установка)" --class debian {\n    linux /images/debian/linux auto=true priority=critical url=http://172.16.16.61:8088/os/debian/preseed.cfg\n    initrd /images/debian/initrd.gz\n}\n`
+                label: '＋ Debian 12 Netboot (Preseed)',
+                code: `\nmenuentry "Debian 12 Netboot (Тихая установка)" --class debian {\n    linux /images/debian/linux auto=true priority=critical url=http://172.16.16.61:8088/os/debian/preseed.cfg\n    initrd /images/debian/initrd.gz\n}\n`
             },
             {
-                label: '＋ Пункт: Memtest86+ (Тест ОЗУ)',
-                code: `\nmenuentry "Memtest86+ (Диагностика оперативной памяти)" {\n    linux16 /images/memtest86+.bin\n}\n`
+                label: '＋ Memtest86+ (Тест памяти)',
+                code: `\nmenuentry "Memtest86+ (Диагностика RAM)" {\n    linux16 /images/memtest86+.bin\n}\n`
             },
             {
-                label: '＋ Пункт: Перезагрузка в BIOS Setup',
+                label: '＋ Вход в настройки UEFI (BIOS Setup)',
                 code: `\nmenuentry "Вход в настройки UEFI (BIOS Setup)" {\n    fwsetup\n}\n`
             }
         ]
     },
-    {
-        id: 'syslinux',
-        name: 'pxelinux.cfg',
-        title: 'PXELINUX Menu',
-        platform: 'Legacy BIOS',
-        badgeClass: 'amber',
-        icon: '💾',
-        desc: 'Конфигурация сетевого меню для старых ПК и платформ, работающих в устаревшем режиме CSM/BIOS.',
-        defaultPath: '/srv/tftp/pxelinux.cfg/default',
+    syslinux: {
+        title: 'pxelinux.cfg (Legacy BIOS)',
+        path: '/srv/tftp/pxelinux.cfg/default',
+        desc: 'Сетевое меню для старых ПК в устаревшем режиме CSM/BIOS',
         snippets: [
             {
-                label: '＋ Пункт: Windows WinPE (Legacy BIOS)',
+                label: '＋ Windows PE (Legacy BIOS)',
                 code: `\nLABEL winpe\n    MENU LABEL ^1) Windows PE (Legacy Boot)\n    KERNEL wimboot\n    APPEND initrd=bootmgr,boot/bcd,boot/boot.sdi,sources/boot.wim\n`
             },
             {
-                label: '＋ Пункт: Memtest86+ (Legacy BIOS)',
+                label: '＋ Memtest86+ (Legacy BIOS)',
                 code: `\nLABEL memtest\n    MENU LABEL ^2) Memtest86+ RAM Diagnostic\n    KERNEL memtest86+.bin\n`
             }
         ]
     },
-    {
-        id: 'dnsmasq',
-        name: 'dnsmasq-pxe.conf',
-        title: 'ProxyDHCP & TFTP',
-        platform: 'Сеть / Маршруты',
-        badgeClass: 'green',
-        icon: '⚡',
-        desc: 'Маршрутизация PXE (Option 93) и передача нужных загрузчиков клиентам (shimx64, ipxe, pxelinux).',
-        defaultPath: '/home/zqrey/pxe-server/configs/dnsmasq-pxe.conf',
+    dnsmasq: {
+        title: 'dnsmasq-pxe.conf (DHCP / TFTP)',
+        path: '/home/zqrey/pxe-server/configs/dnsmasq-pxe.conf',
+        desc: 'Маршрутизация PXE (Option 93) и передача загрузчиков',
         snippets: [
             {
-                label: '＋ Правило: Тегирование клиентов PXE',
+                label: '＋ Правило: Тег PXEClient',
                 code: `\ndhcp-vendorclass=set:pxe,PXEClient\n`
             }
         ]
     },
-    {
-        id: 'preseed',
-        name: 'preseed.cfg',
-        title: 'Debian Preseed',
-        platform: 'Автоустановка Linux',
-        badgeClass: 'purple',
-        icon: '🐧',
-        desc: 'Сценарий автоматических ответов установщика Debian/Ubuntu (разметка диска, локаль, пакеты, создание админа).',
-        defaultPath: '/srv/www/pxe/os/debian/preseed.cfg',
+    preseed: {
+        title: 'preseed.cfg (Debian / Linux)',
+        path: '/srv/www/pxe/os/debian/preseed.cfg',
+        desc: 'Сценарий автоматических ответов инсталлятора Debian/Ubuntu',
         snippets: [
             {
-                label: '＋ Блок: Установка пакетов (curl, ssh, qemu)',
+                label: '＋ Блок пакетов (curl, ssh, qemu)',
                 code: `\nd-i pkgsel/include string curl openssh-server sudo qemu-guest-agent\n`
             }
         ]
     }
-];
+};
 
 let pxeEditorOriginalContent = '';
 let pxeEditorIsDirty = false;
 
 async function renderPxeEditorTab(container) {
     container.innerHTML = `
-        <div style="display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:stretch;min-height:640px;">
-            <!-- Left Sidebar: Config Files Tree -->
-            <div style="display:flex;flex-direction:column;gap:14px;">
-                <div class="panel" style="padding:14px;display:flex;flex-direction:column;gap:10px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid var(--line);">
-                        <strong style="font-size:13px;display:flex;align-items:center;gap:6px;">
-                            <span>📁</span> Каталог конфигураций
-                        </strong>
-                        <span class="pill" style="font-size:10px;">${PXE_CONFIGS_CATALOG.length} файла</span>
-                    </div>
-
-                    <div id="pxe-cfg-files-list" style="display:flex;flex-direction:column;gap:8px;">
-                        ${PXE_CONFIGS_CATALOG.map(item => `
-                            <div class="pxe-file-card ${item.id === pxeCurrentConfig ? 'active' : ''}" data-cfg-id="${item.id}"
-                                 style="display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:8px;border:1px solid ${item.id === pxeCurrentConfig ? 'var(--accent)' : 'var(--line)'};background:${item.id === pxeCurrentConfig ? '#eff6ff' : '#ffffff'};cursor:pointer;transition:all .15s ease;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <span style="font-weight:700;font-size:13px;color:#1e293b;display:flex;align-items:center;gap:6px;">
-                                        <span>${item.icon}</span> <span>${escape(item.name)}</span>
-                                    </span>
-                                    <span class="pill" style="font-size:10px;">${escape(item.platform)}</span>
-                                </div>
-                                <div style="font-size:11px;color:var(--muted);line-height:1.35;margin-top:2px;">
-                                    ${escape(item.desc)}
-                                </div>
-                                <div style="font-size:10px;color:#64748b;font-family:Consolas,monospace;margin-top:4px;word-break:break-all;">
-                                    <code>${escape(item.defaultPath)}</code>
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-
-                <!-- Info Box -->
-                <div style="background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px;font-size:11px;color:var(--muted);line-height:1.45;">
-                    💡 <strong>Подсказка:</strong> Изменения в загрузочных меню <code>grub.cfg</code> и <code>pxelinux.cfg</code> вступают в силу мгновенно при следующей сетевой загрузке компьютера. Поддерживается сохранение по <strong>Ctrl+S</strong>.
-                </div>
+        <!-- Top Toolbar: Config Selector & Actions -->
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;" id="pxe-cfg-tabs-bar">
+                <button class="pxe-cfg-btn ${pxeCurrentConfig==='grub'?'primary':'secondary'}" data-cfg="grub">🖥️ grub.cfg (UEFI)</button>
+                <button class="pxe-cfg-btn ${pxeCurrentConfig==='syslinux'?'primary':'secondary'}" data-cfg="syslinux">💾 pxelinux.cfg (BIOS)</button>
+                <button class="pxe-cfg-btn ${pxeCurrentConfig==='dnsmasq'?'primary':'secondary'}" data-cfg="dnsmasq">⚡ dnsmasq-pxe.conf</button>
+                <button class="pxe-cfg-btn ${pxeCurrentConfig==='preseed'?'primary':'secondary'}" data-cfg="preseed">🐧 preseed.cfg (Debian)</button>
             </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <select id="pxe-cfg-snippets" style="font-size:12px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;">
+                    <option value="">＋ Вставить пункт меню…</option>
+                </select>
+                <button class="secondary" id="pxe-btn-revert-cfg" style="font-size:12px;padding:8px 14px;" title="Сбросить несохранённые правки">↻ Сбросить</button>
+                <button class="primary" id="pxe-btn-save-cfg" style="font-size:12px;padding:8px 16px;display:flex;align-items:center;gap:6px;">
+                    <span>💾</span> <strong>Сохранить и применить</strong>
+                </button>
+            </div>
+        </div>
 
-            <!-- Right Area: IDE Editor -->
-            <div class="panel" style="padding:0;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line);">
-                <!-- Editor Top Header -->
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#f8fafc;border-bottom:1px solid var(--line);flex-wrap:wrap;gap:10px;">
-                    <div style="display:flex;align-items:center;gap:10px;">
-                        <span id="pxe-editor-file-icon" style="font-size:20px;">🖥️</span>
-                        <div>
-                            <div style="display:flex;align-items:center;gap:8px;">
-                                <strong id="pxe-editor-file-name" style="font-size:14px;color:#0f172a;">grub.cfg</strong>
-                                <span id="pxe-editor-file-badge" class="pill blue" style="font-size:10px;">UEFI x64</span>
-                                <span id="pxe-editor-dirty-badge" class="pill" style="display:none;background:#fef3c7;color:#92400e;font-size:10px;">● Не сохранено</span>
-                            </div>
-                            <div id="pxe-editor-file-path" style="font-size:11px;color:var(--muted);font-family:Consolas,monospace;">
-                                /srv/tftp/grub/grub.cfg
-                            </div>
-                        </div>
-                    </div>
+        <!-- Info Bar -->
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 16px;margin-bottom:12px;font-size:12px;box-shadow:0 1px 2px rgba(0,0,0,0.03);flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <strong id="pxe-info-title" style="color:#0f172a;font-size:13px;">grub.cfg (UEFI x64)</strong>
+                <code id="pxe-info-path" style="font-size:11px;color:#2563eb;background:#eff6ff;padding:2px 6px;border-radius:4px;font-family:Consolas,monospace;">/srv/tftp/grub/grub.cfg</code>
+                <span id="pxe-info-desc" style="color:var(--muted);font-size:11px;">Основное меню для современных компьютеров с UEFI (64-бит)</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+                <span id="pxe-dirty-badge" class="pill" style="display:none;background:#fef3c7;color:#92400e;font-size:10px;font-weight:600;">● Есть несохранённые правки</span>
+                <span id="pxe-info-status" style="font-size:11px;color:#10b981;font-weight:500;">● Синхронизирован с сервером</span>
+            </div>
+        </div>
 
-                    <!-- Actions Toolbar -->
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <select id="pxe-editor-snippets" style="font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:pointer;max-width:210px;">
-                            <option value="">＋ Вставить шаблон…</option>
-                        </select>
-                        <button class="secondary" id="pxe-btn-revert-cfg" style="font-size:12px;padding:6px 10px;" title="Сбросить несохранённые изменения">
-                            ↻ Сбросить
-                        </button>
-                        <button class="primary" id="pxe-btn-save-cfg" style="font-size:12px;padding:6px 14px;display:flex;align-items:center;gap:6px;">
-                            <span>💾</span> <strong>Сохранить и применить</strong>
-                        </button>
-                    </div>
+        <!-- Detected Menu Entries (Quick Navigation Badges) -->
+        <div id="pxe-menu-items-container" style="display:none;align-items:center;gap:8px;margin-bottom:12px;padding:8px 14px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;flex-wrap:wrap;font-size:12px;">
+            <span style="font-size:11px;font-weight:600;color:var(--muted);">Пункты загрузки в файле:</span>
+            <div id="pxe-menu-items-list" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+
+        <!-- Editor Panel -->
+        <div class="panel" style="padding:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;box-shadow:0 1px 3px rgba(0,0,0,0.05);display:flex;flex-direction:column;">
+            <div style="position:relative;background:#0b1120;">
+                <div id="pxe-editor-loader" style="display:none;position:absolute;inset:0;background:rgba(11,17,32,0.7);z-index:10;display:flex;align-items:center;justify-content:center;color:#38bdf8;font-size:13px;">
+                    Загрузка конфигурации…
                 </div>
-
-                <!-- Editor Textarea Area -->
-                <div style="position:relative;flex:1;display:flex;flex-direction:column;background:#090d16;">
-                    <div id="pxe-editor-loader" style="display:none;position:absolute;inset:0;background:rgba(9,13,22,0.7);z-index:10;display:flex;align-items:center;justify-content:center;color:#38bdf8;font-size:13px;">
-                        Загрузка конфигурации…
-                    </div>
-                    <textarea id="pxe-cfg-textarea" spellcheck="false"
-                              style="width:100%;height:540px;background:#090d16;color:#7dd3fc;border:none;padding:16px;box-sizing:border-box;font-family:'JetBrains Mono',Consolas,'Courier New',monospace;font-size:13px;line-height:1.55;tab-size:4;resize:vertical;outline:none;white-space:pre;overflow-x:auto;"></textarea>
-                </div>
-
-                <!-- Editor Footer -->
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#f8fafc;border-top:1px solid var(--line);font-size:11px;color:var(--muted);flex-wrap:wrap;gap:8px;">
-                    <div id="pxe-editor-status" style="display:flex;align-items:center;gap:6px;">
-                        <span style="color:#10b981;">●</span> Синхронизирован с сервером
-                    </div>
-                    <div style="display:flex;align-items:center;gap:12px;font-family:Consolas,monospace;">
-                        <span id="pxe-editor-lines">0 строк</span>
-                        <span>·</span>
-                        <span id="pxe-editor-chars">0 симв.</span>
-                        <span>·</span>
-                        <span>UTF-8</span>
-                        <span>·</span>
-                        <kbd style="background:#e2e8f0;padding:2px 5px;border-radius:4px;font-size:10px;color:#334155;">Ctrl + S</kbd>
-                    </div>
-                </div>
+                <textarea id="pxe-cfg-textarea" spellcheck="false"
+                          style="display:block;width:100%;height:540px;min-height:540px;margin:0;padding:16px;background:#0b1120;color:#7dd3fc;border:none;box-sizing:border-box;font-family:'JetBrains Mono',Consolas,'Courier New',monospace;font-size:13px;line-height:1.55;tab-size:4;outline:none;white-space:pre;overflow:auto;resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:#f8fafc;border-top:1px solid var(--line);font-size:11px;color:var(--muted);font-family:Consolas,monospace;flex-wrap:wrap;gap:8px;">
+                <span id="pxe-editor-stats">0 строк · 0 симв. · UTF-8</span>
+                <span>Быстрое сохранение: <kbd style="background:#e2e8f0;padding:2px 5px;border-radius:4px;color:#334155;">Ctrl + S</kbd></span>
             </div>
         </div>
     `;
 
     // Elements
     const textarea = $('#pxe-cfg-textarea');
-    const dirtyBadge = $('#pxe-editor-dirty-badge');
-    const statusText = $('#pxe-editor-status');
-    const linesEl = $('#pxe-editor-lines');
-    const charsEl = $('#pxe-editor-chars');
-    const snippetsSelect = $('#pxe-editor-snippets');
+    const dirtyBadge = $('#pxe-dirty-badge');
+    const statusText = $('#pxe-info-status');
+    const statsEl = $('#pxe-editor-stats');
+    const snippetsSelect = $('#pxe-cfg-snippets');
     const loader = $('#pxe-editor-loader');
     const saveBtn = $('#pxe-btn-save-cfg');
     const revertBtn = $('#pxe-btn-revert-cfg');
+    const menuContainer = $('#pxe-menu-items-container');
+    const menuList = $('#pxe-menu-items-list');
+
+    // Parse Menu Entries helper
+    const updateMenuItemsNav = (content, cfgType) => {
+        menuList.innerHTML = '';
+        const items = [];
+        if (cfgType === 'grub') {
+            const regex = /(?:menuentry|submenu)\s+["']([^"']+)["']/g;
+            let match;
+            while ((match = regex.exec(content)) !== null) {
+                const title = match[1].trim();
+                if (!title.includes('====') && !title.includes('---') && !title.includes('AUTONOMOUS PRODUCTION')) {
+                    items.push({ title, index: match.index });
+                }
+            }
+        } else if (cfgType === 'syslinux') {
+            const regex = /(?:MENU\s+LABEL|LABEL)\s+([^\r\n]+)/gi;
+            let match;
+            while ((match = regex.exec(content)) !== null) {
+                const raw = match[1].replace(/^\^?\d+\)?\s*/, '').trim();
+                if (raw && !raw.startsWith('^') && !items.some(i => i.title === raw)) {
+                    items.push({ title: raw, index: match.index });
+                }
+            }
+        }
+
+        if (items.length > 0) {
+            menuContainer.style.display = 'flex';
+            items.forEach(item => {
+                const badge = document.createElement('span');
+                badge.className = 'pill blue';
+                badge.style.cursor = 'pointer';
+                badge.style.transition = 'all .15s ease';
+                badge.textContent = item.title;
+                badge.title = 'Перейти к этому пункту в редакторе';
+                badge.addEventListener('click', () => {
+                    textarea.focus();
+                    textarea.setSelectionRange(item.index, item.index + item.title.length);
+                    const linesBefore = content.substring(0, item.index).split('\n').length;
+                    textarea.scrollTop = Math.max(0, (linesBefore - 3) * 20);
+                });
+                menuList.appendChild(badge);
+            });
+        } else {
+            menuContainer.style.display = 'none';
+        }
+    };
 
     // Update Counters
     const updateCounters = () => {
         const val = textarea.value || '';
         const lines = val ? val.split('\n').length : 0;
-        linesEl.textContent = `${lines} строк`;
-        charsEl.textContent = `${val.length} симв.`;
+        statsEl.textContent = `${lines} строк · ${val.length} симв. · UTF-8`;
     };
 
     // Mark Dirty / Clean
@@ -931,7 +913,7 @@ async function renderPxeEditorTab(container) {
         pxeEditorIsDirty = dirty;
         dirtyBadge.style.display = dirty ? 'inline-block' : 'none';
         if (dirty) {
-            statusText.innerHTML = '<span style="color:#f59e0b;">●</span> Есть несохранённые изменения';
+            statusText.innerHTML = '<span style="color:#f59e0b;">●</span> Есть несохранённые правки';
         } else {
             statusText.innerHTML = '<span style="color:#10b981;">●</span> Синхронизирован с сервером';
         }
@@ -939,7 +921,7 @@ async function renderPxeEditorTab(container) {
 
     // Populate Snippets for active config
     const updateSnippetsDropdown = (meta) => {
-        snippetsSelect.innerHTML = '<option value="">＋ Вставить шаблон…</option>';
+        snippetsSelect.innerHTML = '<option value="">＋ Вставить пункт меню…</option>';
         if (meta && meta.snippets && meta.snippets.length > 0) {
             meta.snippets.forEach((snip, idx) => {
                 const opt = document.createElement('option');
@@ -955,38 +937,37 @@ async function renderPxeEditorTab(container) {
 
     // Load Specific Config
     const loadConfig = async (cfgId) => {
-        const meta = PXE_CONFIGS_CATALOG.find(c => c.id === cfgId) || PXE_CONFIGS_CATALOG[0];
-        pxeCurrentConfig = meta.id;
+        const meta = PXE_CONFIGS_INFO[cfgId] || PXE_CONFIGS_INFO.grub;
+        pxeCurrentConfig = cfgId;
 
-        // Update Left Sidebar Active State
-        container.querySelectorAll('.pxe-file-card').forEach(card => {
-            const isMatch = card.dataset.cfgId === meta.id;
-            card.style.borderColor = isMatch ? 'var(--accent)' : 'var(--line)';
-            card.style.background = isMatch ? '#eff6ff' : '#ffffff';
+        // Update Tabs Buttons
+        container.querySelectorAll('.pxe-cfg-btn').forEach(btn => {
+            btn.className = `pxe-cfg-btn ${btn.dataset.cfg === cfgId ? 'primary' : 'secondary'}`;
         });
 
-        // Update Header
-        $('#pxe-editor-file-icon').textContent = meta.icon;
-        $('#pxe-editor-file-name').textContent = meta.name;
-        $('#pxe-editor-file-badge').textContent = meta.platform;
-        $('#pxe-editor-file-path').textContent = meta.defaultPath;
+        // Update Info Header
+        $('#pxe-info-title').textContent = meta.title;
+        $('#pxe-info-path').textContent = meta.path;
+        $('#pxe-info-desc').textContent = meta.desc;
         updateSnippetsDropdown(meta);
 
         // Fetch Config from API
         loader.style.display = 'flex';
         try {
-            const res = await api(`/pxe/configs/${meta.id}`);
+            const res = await api(`/pxe/configs/${cfgId}`);
             const content = res.content || '';
             textarea.value = content;
             pxeEditorOriginalContent = content;
             if (res.path) {
-                $('#pxe-editor-file-path').textContent = res.path;
+                $('#pxe-info-path').textContent = res.path;
             }
             setDirty(false);
             updateCounters();
+            updateMenuItemsNav(content, cfgId);
         } catch (e) {
-            textarea.value = `# Ошибка загрузки ${meta.name}:\n# ${e.message}`;
+            textarea.value = `# Ошибка загрузки ${cfgId}:\n# ${e.message}`;
             statusText.innerHTML = `<span style="color:#ef4444;">●</span> Ошибка: ${escape(e.message)}`;
+            menuContainer.style.display = 'none';
         } finally {
             loader.style.display = 'none';
         }
@@ -1017,7 +998,7 @@ async function renderPxeEditorTab(container) {
     snippetsSelect.addEventListener('change', () => {
         const idx = snippetsSelect.value;
         if (idx === '') return;
-        const meta = PXE_CONFIGS_CATALOG.find(c => c.id === pxeCurrentConfig);
+        const meta = PXE_CONFIGS_INFO[pxeCurrentConfig];
         if (meta && meta.snippets[idx]) {
             const snipCode = meta.snippets[idx].code;
             const pos = textarea.selectionStart;
@@ -1027,17 +1008,19 @@ async function renderPxeEditorTab(container) {
             textarea.focus();
             setDirty(true);
             updateCounters();
-            toast(`Шаблон "${meta.snippets[idx].label}" вставлен в редактор`);
+            updateMenuItemsNav(textarea.value, pxeCurrentConfig);
+            toast(`Шаблон "${meta.snippets[idx].label}" добавлен`);
         }
         snippetsSelect.value = '';
     });
 
     // Revert button
     revertBtn.addEventListener('click', () => {
-        if (!pxeEditorIsDirty || confirm('Отменить все несохранённые изменения и восстановить исходную версию?')) {
+        if (!pxeEditorIsDirty || confirm('Отменить несохранённые изменения и вернуть версию с сервера?')) {
             textarea.value = pxeEditorOriginalContent;
             setDirty(false);
             updateCounters();
+            updateMenuItemsNav(textarea.value, pxeCurrentConfig);
             toast('Изменения отменены');
         }
     });
@@ -1054,10 +1037,11 @@ async function renderPxeEditorTab(container) {
             pxeEditorOriginalContent = content;
             setDirty(false);
             const now = new Date().toLocaleTimeString();
-            statusText.innerHTML = `<span style="color:#10b981;">●</span> Сохранено и синхронизировано в ${now}`;
-            toast(`Файл ${pxeCurrentConfig} успешно сохранён и применён на сервере!`);
+            statusText.innerHTML = `<span style="color:#10b981;">●</span> Сохранено в ${now}`;
+            toast(`Файл ${pxeCurrentConfig} успешно сохранён!`);
+            updateMenuItemsNav(content, pxeCurrentConfig);
         } catch (e) {
-            statusText.innerHTML = `<span style="color:#ef4444;">●</span> Ошибка сохранения: ${escape(e.message)}`;
+            statusText.innerHTML = `<span style="color:#ef4444;">●</span> Ошибка: ${escape(e.message)}`;
             toast(e.message, true);
         } finally {
             saveBtn.disabled = false;
@@ -1065,10 +1049,10 @@ async function renderPxeEditorTab(container) {
         }
     });
 
-    // Left Cards Click Handler
-    container.querySelectorAll('.pxe-file-card').forEach(card => {
-        card.addEventListener('click', async () => {
-            const cfgId = card.dataset.cfgId;
+    // Tabs Click Handler
+    container.querySelectorAll('.pxe-cfg-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const cfgId = btn.dataset.cfg;
             if (cfgId === pxeCurrentConfig) return;
 
             if (pxeEditorIsDirty) {

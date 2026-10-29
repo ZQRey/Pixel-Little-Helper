@@ -62,7 +62,7 @@ function renderPxeConnectionScreen(settings, testRes) {
             <form id="pxe-connect-form">
                 <label>
                     <span>Адрес и порт PXE-сервера (URL)</span>
-                    <input name="serverUrl" value="${escape(settings.serverUrl || 'http://172.16.16.6:8080')}" placeholder="http://172.16.16.6:8080" required>
+                    <input name="serverUrl" value="${escape(settings.serverUrl || 'http://172.16.16.61:8080')}" placeholder="http://172.16.16.61:8080" required>
                     <small>Адрес FastAPI-панели управления PXE (по умолчанию порт 8080 на выделенном сервере или локально).</small>
                 </label>
 
@@ -646,8 +646,8 @@ function showUnattendedCustomizerModal(images) {
     };
 
     // Prepopulate standard clinic apps
-    addAppRow('Google Chrome', '\\\\172.16.16.6\\install\\soft\\chrome.exe', '/silent /install');
-    addAppRow('7-Zip', '\\\\172.16.16.6\\install\\soft\\7z.msi', '/qn /norestart');
+    addAppRow('Google Chrome', '\\\\172.16.16.61\\install\\soft\\chrome.exe', '/silent /install');
+    addAppRow('7-Zip', '\\\\172.16.16.61\\install\\soft\\7z.msi', '/qn /norestart');
 
     $('#btn-add-app-row').addEventListener('click', () => addAppRow());
 

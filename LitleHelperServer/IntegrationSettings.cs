@@ -62,7 +62,7 @@ public record SecurityOptions(
 public record RegistrationOptions(List<string> AllowedNetworks);
 public record PxeOptions(
     bool Enabled = false,
-    string ServerUrl = "http://172.16.16.6:8080",
+    string ServerUrl = "http://172.16.16.61:8080",
     int TimeoutSeconds = 10,
     string ApiKey = ""
 );
@@ -90,7 +90,7 @@ public class IntegrationSettings(IConfiguration configuration, IDataProtectionPr
             throw new ArgumentException("Укажите корректный адрес PXE-сервера.");
         var options = new PxeOptions(
             Enabled: update.Enabled,
-            ServerUrl: string.IsNullOrWhiteSpace(url) ? "http://172.16.16.6:8080" : url,
+            ServerUrl: string.IsNullOrWhiteSpace(url) ? "http://172.16.16.61:8080" : url,
             TimeoutSeconds: update.TimeoutSeconds > 0 ? update.TimeoutSeconds : 10,
             ApiKey: update.ApiKey ?? ""
         );

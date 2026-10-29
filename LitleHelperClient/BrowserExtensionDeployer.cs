@@ -34,7 +34,12 @@ public static class BrowserExtensionDeployer
                     $"chrome-extension://{ExtensionId}/"
                 }
             };
-            File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifestObj, new JsonSerializerOptions { WriteIndented = true }));
+            string manifestJson = JsonSerializer.Serialize(manifestObj, new JsonSerializerOptions { WriteIndented = true });
+            if (!File.Exists(manifestPath) || File.ReadAllText(manifestPath) != manifestJson)
+            {
+                try { File.WriteAllText(manifestPath, manifestJson); }
+                catch (UnauthorizedAccessException) { /* Expected for non-admin user in Program Files */ }
+            }
 
             // Update XML file path for local installation
             string updateXmlUrl = new Uri(updateXmlPath).AbsoluteUri;

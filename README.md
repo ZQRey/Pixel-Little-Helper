@@ -2,6 +2,7 @@
 
 * `LitleHelperClient` — WPF-помощник: SignalR, инвентаризация, команды, GLPI и фиксированный офлайн-набор.
 * `LitleHelperServer` — ASP.NET Core 8, EF Core, PostgreSQL/SQLite и веб-панель с четырьмя ролями.
+* База знаний и шпаргалка разработчика: [PROJECT_CHEAT_SHEET.md](PROJECT_CHEAT_SHEET.md).
 
 Начните с [инструкции сервера](LitleHelperServer/README.md): запуск, GLPI, подключение ПК и MSI. [Инструкция клиента](LitleHelperClient/README.md) описывает настройки и ограничения.
 

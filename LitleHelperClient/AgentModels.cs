@@ -1,6 +1,10 @@
 namespace PixelHelper;
 
-public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = true, bool SupportsAiDiagnostics = true, string ClientVersion = "");
+public sealed record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = true, bool SupportsAiDiagnostics = true, string ClientVersion = "", bool IsPortable = false);
+public sealed record VisibleWifiNetwork(string Ssid, string Bssid, int SignalStrength);
+public sealed record AntiTheftTelemetryRequest(string MachineName, string HardwareUuid, bool IsPortable, int BatteryPercent, bool IsCharging, string ConnectedSsid, string ConnectedBssid, List<VisibleWifiNetwork>? VisibleNetworks = null, string ClientVersion = "", bool WireGuardActive = false);
+public sealed record AntiTheftTelemetryResponse(bool IsLockedDown, string LockMessage, bool TriggerBitLockerRecovery, bool Success = true, bool LockScreen = false, bool LockSession = false);
+
 public sealed record ActionButton(
     int Id,
     string Title,

@@ -37,6 +37,19 @@ public sealed class MailStorageEngine
                 {
                     string json = File.ReadAllText(IndexPath);
                     messages = JsonSerializer.Deserialize<List<MailMessageItem>>(json, Settings.Json) ?? new();
+                    bool repaired = false;
+                    foreach (var m in messages)
+                    {
+                        if (m.Folder == MailFolderKind.Sent && !m.IsRead)
+                        {
+                            m.IsRead = true;
+                            repaired = true;
+                        }
+                    }
+                    if (repaired)
+                    {
+                        SaveIndex();
+                    }
                 }
                 else
                 {
@@ -137,6 +150,7 @@ public sealed class MailStorageEngine
         string remoteUid,
         byte[] rawMimeBytes,
         MailFolderKind folder = MailFolderKind.Inbox,
+        bool? isSeen = null,
         CancellationToken token = default)
     {
         var parsed = MailProtocolClient.ParseMimeMessage(
@@ -151,6 +165,16 @@ public sealed class MailStorageEngine
         {
             msg.Folder = folder;
         }
+
+        if (folder == MailFolderKind.Sent)
+        {
+            msg.IsRead = true;
+        }
+        else if (isSeen.HasValue)
+        {
+            msg.IsRead = isSeen.Value;
+        }
+
         string accountDir = Path.Combine(StoreRoot, account.Id);
         string emlDir = Path.Combine(accountDir, account.StorageMode == MailStorageMode.DownloadAllToComputer ? "LocalArchive" : "Cache");
         string attDir = Path.Combine(accountDir, "Attachments", msg.Id);
@@ -192,7 +216,15 @@ public sealed class MailStorageEngine
 
         lock (gate)
         {
-            messages.RemoveAll(m => m.AccountId == account.Id && !string.IsNullOrEmpty(remoteUid) && m.RemoteUid == remoteUid);
+            var existing = messages.FirstOrDefault(m => m.AccountId == account.Id && !string.IsNullOrEmpty(remoteUid) && m.RemoteUid == remoteUid);
+            if (existing != null)
+            {
+                if (existing.IsRead)
+                {
+                    msg.IsRead = true;
+                }
+                messages.Remove(existing);
+            }
             messages.Add(msg);
             SaveIndex();
         }
@@ -226,10 +258,34 @@ public sealed class MailStorageEngine
             try
             {
                 var fetched = await MailProtocolClient.FetchNewMessagesAsync(account, plainPassword, knownUids, 40, token);
-                foreach (var (uid, rawMime, folder) in fetched)
+                foreach (var item in fetched.Messages)
                 {
-                    var item = await IngestRawMimeAsync(account, uid, rawMime, folder, token);
-                    newlyArrived.Add(item);
+                    var msgItem = await IngestRawMimeAsync(account, item.RemoteUid, item.RawMime, item.Folder, item.IsSeen, token);
+                    newlyArrived.Add(msgItem);
+                }
+
+                if (fetched.SeenUids.Count > 0)
+                {
+                    bool updatedAny = false;
+                    lock (gate)
+                    {
+                        foreach (var m in messages.Where(m => m.AccountId == account.Id && !m.IsRead && !string.IsNullOrEmpty(m.RemoteUid)))
+                        {
+                            if (fetched.SeenUids.Contains(m.RemoteUid))
+                            {
+                                m.IsRead = true;
+                                updatedAny = true;
+                            }
+                        }
+                        if (updatedAny)
+                        {
+                            SaveIndex();
+                        }
+                    }
+                    if (updatedAny)
+                    {
+                        MessagesUpdated?.Invoke();
+                    }
                 }
 
                 account.LastSyncUtc = DateTime.UtcNow;
@@ -422,10 +478,10 @@ public sealed class MailStorageEngine
         {
             string plainPassword = MailCryptoService.UnprotectSecret(account.EncryptedPassword);
             var purged = await MailProtocolClient.FetchAndPurgeAllAsync(account, plainPassword, token);
-            foreach (var (uid, rawMime, folder) in purged)
+            foreach (var item in purged)
             {
-                var item = await IngestRawMimeAsync(account, uid, rawMime, folder, token);
-                item.DownloadedToPc = true;
+                var msgItem = await IngestRawMimeAsync(account, item.RemoteUid, item.RawMime, item.Folder, item.IsSeen, token);
+                msgItem.DownloadedToPc = true;
             }
 
             var (count, destPath) = OffloadAccountToComputer(account.Id, format: account.OffloadFormat, accountEmail: account.EmailAddress);
@@ -515,16 +571,38 @@ public sealed class MailStorageEngine
 
     public void MarkAsRead(string messageId, bool isRead = true)
     {
+        MailMessageItem? target = null;
         lock (gate)
         {
             var msg = messages.FirstOrDefault(m => m.Id == messageId);
             if (msg != null && msg.IsRead != isRead)
             {
                 msg.IsRead = isRead;
+                target = msg;
                 SaveIndex();
             }
         }
         MessagesUpdated?.Invoke();
+
+        if (target != null && !string.IsNullOrEmpty(target.RemoteUid) && !string.IsNullOrEmpty(target.AccountId))
+        {
+            var acc = settings.MailAccounts.FirstOrDefault(a => a.Id == target.AccountId);
+            if (acc != null && acc.IncomingProtocol == MailIncomingProtocol.Imap && !string.IsNullOrWhiteSpace(acc.IncomingHost))
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        string pwd = MailCryptoService.UnprotectSecret(acc.EncryptedPassword);
+                        await MailProtocolClient.SetImapSeenFlagAsync(acc, pwd, target.RemoteUid, target.Folder, isRead, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        Settings.Log(ex);
+                    }
+                });
+            }
+        }
     }
 
     public void MoveToFolder(string messageId, MailFolderKind targetFolder)

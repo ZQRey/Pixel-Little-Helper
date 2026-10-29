@@ -52,7 +52,7 @@ public static class MailProtocolClient
         }
     }
 
-    public static async Task<List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)>> FetchNewMessagesAsync(
+    public static async Task<FetchResult> FetchNewMessagesAsync(
         MailAccountConfig account,
         string plainPassword,
         HashSet<string> knownUids,
@@ -76,7 +76,7 @@ public static class MailProtocolClient
                 token);
         }
 
-        return await FetchPop3Async(
+        var pop3List = await FetchPop3Async(
             account.IncomingHost,
             account.IncomingPort,
             account.IncomingSslMode,
@@ -86,9 +86,10 @@ public static class MailProtocolClient
             deleteFromServer,
             maxMessages,
             token);
+        return new FetchResult(pop3List, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
     }
 
-    public static async Task<List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)>> FetchAndPurgeAllAsync(
+    public static async Task<List<FetchedMessageItem>> FetchAndPurgeAllAsync(
         MailAccountConfig account,
         string plainPassword,
         CancellationToken token = default)
@@ -98,7 +99,7 @@ public static class MailProtocolClient
 
         if (account.IncomingProtocol == MailIncomingProtocol.Imap)
         {
-            return await FetchImapAsync(
+            var imapResult = await FetchImapAsync(
                 account.IncomingHost,
                 account.IncomingPort,
                 account.IncomingSslMode,
@@ -108,6 +109,7 @@ public static class MailProtocolClient
                 deleteFromServer: true,
                 maxMessages: 10000,
                 token: token);
+            return imapResult.Messages;
         }
 
         return await FetchPop3Async(
@@ -271,7 +273,7 @@ public static class MailProtocolClient
         }
     }
 
-    private static async Task<List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)>> FetchImapAsync(
+    private static async Task<FetchResult> FetchImapAsync(
         string host,
         int port,
         MailSslMode ssl,
@@ -282,7 +284,8 @@ public static class MailProtocolClient
         int maxMessages,
         CancellationToken token)
     {
-        var result = new List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)>();
+        var result = new List<FetchedMessageItem>();
+        var seenUids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var conn = await ConnectAndUpgradeAsync(host, port, ssl, "a000 STARTTLS", token);
         using (conn.Tcp)
         await using (conn.Stream)
@@ -301,7 +304,7 @@ public static class MailProtocolClient
             }
 
             // 1. Fetch from INBOX
-            await FetchFolderMessagesAsync(conn, "INBOX", MailFolderKind.Inbox, result, knownUids, deleteFromServer, maxMessages, token);
+            await FetchFolderMessagesAsync(conn, "INBOX", MailFolderKind.Inbox, result, seenUids, knownUids, deleteFromServer, maxMessages, token);
 
             // 2. Discover Sent folder via LIST
             await conn.Writer.WriteLineAsync("a004 LIST \"\" \"*\"");
@@ -332,20 +335,21 @@ public static class MailProtocolClient
             // 3. Fetch from Sent folder if discovered
             if (!string.IsNullOrWhiteSpace(sentFolder))
             {
-                await FetchFolderMessagesAsync(conn, sentFolder, MailFolderKind.Sent, result, knownUids, deleteFromServer, maxMessages, token);
+                await FetchFolderMessagesAsync(conn, sentFolder, MailFolderKind.Sent, result, seenUids, knownUids, deleteFromServer, maxMessages, token);
             }
 
             await conn.Writer.WriteLineAsync("a999 LOGOUT");
         }
 
-        return result;
+        return new FetchResult(result, seenUids);
     }
 
     private static async Task FetchFolderMessagesAsync(
         (TcpClient Tcp, Stream Stream, StreamReader Reader, StreamWriter Writer) conn,
         string folderName,
         MailFolderKind folderKind,
-        List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)> result,
+        List<FetchedMessageItem> result,
+        HashSet<string> seenUids,
         HashSet<string> knownUids,
         bool deleteFromServer,
         int maxMessages,
@@ -366,7 +370,29 @@ public static class MailProtocolClient
         }
         if (!selectOk) return;
 
-        string searchTag = "q" + Guid.NewGuid().ToString("N")[..4];
+        string prefix = folderKind == MailFolderKind.Sent ? "sent_" : "";
+
+        // Query UID SEARCH SEEN to detect all read messages
+        string seenTag = "q" + Guid.NewGuid().ToString("N")[..4];
+        await conn.Writer.WriteLineAsync($"{seenTag} UID SEARCH SEEN");
+        var folderSeenUids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (true)
+        {
+            string? line = await conn.Reader.ReadLineAsync(token);
+            if (line == null) break;
+            if (line.StartsWith("* SEARCH", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = line.Substring(8).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var p in parts)
+                {
+                    folderSeenUids.Add(p);
+                    seenUids.Add(prefix + p);
+                }
+            }
+            if (line.StartsWith(seenTag + " ", StringComparison.OrdinalIgnoreCase)) break;
+        }
+
+        string searchTag = "a" + Guid.NewGuid().ToString("N")[..4];
         await conn.Writer.WriteLineAsync($"{searchTag} UID SEARCH ALL");
         var uids = new List<string>();
         while (true)
@@ -381,15 +407,15 @@ public static class MailProtocolClient
             if (line.StartsWith(searchTag + " ", StringComparison.OrdinalIgnoreCase)) break;
         }
 
-        string prefix = folderKind == MailFolderKind.Sent ? "sent_" : "";
         var toFetch = uids.Where(u => !knownUids.Contains(prefix + u)).TakeLast(maxMessages).ToList();
         int cmdIdx = 10;
         foreach (string uid in toFetch)
         {
             string tag = $"f{cmdIdx++:D3}";
-            await conn.Writer.WriteLineAsync($"{tag} UID FETCH {uid} (BODY.PEEK[])");
+            await conn.Writer.WriteLineAsync($"{tag} UID FETCH {uid} (FLAGS BODY.PEEK[])");
             var rawBuilder = new StringBuilder();
             bool inBody = false;
+            bool isSeen = folderKind == MailFolderKind.Sent || folderSeenUids.Contains(uid);
 
             while (true)
             {
@@ -398,6 +424,10 @@ public static class MailProtocolClient
                 if (line.StartsWith(tag + " ", StringComparison.OrdinalIgnoreCase)) break;
                 if (!inBody && line.StartsWith("* ", StringComparison.OrdinalIgnoreCase) && line.Contains("FETCH", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (line.Contains("\\Seen", StringComparison.OrdinalIgnoreCase))
+                    {
+                        isSeen = true;
+                    }
                     inBody = true;
                     continue;
                 }
@@ -412,7 +442,7 @@ public static class MailProtocolClient
 
             if (!string.IsNullOrWhiteSpace(rawText))
             {
-                result.Add((prefix + uid, Encoding.UTF8.GetBytes(rawText), folderKind));
+                result.Add(new FetchedMessageItem(prefix + uid, Encoding.UTF8.GetBytes(rawText), folderKind, isSeen));
 
                 if (deleteFromServer)
                 {
@@ -534,7 +564,7 @@ public static class MailProtocolClient
         }
     }
 
-    private static async Task<List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)>> FetchPop3Async(
+    private static async Task<List<FetchedMessageItem>> FetchPop3Async(
         string host,
         int port,
         MailSslMode ssl,
@@ -545,7 +575,7 @@ public static class MailProtocolClient
         int maxMessages,
         CancellationToken token)
     {
-        var result = new List<(string RemoteUid, byte[] RawMime, MailFolderKind Folder)>();
+        var result = new List<FetchedMessageItem>();
         var conn = await ConnectAndUpgradeAsync(host, port, ssl, "STLS", token);
         using (conn.Tcp)
         await using (conn.Stream)
@@ -595,7 +625,7 @@ public static class MailProtocolClient
                     sb.AppendLine(line);
                 }
 
-                result.Add((item.Uid, Encoding.UTF8.GetBytes(sb.ToString()), MailFolderKind.Inbox));
+                result.Add(new FetchedMessageItem(item.Uid, Encoding.UTF8.GetBytes(sb.ToString()), MailFolderKind.Inbox, false));
 
                 if (deleteFromServer)
                 {
@@ -608,6 +638,94 @@ public static class MailProtocolClient
         }
 
         return result;
+    }
+
+    public static async Task SetImapSeenFlagAsync(
+        MailAccountConfig account,
+        string plainPassword,
+        string remoteUid,
+        MailFolderKind folder,
+        bool isRead,
+        CancellationToken token = default)
+    {
+        if (account.IncomingProtocol != MailIncomingProtocol.Imap || string.IsNullOrWhiteSpace(account.IncomingHost))
+            return;
+
+        string login = string.IsNullOrWhiteSpace(account.Username) ? account.EmailAddress : account.Username;
+        string cleanUid = remoteUid;
+        if (cleanUid.StartsWith("sent_", StringComparison.OrdinalIgnoreCase))
+        {
+            cleanUid = cleanUid.Substring(5);
+        }
+
+        try
+        {
+            var conn = await ConnectAndUpgradeAsync(account.IncomingHost, account.IncomingPort, account.IncomingSslMode, "a000 STARTTLS", token);
+            using (conn.Tcp)
+            await using (conn.Stream)
+            {
+                await conn.Writer.WriteLineAsync($"a001 LOGIN {QuoteImap(login)} {QuoteImap(plainPassword)}");
+                while (true)
+                {
+                    string? line = await conn.Reader.ReadLineAsync(token);
+                    if (line == null) return;
+                    if (line.StartsWith("a001 ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!line.StartsWith("a001 OK", StringComparison.OrdinalIgnoreCase)) return;
+                        break;
+                    }
+                }
+
+                string folderName = "INBOX";
+                if (folder == MailFolderKind.Sent)
+                {
+                    await conn.Writer.WriteLineAsync("a002 LIST \"\" \"*\"");
+                    while (true)
+                    {
+                        string? line = await conn.Reader.ReadLineAsync(token);
+                        if (line == null) break;
+                        if (line.StartsWith("* LIST", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string lower = line.ToLowerInvariant();
+                            if (lower.Contains("\\sent") || lower.Contains("sent") || lower.Contains("отправленн"))
+                            {
+                                var match = Regex.Match(line, "\"[^\"]+\"\\s+\"?([^\"]+)\"?$|(\"[^\"]+\")$");
+                                if (match.Success)
+                                {
+                                    string candidate = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value.Trim('"');
+                                    if (!candidate.Equals("INBOX", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        folderName = candidate;
+                                    }
+                                }
+                            }
+                        }
+                        if (line.StartsWith("a002 ", StringComparison.OrdinalIgnoreCase)) break;
+                    }
+                }
+
+                await conn.Writer.WriteLineAsync($"a003 SELECT {QuoteImap(folderName)}");
+                while (true)
+                {
+                    string? line = await conn.Reader.ReadLineAsync(token);
+                    if (line == null || line.StartsWith("a003 ", StringComparison.OrdinalIgnoreCase)) break;
+                }
+
+                string flagCmd = isRead ? "+FLAGS (\\Seen)" : "-FLAGS (\\Seen)";
+                await conn.Writer.WriteLineAsync($"a004 UID STORE {cleanUid} {flagCmd}");
+                while (true)
+                {
+                    string? line = await conn.Reader.ReadLineAsync(token);
+                    if (line == null || line.StartsWith("a004 ", StringComparison.OrdinalIgnoreCase)) break;
+                }
+
+                await conn.Writer.WriteLineAsync("a005 LOGOUT");
+            }
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+        }
     }
 
     public static async Task SendSmtpAsync(

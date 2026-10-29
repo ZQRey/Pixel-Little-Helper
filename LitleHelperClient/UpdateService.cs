@@ -25,6 +25,7 @@ internal sealed class UpdateService : ServiceBase
         _ = Task.Run(() => MachineIdentity.RunAsync(stop.Token));
         _ = Task.Run(() => AdminCommandPipe.RunServerAsync(stop.Token));
         _ = Task.Run(BrowserExtensionDeployer.EnsureDeployed);
+        _ = Task.Run(() => AntiTheftService.RunSystemWorkerAsync(stop.Token));
     }
     protected override void OnStop() => stop?.Cancel();
     private static async Task Loop(CancellationToken token)

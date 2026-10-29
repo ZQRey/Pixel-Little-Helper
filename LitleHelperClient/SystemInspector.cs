@@ -122,6 +122,94 @@ public static class SystemInspector
         return ver != null ? $"{ver.Major}.{ver.Minor}.{ver.Build}" : "1.2.79";
     }
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct SYSTEM_POWER_STATUS
+    {
+        public byte ACLineStatus;
+        public byte BatteryFlag;
+        public byte BatteryLifePercent;
+        public byte SystemStatusFlag;
+        public int BatteryLifeTime;
+        public int BatteryFullLifeTime;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS sps);
+
+    public static (int Percent, bool IsCharging, bool HasBattery) GetBatteryStatus()
+    {
+        try
+        {
+            if (GetSystemPowerStatus(out var sps))
+            {
+                bool hasBattery = sps.BatteryFlag != 128 && sps.BatteryFlag != 255;
+                int percent = sps.BatteryLifePercent <= 100 ? sps.BatteryLifePercent : -1;
+                bool isCharging = sps.ACLineStatus == 1 || (sps.BatteryFlag & 8) != 0;
+                return (percent, isCharging, hasBattery);
+            }
+        }
+        catch { }
+        return (-1, false, false);
+    }
+
+    public static bool DetectIsPortable()
+    {
+        var (percent, isCharging, hasBattery) = GetBatteryStatus();
+        if (hasBattery || percent >= 0) return true;
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT ChassisTypes FROM Win32_SystemEnclosure");
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                if (obj["ChassisTypes"] is ushort[] types)
+                {
+                    foreach (var t in types)
+                    {
+                        if (t is 8 or 9 or 10 or 11 or 14 or 30 or 31 or 32) return true;
+                    }
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    public static bool IsDomainJoined()
+    {
+        try
+        {
+            using var cs = new ManagementObjectSearcher("SELECT PartOfDomain FROM Win32_ComputerSystem");
+            foreach (ManagementObject obj in cs.Get())
+            {
+                if (obj["PartOfDomain"] is bool isDomain) return isDomain;
+            }
+        }
+        catch { }
+        try
+        {
+            string domain = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().DomainName;
+            if (!string.IsNullOrWhiteSpace(domain)) return true;
+        }
+        catch { }
+        return !string.Equals(Environment.UserDomainName, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string GetHardwareUuid()
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct");
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                string? uuid = obj["UUID"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(uuid) && !uuid.Equals("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF", StringComparison.OrdinalIgnoreCase))
+                    return uuid.Trim();
+            }
+        }
+        catch { }
+        return Environment.MachineName;
+    }
+
     public static MachineInfo Machine()
     {
         string ip = "";
@@ -135,7 +223,8 @@ public static class SystemInspector
             if (!string.IsNullOrEmpty(recovered)) user = recovered;
         }
 
-        return new(Environment.MachineName, user, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName(), ClientVersion: ClientVersion());
+        bool isPortable = DetectIsPortable();
+        return new(Environment.MachineName, user, Environment.UserDomainName, ip, Environment.OSVersion.VersionString, GetUserFullName(), ClientVersion: ClientVersion(), IsPortable: isPortable);
     }
     public static InventorySnapshot Collect()
     {

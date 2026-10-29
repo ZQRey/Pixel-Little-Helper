@@ -155,3 +155,7 @@ public sealed class MailMessageItem
     public string ToDisplay => ToAddresses.Count > 0 ? string.Join(", ", ToAddresses) : AccountEmail;
 }
 
+public sealed record FetchedMessageItem(string RemoteUid, byte[] RawMime, MailFolderKind Folder, bool IsSeen = false);
+public sealed record FetchResult(List<FetchedMessageItem> Messages, HashSet<string> SeenUids);
+
+

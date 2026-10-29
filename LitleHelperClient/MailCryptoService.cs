@@ -403,7 +403,7 @@ public static class MailCryptoService
                 await entryStream.CopyToAsync(ms, token);
                 byte[] rawMime = ms.ToArray();
                 string uid = "restored_" + Guid.NewGuid().ToString("N")[..8];
-                await storage.IngestRawMimeAsync(account, uid, rawMime, MailFolderKind.Inbox, token);
+                await storage.IngestRawMimeAsync(account, uid, rawMime, MailFolderKind.Inbox, token: token);
                 restored++;
             }
         }

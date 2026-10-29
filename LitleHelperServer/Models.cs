@@ -26,6 +26,22 @@ public class Computer
     public string SoftwareJson { get; set; } = "[]";
     public int? BranchId { get; set; }
     public string Room { get; set; } = "";
+    public bool IsPortable { get; set; }
+    public bool IsLockedDown { get; set; }
+    public string LockMessage { get; set; } = "";
+    public bool BitLockerRecoveryTriggered { get; set; }
+    public bool LockLevelScreen { get; set; } = true;
+    public bool LockLevelSession { get; set; }
+    public bool LockLevelBitLocker { get; set; }
+    public int BatteryPercent { get; set; } = -1;
+    public bool IsCharging { get; set; }
+    public string LastSsid { get; set; } = "";
+    public string LastBssid { get; set; } = "";
+    public string HardwareUuid { get; set; } = "";
+    public DateTime? LastLocationTime { get; set; }
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public string LocationAddress { get; set; } = "";
     [JsonIgnore] public string? ConnectionId { get; set; }
     [JsonIgnore] public string AdMachineObjectId { get; set; } = "";
     [JsonIgnore] public string AgentKeyHash { get; set; } = "";
@@ -258,6 +274,8 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
     public DbSet<SurveyAdminAlert> SurveyAdminAlerts => Set<SurveyAdminAlert>();
     public DbSet<ThreatRecord> ThreatRecords => Set<ThreatRecord>();
     public DbSet<AntivirusWhitelistItem> AntivirusWhitelist => Set<AntivirusWhitelistItem>();
+    public DbSet<LaptopMovementLog> LaptopMovementLogs => Set<LaptopMovementLog>();
+    public DbSet<MobileDevice> MobileDevices => Set<MobileDevice>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<AiSession>().HasIndex(s => new { s.OwnerUserId, s.WindowInstanceId }).IsUnique();
@@ -295,9 +313,28 @@ public class HelperDb(DbContextOptions<HelperDb> options) : DbContext(options)
         b.Entity<ThreatRecord>().HasIndex(x => x.Status);
         b.Entity<ThreatRecord>().HasIndex(x => x.DetectedAt);
         b.Entity<AntivirusWhitelistItem>().HasIndex(x => x.Sha256);
+        b.Entity<LaptopMovementLog>().HasIndex(x => x.ComputerId);
+        b.Entity<LaptopMovementLog>().HasIndex(x => x.Timestamp);
+        b.Entity<MobileDevice>().HasIndex(x => x.DeviceId).IsUnique();
     }
 }
-public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false, string ClientVersion = "");
+public class LaptopMovementLog
+{
+    public int Id { get; set; }
+    public int ComputerId { get; set; }
+    public string MachineName { get; set; } = "";
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    public string ExternalIp { get; set; } = "";
+    public string Ssid { get; set; } = "";
+    public string Bssid { get; set; } = "";
+    public string VisibleNetworksJson { get; set; } = "[]";
+    public string EstimatedAddress { get; set; } = "";
+}
+public record MachineInfo(string MachineName, string UserName, string DomainName, string IpAddress, string OsVersion, string UserFullName = "", bool SupportsSystemButtons = false, bool SupportsAiDiagnostics = false, string ClientVersion = "", bool IsPortable = false);
+public record AntiTheftTelemetryRequest(string MachineName, string HardwareUuid, bool IsPortable, int BatteryPercent, bool IsCharging, string ConnectedSsid, string ConnectedBssid, List<VisibleWifiNetwork>? VisibleNetworks = null, string ClientVersion = "", bool WireGuardActive = false);
+public record VisibleWifiNetwork(string Ssid, string Bssid, int Signal);
+public record AntiTheftTelemetryResponse(bool IsLockedDown, string LockMessage, bool TriggerBitLockerRecovery, bool TriggerAccountLock, bool LockScreen = false, bool LockSession = false);
+public record LockdownRequest(bool Enable, string Message = "", bool LevelScreen = true, bool LevelSession = false, bool LevelBitLocker = false);
 public record CommandEnvelope(string TaskId, string Type, string Payload, bool Elevated = false, string AdminUser = "");
 public record LoginRequest(string Username, string Password, string? Provider = null);
 public record PasswordRequest(string CurrentPassword, string NewPassword);
@@ -315,5 +352,50 @@ public record EmergencyPingRequest(string? ServerUrl, string? ApiKey);
 public record KnowledgeArticleRequest(string Title, string Category, string ContentMarkdown, string Keywords = "", int? BranchId = null, string TargetRole = "All", bool IsPinned = false);
 public record HelperWhiteTriggerRequest(string? Cabinet = null, string? BranchName = null, string? Time = null, string? EventId = null);
 public record BranchSyncRequest(string? Action = null, string? Name = null, string? ComputerPrefixes = null, string? IpSubnets = null, bool? IsActive = null, Branch? Branch = null);
+
+public class MobileDevice
+{
+    public int Id { get; set; }
+    public string DeviceId { get; set; } = "";
+    public string BrandModel { get; set; } = "";
+    public string SerialNumber { get; set; } = "";
+    public string Imei { get; set; } = "";
+    public string AndroidVersion { get; set; } = "";
+    public string ClientVersion { get; set; } = "";
+    public string AssignedUsername { get; set; } = "";
+    public string AssignedUserFullName { get; set; } = "";
+    public int? BranchId { get; set; }
+    public string Department { get; set; } = "";
+    public string PhoneNumber { get; set; } = "";
+    public string SimIccid { get; set; } = "";
+    public string WireGuardPublicKey { get; set; } = "";
+    public string WireGuardInternalIp { get; set; } = "";
+    public DateTime? WireGuardHandshakeUtc { get; set; }
+    public bool IsOnline { get; set; }
+    public DateTime LastSeen { get; set; } = DateTime.UtcNow;
+    public string CurrentIp { get; set; } = "";
+    public int BatteryPercent { get; set; } = -1;
+    public bool IsCharging { get; set; }
+    public string CurrentWifiSsid { get; set; } = "";
+    public string CurrentWifiBssid { get; set; } = "";
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public double? LocationAccuracy { get; set; }
+    public DateTime? LastLocationTime { get; set; }
+    public string LocationAddress { get; set; } = "";
+    public bool IsLockedDown { get; set; }
+    public bool LockLevelScreen { get; set; } = true;
+    public bool LockLevelPin { get; set; }
+    public string LockMessage { get; set; } = "";
+    public string TemporaryLockPin { get; set; } = "";
+    public bool IsSirenActive { get; set; }
+    [JsonIgnore] public string ApiKeyHash { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public record MobileRegisterRequest(string DeviceId, string BrandModel, string SerialNumber = "", string Imei = "", string AndroidVersion = "", string ClientVersion = "", string AssignedUsername = "", string AssignedUserFullName = "", int? BranchId = null, string Department = "", string PhoneNumber = "", string SimIccid = "", string WireGuardPublicKey = "");
+public record MobileTelemetryRequest(string DeviceId, int BatteryPercent = -1, bool IsCharging = false, string CurrentWifiSsid = "", string CurrentWifiBssid = "", double? Latitude = null, double? Longitude = null, double? LocationAccuracy = null, string LocationAddress = "");
+public record MobileLockdownRequest(bool Enable, string Message = "", bool LevelScreen = true, bool LevelPin = false, string TemporaryPin = "", bool Siren = false);
+
 
 

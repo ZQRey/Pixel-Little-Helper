@@ -9,7 +9,7 @@ namespace LitleHelperServer;
 [Authorize(AuthenticationSchemes = "Bearer,Agent")]
 public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService commands, PanelSessions sessions, IntegrationSettings settings, TicketManagementGate ticketGate, IConfiguration? configuration = null, IHttpClientFactory? httpFactory = null) : Hub
 {
-    public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen, c.BranchId, c.Room, c.ClientVersion };
+    public static object Status(Computer c) => new { c.Id, c.MachineName, c.DomainName, c.CurrentUser, c.IsOnline, c.LastSeen, c.BranchId, c.Room, c.ClientVersion, c.IsPortable, c.IsLockedDown, c.BatteryPercent, c.IsCharging, c.LastSsid, c.HardwareUuid, c.LockLevelScreen, c.LockLevelSession, c.LockLevelBitLocker, c.LockMessage };
     public static bool Applies(ActionButton b, Computer c) => b.TargetGroup.Equals("All", StringComparison.OrdinalIgnoreCase) ||
         b.TargetGroup.Equals("domain:" + c.DomainName, StringComparison.OrdinalIgnoreCase) || b.TargetGroup.Equals("pc:" + c.MachineName, StringComparison.OrdinalIgnoreCase);
     public static async Task<List<ActionButton>> Buttons(HelperDb db, Computer c) =>
@@ -110,6 +110,7 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         c.SupportsAiDiagnostics = info.SupportsAiDiagnostics;
         c.OsVersion = info.OsVersion;
         if (!string.IsNullOrWhiteSpace(info.ClientVersion)) c.ClientVersion = info.ClientVersion;
+        if (info.IsPortable) c.IsPortable = true;
         c.LastSeen = DateTime.UtcNow;
 
         var allBranches = await db.Branches.AsNoTracking().Where(b => b.IsActive).ToListAsync();
@@ -143,7 +144,7 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
             throw new HubException("Кабинет: до 50 символов без управляющих символов.");
         string cleanRoom = (room ?? "").Trim();
         c.Room = cleanRoom;
-        if (await AgentUserSessions.UserAsync(c,db) != null)
+        if (!c.IsPortable && await AgentUserSessions.UserAsync(c,db) != null)
         {
             string ticketUser = Security.TicketUser(c.CurrentUser).ToLowerInvariant();
             var user = await db.Users.FirstOrDefaultAsync(u => u.Username.ToLower() == ticketUser || u.Username.ToLower() == c.CurrentUser.ToLower());

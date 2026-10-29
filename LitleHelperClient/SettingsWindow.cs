@@ -67,6 +67,7 @@ public sealed class SettingsWindow : Window
         AddNavButton("antivirus", Loc.T("SettingsTabAntivirus"));
         AddNavButton("language", Loc.T("SettingsTabLanguage"));
         AddNavButton("mail", Loc.T("SettingsTabMail"));
+        AddNavButton("protection", "🛡️ Защита и WireGuard");
 
         sideStack.Children.Add(navPanel);
         sideBorder.Child = sideStack;
@@ -132,6 +133,7 @@ public sealed class SettingsWindow : Window
             "antivirus" => BuildAntivirusTab(),
             "language" => BuildLanguageTab(),
             "mail" => BuildMailTab(),
+            "protection" => BuildProtectionTab(),
             _ => BuildThemeTab()
         };
     }
@@ -1082,6 +1084,330 @@ public sealed class SettingsWindow : Window
         secStack.Children.Add(listsGrid);
         secCard.Child = secStack;
         panel.Children.Add(secCard);
+
+        return panel;
+    }
+
+    private bool isProtectionAdminUnlocked = CheckInitialAdminAccess();
+
+    private static bool CheckInitialAdminAccess()
+    {
+        try
+        {
+            var principal = new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent());
+            if (principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator)) return true;
+            if (principal.Claims.Any(c => c.Value.EndsWith("-512") || c.Value.Equals("S-1-5-32-544"))) return true;
+        }
+        catch { }
+        return false;
+    }
+
+    private UIElement BuildProtectionTab()
+    {
+        var panel = new StackPanel();
+        panel.Children.Add(SectionHeader("Защита от кражи и WireGuard VPN", "Настройка режима ноутбука (переносного устройства) и VPN туннеля для удалённой работы вне корпоративной сети."));
+
+        if (!isProtectionAdminUnlocked)
+        {
+            var lockCard = CardContainer();
+            var lockStack = new StackPanel();
+            lockStack.Children.Add(SubTitle("🔐 Доступ ограничен правами Администратора домена"));
+
+            var desc = new TextBlock
+            {
+                Text = "Изменение признака переносного устройства и параметров WireGuard VPN доступно только системным администраторам организации. Подтвердите ваши полномочия.",
+                FontSize = 13,
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+            lockStack.Children.Add(desc);
+
+            lockStack.Children.Add(FieldLabel("Логин администратора"));
+            var userBox = new TextBox
+            {
+                FontSize = 13,
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(0, 0, 0, 10),
+                Text = Environment.UserName
+            };
+            lockStack.Children.Add(userBox);
+
+            lockStack.Children.Add(FieldLabel("Пароль"));
+            var passBox = new PasswordBox
+            {
+                FontSize = 13,
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            lockStack.Children.Add(passBox);
+
+            var errText = new TextBlock
+            {
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 38, 38)),
+                Visibility = Visibility.Collapsed,
+                Margin = new Thickness(0, 0, 0, 10),
+                TextWrapping = TextWrapping.Wrap
+            };
+            lockStack.Children.Add(errText);
+
+            var unlockBtn = ActionButton("🔓 Подтвердить права администратора", true);
+            unlockBtn.Click += async (_, _) =>
+            {
+                unlockBtn.IsEnabled = false;
+                errText.Visibility = Visibility.Collapsed;
+                try
+                {
+                    using var handler = new HttpClientHandler { AllowAutoRedirect = false, ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+                    using var client = new HttpClient(handler) { BaseAddress = new Uri(settings.ServerUrl!.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(15) };
+                    var res = await client.PostAsJsonAsync("api/auth/login", new { username = userBox.Text.Trim(), password = passBox.Password });
+                    if (!res.IsSuccessStatusCode)
+                    {
+                        errText.Text = "Неверный логин или пароль, либо учётная запись не обладает правами администратора.";
+                        errText.Visibility = Visibility.Visible;
+                        return;
+                    }
+                    var doc = await res.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+                    string role = doc.TryGetProperty("role", out var r) ? r.GetString() ?? "" : "";
+                    if (role is "SuperAdmin" or "Admin" or "Staff")
+                    {
+                        isProtectionAdminUnlocked = true;
+                        SwitchTab("protection");
+                    }
+                    else
+                    {
+                        errText.Text = "Учётная запись не имеет прав администратора.";
+                        errText.Visibility = Visibility.Visible;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errText.Text = "Ошибка проверки доступа: " + ex.Message;
+                    errText.Visibility = Visibility.Visible;
+                }
+                finally
+                {
+                    unlockBtn.IsEnabled = true;
+                }
+            };
+            lockStack.Children.Add(unlockBtn);
+            lockCard.Child = lockStack;
+            panel.Children.Add(lockCard);
+            return panel;
+        }
+
+        // Section 1: Laptop Device Mode
+        var deviceCard = CardContainer();
+        var deviceStack = new StackPanel();
+        deviceStack.Children.Add(SubTitle("💻 Режим переносного устройства (Ноутбук)"));
+
+        var chkPortable = new CheckBox
+        {
+            Content = "Это переносное устройство (ноутбук организации)",
+            IsChecked = settings.IsPortable,
+            FontSize = 13.5,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 6, 0, 6),
+            Cursor = Cursors.Hand
+        };
+        chkPortable.Click += (_, _) =>
+        {
+            settings.IsPortable = chkPortable.IsChecked == true;
+            settings.Save();
+            _ = AntiTheftService.SendTelemetryAsync(settings.ServerUrl ?? "https://helper.gp1.loc");
+        };
+        deviceStack.Children.Add(chkPortable);
+
+        var portableHint = new TextBlock
+        {
+            Text = "При включении устройство регистрируется как переносное. Вход сотрудника в других кабинетах не сбрасывает его постоянное рабочее место. В веб-панели активируется карточка устройства с отслеживанием батареи, Wi-Fi сетей и истории перемещений.",
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(24, 0, 0, 10)
+        };
+        deviceStack.Children.Add(portableHint);
+        deviceCard.Child = deviceStack;
+        panel.Children.Add(deviceCard);
+
+        // Section 2: WireGuard Tunnel
+        var wgCard = CardContainer();
+        var wgStack = new StackPanel();
+
+        var wgTitleRow = new DockPanel();
+        wgTitleRow.Children.Add(SubTitle("🛡️ WireGuard VPN (связка с MikroTik)"));
+        bool tunnelUp = WireGuardCrypto.IsTunnelActive();
+        var statusBadge = new Border
+        {
+            Background = tunnelUp ? new SolidColorBrush(Color.FromRgb(220, 252, 231)) : new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8, 2, 8, 2),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Child = new TextBlock
+            {
+                Text = tunnelUp ? "● Туннель активен" : "○ Туннель не активен",
+                FontSize = 11.5,
+                FontWeight = FontWeights.Medium,
+                Foreground = tunnelUp ? new SolidColorBrush(Color.FromRgb(22, 101, 52)) : new SolidColorBrush(Color.FromRgb(100, 116, 139))
+            }
+        };
+        DockPanel.SetDock(statusBadge, Dock.Right);
+        wgTitleRow.Children.Add(statusBadge);
+        wgStack.Children.Add(wgTitleRow);
+
+        var chkWg = new CheckBox
+        {
+            Content = "Активировать автоматический WireGuard VPN туннель",
+            IsChecked = settings.WireGuard.Enabled,
+            FontSize = 13,
+            Margin = new Thickness(0, 4, 0, 10),
+            Cursor = Cursors.Hand
+        };
+        chkWg.Click += (_, _) =>
+        {
+            settings.WireGuard.Enabled = chkWg.IsChecked == true;
+            settings.Save();
+        };
+        wgStack.Children.Add(chkWg);
+
+        // Client Public Key
+        wgStack.Children.Add(FieldLabel("Открытый ключ клиента (скопируйте в MikroTik):"));
+        var pubKeyRow = new Grid();
+        pubKeyRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        pubKeyRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var pubKeyBox = new TextBox
+        {
+            IsReadOnly = true,
+            FontSize = 12.5,
+            FontFamily = new FontFamily("Consolas, Courier New"),
+            Padding = new Thickness(8, 6, 8, 6),
+            Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+            Text = settings.WireGuard.ClientPublicKey
+        };
+        Grid.SetColumn(pubKeyBox, 0);
+        pubKeyRow.Children.Add(pubKeyBox);
+
+        var copyKeyBtn = ActionButton("📋 Копировать", false);
+        copyKeyBtn.Margin = new Thickness(8, 0, 0, 0);
+        copyKeyBtn.Click += (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(pubKeyBox.Text))
+            {
+                Clipboard.SetText(pubKeyBox.Text);
+                MessageBox.Show("Открытый ключ клиента скопирован в буфер обмена. Вставьте его в настройки WireGuard на MikroTik.", "WireGuard");
+            }
+        };
+        Grid.SetColumn(copyKeyBtn, 1);
+        pubKeyRow.Children.Add(copyKeyBtn);
+        wgStack.Children.Add(pubKeyRow);
+
+        // Generate keypair button
+        var genKeysBtn = ActionButton("🔄 Сгенерировать новую пару ключей WireGuard", false);
+        genKeysBtn.Margin = new Thickness(0, 6, 0, 12);
+        genKeysBtn.Click += (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(settings.WireGuard.ClientPublicKey))
+            {
+                if (MessageBox.Show("Сгенерировать новую пару ключей? Предыдущий открытый ключ перестанет работать на MikroTik.", "Генерация ключей", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                    return;
+            }
+            var (priv, pub) = WireGuardCrypto.GenerateKeyPair();
+            settings.WireGuard.ClientPrivateKey = priv;
+            settings.WireGuard.ClientPublicKey = pub;
+            settings.Save();
+            pubKeyBox.Text = pub;
+        };
+        wgStack.Children.Add(genKeysBtn);
+
+        // Server Endpoint
+        wgStack.Children.Add(FieldLabel("Адрес сервера MikroTik (Endpoint: IP:Порт или домен:порт)"));
+        var endpointBox = new TextBox
+        {
+            FontSize = 13,
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 0, 0, 8),
+            Text = settings.WireGuard.ServerEndpoint
+        };
+        wgStack.Children.Add(endpointBox);
+
+        // Server Public Key
+        wgStack.Children.Add(FieldLabel("Открытый ключ сервера (MikroTik Public Key)"));
+        var srvKeyBox = new TextBox
+        {
+            FontSize = 12.5,
+            FontFamily = new FontFamily("Consolas, Courier New"),
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 0, 0, 8),
+            Text = settings.WireGuard.ServerPublicKey
+        };
+        wgStack.Children.Add(srvKeyBox);
+
+        // Tunnel IP
+        wgStack.Children.Add(FieldLabel("Внутренний IP-адрес клиента в туннеле (например: 10.200.0.15/24)"));
+        var clientIpBox = new TextBox
+        {
+            FontSize = 13,
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 0, 0, 8),
+            Text = settings.WireGuard.ClientAddress
+        };
+        wgStack.Children.Add(clientIpBox);
+
+        // Allowed IPs
+        wgStack.Children.Add(FieldLabel("Маршруты / Разрешённые подсети (Allowed IPs)"));
+        var allowedIpsBox = new TextBox
+        {
+            FontSize = 13,
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(0, 0, 0, 14),
+            Text = string.IsNullOrWhiteSpace(settings.WireGuard.AllowedIPs) ? "172.16.0.0/16" : settings.WireGuard.AllowedIPs
+        };
+        wgStack.Children.Add(allowedIpsBox);
+
+        // Buttons
+        var wgBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
+        var saveWgBtn = ActionButton("💾 Сохранить параметры", true);
+        saveWgBtn.Click += (_, _) =>
+        {
+            settings.WireGuard.ServerEndpoint = endpointBox.Text.Trim();
+            settings.WireGuard.ServerPublicKey = srvKeyBox.Text.Trim();
+            settings.WireGuard.ClientAddress = clientIpBox.Text.Trim();
+            settings.WireGuard.AllowedIPs = allowedIpsBox.Text.Trim();
+            settings.Save();
+            MessageBox.Show("Конфигурация WireGuard успешно сохранена.", "WireGuard");
+        };
+        wgBtnRow.Children.Add(saveWgBtn);
+
+        var exportWgBtn = ActionButton("📄 Экспорт wg_pixel.conf", false);
+        exportWgBtn.Margin = new Thickness(10, 0, 0, 0);
+        exportWgBtn.Click += (_, _) =>
+        {
+            try
+            {
+                string conf = WireGuardCrypto.GenerateConfigContent(settings.WireGuard);
+                var sfd = new Microsoft.Win32.SaveFileDialog
+                {
+                    FileName = "wg_pixel.conf",
+                    Filter = "WireGuard config (*.conf)|*.conf|All files (*.*)|*.*"
+                };
+                if (sfd.ShowDialog() == true)
+                {
+                    File.WriteAllText(sfd.FileName, conf);
+                    MessageBox.Show("Файл конфигурации WireGuard сохранён: " + sfd.FileName, "Экспорт");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка экспорта: " + ex.Message, "Ошибка");
+            }
+        };
+        wgBtnRow.Children.Add(exportWgBtn);
+        wgStack.Children.Add(wgBtnRow);
+
+        wgCard.Child = wgStack;
+        panel.Children.Add(wgCard);
 
         return panel;
     }

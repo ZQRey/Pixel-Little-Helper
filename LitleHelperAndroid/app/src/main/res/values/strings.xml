@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Pixel Helper</string>
+    <string name="device_admin_description">Администратор устройства корпоративной системы Pixel Little Helper для удаленной защиты и блокировки при краже или утере.</string>
+    <string name="lock_title">ВНИМАНИЕ! УСТРОЙСТВО ЗАБЛОКИРОВАНО</string>
+    <string name="lock_default_message">Данное устройство является корпоративной собственностью организации. В случае обнаружения просьба незамедлительно вернуть его в IT-отдел.</string>
+    <string name="service_notification_channel">Фоновая защита Pixel Anti-Theft</string>
+    <string name="service_notification_title">Pixel Helper активен</string>
+    <string name="service_notification_text">Служба безопасности и мониторинга запущена</string>
+</resources>
+

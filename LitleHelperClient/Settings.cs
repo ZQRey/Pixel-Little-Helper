@@ -67,6 +67,12 @@ public sealed class Settings
     public List<string> MailBlockedSenders { get; set; } = new();
     public List<string> MailTrustedSenders { get; set; } = new();
     public string MailSharedEncryptionKey { get; set; } = "";
+    public bool IsPortable { get; set; }
+    public bool NonAdRegistered { get; set; }
+    public string NonAdFullName { get; set; } = "";
+    public string NonAdInventoryNumber { get; set; } = "";
+    public string NonAdBranch { get; set; } = "";
+    public WireGuardSettings WireGuard { get; set; } = new();
     internal bool EnsureClientKey()
     {
         string? machineKey = MachineIdentity.Read(ServerUrl);
@@ -185,4 +191,15 @@ public sealed class Settings
         }
         catch { /* Logging must not interrupt desktop interaction. */ }
     }
+}
+
+public sealed class WireGuardSettings
+{
+    public bool Enabled { get; set; }
+    public string ServerEndpoint { get; set; } = "";
+    public string ServerPublicKey { get; set; } = "";
+    public string ClientPrivateKey { get; set; } = "";
+    public string ClientPublicKey { get; set; } = "";
+    public string ClientAddress { get; set; } = "";
+    public string AllowedIPs { get; set; } = "172.16.0.0/16";
 }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#1e293b</color>
+    <color name="primary_dark">#0f172a</color>
+    <color name="accent">#2563eb</color>
+    <color name="lock_bg">#7f1d1d</color>
+    <color name="lock_card">#991b1b</color>
+    <color name="white">#ffffff</color>
+    <color name="text_muted">#94a3b8</color>
+</resources>
+

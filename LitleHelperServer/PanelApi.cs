@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System.IO.Compression;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace LitleHelperServer;
@@ -166,6 +168,300 @@ public static class PanelApi
             await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
 
             return Results.Ok(HelperHub.Status(c));
+        }).RequireAuthorization("computers.manage");
+
+        app.MapPost("/api/telemetry/anti-theft", async (AntiTheftTelemetryRequest request, HttpContext context, HelperDb db, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        {
+            string name = Security.Canonical(request.MachineName);
+            if (!Security.MachineValid(name)) return Results.BadRequest(new { error = "Неверное имя ПК" });
+            var c = await db.Computers.SingleOrDefaultAsync(comp => comp.MachineName == name);
+            if (c == null)
+            {
+                c = new Computer { MachineName = name };
+                db.Computers.Add(c);
+            }
+            string externalIp = context.Connection.RemoteIpAddress?.ToString() ?? "";
+            c.IsPortable = request.IsPortable || c.IsPortable;
+            c.BatteryPercent = request.BatteryPercent;
+            c.IsCharging = request.IsCharging;
+            c.LastSsid = request.ConnectedSsid ?? "";
+            c.LastBssid = request.ConnectedBssid ?? "";
+            c.HardwareUuid = request.HardwareUuid ?? "";
+            c.ClientVersion = !string.IsNullOrWhiteSpace(request.ClientVersion) ? request.ClientVersion : c.ClientVersion;
+            c.LastSeen = DateTime.UtcNow;
+
+            var log = new LaptopMovementLog
+            {
+                ComputerId = c.Id,
+                MachineName = c.MachineName,
+                Timestamp = DateTime.UtcNow,
+                ExternalIp = externalIp,
+                Ssid = request.ConnectedSsid ?? "",
+                Bssid = request.ConnectedBssid ?? "",
+                VisibleNetworksJson = request.VisibleNetworks != null ? JsonSerializer.Serialize(request.VisibleNetworks) : "[]",
+                EstimatedAddress = ""
+            };
+            db.LaptopMovementLogs.Add(log);
+            await db.SaveChangesAsync();
+            await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
+
+            return Results.Ok(new AntiTheftTelemetryResponse(c.IsLockedDown, c.LockMessage, c.BitLockerRecoveryTriggered || c.LockLevelBitLocker, c.IsLockedDown, c.LockLevelScreen, c.LockLevelSession));
+        });
+
+        app.MapPost("/api/computers/{id:int}/lockdown", async (int id, LockdownRequest request, ClaimsPrincipal p, HelperDb db, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        {
+            var c = await db.Computers.FindAsync(id);
+            if (c == null) return Results.NotFound();
+            c.IsLockedDown = request.Enable;
+            c.LockMessage = request.Message ?? "";
+            c.LockLevelScreen = request.Enable ? request.LevelScreen : false;
+            c.LockLevelSession = request.Enable ? request.LevelSession : false;
+            c.LockLevelBitLocker = request.Enable ? request.LevelBitLocker : false;
+            if (request.Enable && request.LevelBitLocker)
+            {
+                c.BitLockerRecoveryTriggered = true;
+            }
+            string levelsSummary = request.Enable 
+                ? $"Уровни: {(request.LevelScreen ? "[1:Экран] " : "")}{(request.LevelSession ? "[2:Сеанс] " : "")}{(request.LevelBitLocker ? "[3:BitLocker] " : "")}"
+                : "Все уровни блокировки отключены";
+            db.AuditLogs.Add(new() {
+                AdminUsername = p.Identity!.Name ?? "",
+                MachineName = c.MachineName,
+                CommandType = request.Enable ? "anti_theft_lockdown_enable" : "anti_theft_lockdown_disable",
+                CommandPayload = levelsSummary + " | " + (request.Message ?? ""),
+                Status = "Completed",
+                Result = request.Enable ? "Блокировка устройства активирована: " + levelsSummary : "Блокировка устройства снята"
+            });
+            await db.SaveChangesAsync();
+            await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
+            if (c.ConnectionId != null)
+            {
+                await hub.Clients.Client(c.ConnectionId).SendAsync("AntiTheftLockdownChanged", c.IsLockedDown, c.LockMessage, c.LockLevelScreen, c.LockLevelSession, c.LockLevelBitLocker);
+            }
+            return Results.Ok(HelperHub.Status(c));
+        }).RequireAuthorization("computers.manage");
+
+        app.MapPost("/api/computers/{id:int}/bitlocker-recovery", async (int id, ClaimsPrincipal p, HelperDb db, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        {
+            var c = await db.Computers.FindAsync(id);
+            if (c == null) return Results.NotFound();
+            c.BitLockerRecoveryTriggered = true;
+            db.AuditLogs.Add(new() {
+                AdminUsername = p.Identity!.Name ?? "",
+                MachineName = c.MachineName,
+                CommandType = "anti_theft_bitlocker_recovery",
+                CommandPayload = "Force BitLocker Recovery C:",
+                Status = "Completed",
+                Result = "Запрос на принудительную блокировку BitLocker отправлен"
+            });
+            await db.SaveChangesAsync();
+            await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
+            if (c.ConnectionId != null)
+            {
+                await hub.Clients.Client(c.ConnectionId).SendAsync("AntiTheftBitLockerTriggered");
+            }
+            return Results.Ok(new { success = true });
+        }).RequireAuthorization("computers.manage");
+
+        app.MapPost("/api/computers/{id:int}/portable", async (int id, ClaimsPrincipal p, HelperDb db, Microsoft.AspNetCore.SignalR.IHubContext<HelperHub> hub) =>
+        {
+            var c = await db.Computers.FindAsync(id);
+            if (c == null) return Results.NotFound();
+            c.IsPortable = !c.IsPortable;
+            db.AuditLogs.Add(new() {
+                AdminUsername = p.Identity!.Name ?? "",
+                MachineName = c.MachineName,
+                CommandType = "anti_theft_toggle_portable",
+                CommandPayload = "IsPortable=" + c.IsPortable,
+                Status = "Completed",
+                Result = c.IsPortable ? "Отмечен как переносное устройство (ноутбук)" : "Отмечен как стационарный ПК"
+            });
+            await db.SaveChangesAsync();
+            await hub.Clients.Group("PanelStaff").SendAsync("ComputerChanged", HelperHub.Status(c));
+            return Results.Ok(HelperHub.Status(c));
+        }).RequireAuthorization("computers.manage");
+
+        app.MapGet("/api/computers/{id:int}/telemetry-history", async (int id, HelperDb db) =>
+        {
+            var logs = await db.LaptopMovementLogs.AsNoTracking()
+                .Where(l => l.ComputerId == id)
+                .OrderByDescending(l => l.Timestamp)
+                .Take(50)
+                .ToListAsync();
+            return Results.Ok(logs);
+        }).RequireAuthorization("computers.view");
+
+        // Mobile Devices (Pixel Anti-Theft Android) endpoints
+        app.MapGet("/api/mobile-devices", async (HelperDb db) =>
+        {
+            var list = await db.MobileDevices.AsNoTracking().OrderBy(m => m.BrandModel).ThenBy(m => m.AssignedUserFullName).ToListAsync();
+            return Results.Ok(list);
+        }).RequireAuthorization("computers.view");
+
+        app.MapPost("/api/mobile-devices/register", async (MobileRegisterRequest req, HelperDb db) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.DeviceId)) return Results.BadRequest(new { error = "DeviceId обязателен" });
+            var device = await db.MobileDevices.SingleOrDefaultAsync(m => m.DeviceId == req.DeviceId);
+            if (device == null)
+            {
+                device = new MobileDevice { DeviceId = req.DeviceId };
+                db.MobileDevices.Add(device);
+            }
+            device.BrandModel = req.BrandModel;
+            device.SerialNumber = req.SerialNumber;
+            device.Imei = req.Imei;
+            device.AndroidVersion = req.AndroidVersion;
+            device.ClientVersion = req.ClientVersion;
+            if (!string.IsNullOrWhiteSpace(req.AssignedUsername)) device.AssignedUsername = req.AssignedUsername;
+            if (!string.IsNullOrWhiteSpace(req.AssignedUserFullName)) device.AssignedUserFullName = req.AssignedUserFullName;
+            if (req.BranchId.HasValue) device.BranchId = req.BranchId;
+            if (!string.IsNullOrWhiteSpace(req.Department)) device.Department = req.Department;
+            if (!string.IsNullOrWhiteSpace(req.PhoneNumber)) device.PhoneNumber = req.PhoneNumber;
+            if (!string.IsNullOrWhiteSpace(req.SimIccid)) device.SimIccid = req.SimIccid;
+            if (!string.IsNullOrWhiteSpace(req.WireGuardPublicKey)) device.WireGuardPublicKey = req.WireGuardPublicKey;
+            device.LastSeen = DateTime.UtcNow;
+            device.IsOnline = true;
+            await db.SaveChangesAsync();
+            return Results.Ok(device);
+        });
+
+        app.MapPost("/api/mobile-devices/{id:int}/telemetry", async (int id, MobileTelemetryRequest req, HelperDb db, HttpContext http) =>
+        {
+            var device = await db.MobileDevices.FindAsync(id);
+            if (device == null) return Results.NotFound();
+            device.BatteryPercent = req.BatteryPercent;
+            device.IsCharging = req.IsCharging;
+            device.CurrentWifiSsid = req.CurrentWifiSsid;
+            device.CurrentWifiBssid = req.CurrentWifiBssid;
+            if (req.Latitude.HasValue && req.Longitude.HasValue)
+            {
+                device.Latitude = req.Latitude;
+                device.Longitude = req.Longitude;
+                device.LocationAccuracy = req.LocationAccuracy;
+                device.LastLocationTime = DateTime.UtcNow;
+                if (!string.IsNullOrWhiteSpace(req.LocationAddress)) device.LocationAddress = req.LocationAddress;
+            }
+            device.CurrentIp = http.Connection.RemoteIpAddress?.ToString() ?? "";
+            device.LastSeen = DateTime.UtcNow;
+            device.IsOnline = true;
+            await db.SaveChangesAsync();
+            return Results.Ok(new {
+                device.IsLockedDown,
+                device.LockLevelScreen,
+                device.LockLevelPin,
+                device.LockMessage,
+                device.TemporaryLockPin,
+                device.IsSirenActive
+            });
+        });
+
+        app.MapPost("/api/mobile-devices/{id:int}/lockdown", async (int id, MobileLockdownRequest req, ClaimsPrincipal p, HelperDb db) =>
+        {
+            var device = await db.MobileDevices.FindAsync(id);
+            if (device == null) return Results.NotFound();
+            device.IsLockedDown = req.Enable;
+            device.LockMessage = req.Message;
+            device.LockLevelScreen = req.LevelScreen;
+            device.LockLevelPin = req.LevelPin;
+            device.TemporaryLockPin = req.TemporaryPin;
+            device.IsSirenActive = req.Siren;
+            db.AuditLogs.Add(new AuditLog
+            {
+                AdminUsername = p.Identity!.Name ?? "",
+                MachineName = device.BrandModel + " (" + device.DeviceId + ")",
+                CommandType = "mobile_anti_theft_lockdown",
+                CommandPayload = $"Enable={req.Enable}, Screen={req.LevelScreen}, Pin={req.LevelPin}, Siren={req.Siren}",
+                Status = "Completed",
+                Result = req.Enable ? "Мобильное устройство переведено в режим розыска" : "Режим розыска снят"
+            });
+            await db.SaveChangesAsync();
+            return Results.Ok(device);
+        }).RequireAuthorization("computers.manage");
+
+        app.MapDelete("/api/mobile-devices/{id:int}", async (int id, HelperDb db) =>
+        {
+            var device = await db.MobileDevices.FindAsync(id);
+            if (device == null) return Results.NotFound();
+            db.MobileDevices.Remove(device);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        }).RequireAuthorization("computers.delete");
+
+        app.MapGet("/api/mobile-devices/download-installer", async (HttpContext http, IConfiguration config) =>
+        {
+            var memoryStream = new MemoryStream();
+            using (var archive = new ZipArchive(memoryStream, ZipArchiveMode.Create, true))
+            {
+                string scheme = http.Request.Scheme;
+                string host = http.Request.Host.Value;
+                string serverUrl = $"{scheme}://{host}";
+                string wgEndpoint = config["WireGuard:ServerEndpoint"] ?? "vpn.hospital.local:51820";
+                string wgPublicKey = config["WireGuard:ServerPublicKey"] ?? "";
+
+                var configObj = new
+                {
+                    serverUrl = serverUrl,
+                    wireguardEndpoint = wgEndpoint,
+                    wireguardServerPublicKey = wgPublicKey,
+                    generatedUtc = DateTime.UtcNow
+                };
+
+                // 1. config.json
+                var cfgEntry = archive.CreateEntry("config.json");
+                using (var writer = new StreamWriter(cfgEntry.Open(), Encoding.UTF8))
+                {
+                    await writer.WriteAsync(JsonSerializer.Serialize(configObj, new JsonSerializerOptions { WriteIndented = true }));
+                }
+
+                // 2. setup-android.bat
+                var batEntry = archive.CreateEntry("setup-android.bat");
+                using (var writer = new StreamWriter(batEntry.Open(), Encoding.UTF8))
+                {
+                    await writer.WriteAsync(BuildSetupBat(serverUrl));
+                }
+
+                // 3. README.txt
+                var readmeEntry = archive.CreateEntry("README.txt");
+                using (var writer = new StreamWriter(readmeEntry.Open(), Encoding.UTF8))
+                {
+                    await writer.WriteAsync(BuildReadmeTxt(serverUrl));
+                }
+
+                // 4. Bundled ADB binaries if available on server machine
+                string wingetAdbDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    @"Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools");
+                if (Directory.Exists(wingetAdbDir))
+                {
+                    foreach (var file in new[] { "adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll" })
+                    {
+                        string sourceFile = Path.Combine(wingetAdbDir, file);
+                        if (File.Exists(sourceFile))
+                        {
+                            var entry = archive.CreateEntry(file);
+                            using var fs = File.OpenRead(sourceFile);
+                            using var es = entry.Open();
+                            await fs.CopyToAsync(es);
+                        }
+                    }
+                }
+
+                // 5. Bundled PixelHelper.apk if present
+                string apkPath = Path.Combine(AppContext.BaseDirectory, "dist", "android", "PixelHelper.apk");
+                if (!File.Exists(apkPath))
+                {
+                    string contentRoot = Path.Combine(Directory.GetCurrentDirectory(), "dist", "android", "PixelHelper.apk");
+                    if (File.Exists(contentRoot)) apkPath = contentRoot;
+                }
+                if (File.Exists(apkPath))
+                {
+                    var apkEntry = archive.CreateEntry("PixelHelper.apk");
+                    using var fs = File.OpenRead(apkPath);
+                    using var es = apkEntry.Open();
+                    await fs.CopyToAsync(es);
+                }
+            }
+            memoryStream.Seek(0, SeekOrigin.Begin);
+            return Results.File(memoryStream, "application/zip", "PixelHelper-Android-Setup.zip");
         }).RequireAuthorization("computers.manage");
         app.MapGet("/api/scripts", (IConfiguration config) => Results.Ok(config.GetSection("Scripts").GetChildren().Select(s => new { id = s.Key, title = s["Title"] ?? s.Key }))).RequireAuthorization("commands.execute");
         app.MapPost("/api/commands", async (CommandRequest request, ClaimsPrincipal p, CommandService service, CancellationToken token) => Results.Ok(await service.SendAsync(p, request, token))).RequireAuthorization("commands.execute");
@@ -450,6 +746,157 @@ public static class PanelApi
         if (user == null || !user.IsActive || user.AuthSource == "AD" || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
         user.IsSweetheart = Access.IsSweetheart(config, user.Username);
         return Results.Ok(new { token = Security.Token(user, config), user });
+    }
+
+    private static string BuildSetupBat(string serverUrl)
+    {
+        return """
+@echo off
+chcp 65001 >nul
+title Pixel Little Helper - Установщик Android Anti-Theft
+color 0b
+
+echo =====================================================================
+echo       PIXEL LITTLE HELPER - АВТОНОМНЫЙ УСТАНОВЩИК ДЛЯ ANDROID
+echo                     (Pixel Anti-Theft Client)
+echo =====================================================================
+echo.
+
+setlocal enabledelayedexpansion
+
+:: 1. Проверка наличия ADB
+set ADB_BIN=%~dp0adb.exe
+if not exist "%ADB_BIN%" (
+    where adb >nul 2>&1
+    if errorlevel 1 (
+        echo [!] Файл adb.exe не найден в папке установщика и в PATH.
+        echo [*] Загрузка официального пакета Google Platform-Tools...
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip' -OutFile '%~dp0platform-tools.zip'"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%~dp0platform-tools.zip' -DestinationPath '%~dp0temp_tools' -Force; Copy-Item '%~dp0temp_tools\platform-tools\*' '%~dp0' -Recurse -Force; Remove-Item '%~dp0temp_tools' -Recurse -Force; Remove-Item '%~dp0platform-tools.zip' -Force"
+    ) else (
+        set ADB_BIN=adb
+    )
+)
+
+echo [*] Подключите смартфон к ПК по USB-кабелю.
+echo [*] Убедитесь, что включена «Отладка по USB» в меню «Для разработчиков».
+echo [*] Если на экране смартфона появится запрос «Разрешить отладку по USB?»,
+echo     отметьте «Всегда разрешать с этого компьютера» и нажмите «Разрешить».
+echo.
+echo [*] Ожидание подключения устройства...
+echo.
+
+"%ADB_BIN%" wait-for-device
+
+for /f "tokens=*" %%a in ('"%ADB_BIN%" shell getprop ro.product.model 2^>nul') do set MODEL=%%a
+for /f "tokens=*" %%a in ('"%ADB_BIN%" shell getprop ro.build.version.release 2^>nul') do set ANDROID_VER=%%a
+for /f "tokens=*" %%a in ('"%ADB_BIN%" shell getprop ro.product.manufacturer 2^>nul') do set MFR=%%a
+
+echo.
+echo [OK] Устройство обнаружено: !MFR! !MODEL! (Android !ANDROID_VER!)
+echo.
+set /p CONFIRM="Выполнить установку и настройку Pixel Anti-Theft на этом устройстве? [Y/N]: "
+if /i not "!CONFIRM!"=="Y" (
+    echo [!] Отменено администратором.
+    pause
+    exit /b
+)
+
+echo.
+echo [*] [1/6] Установка приложения PixelHelper.apk...
+if exist "%~dp0PixelHelper.apk" (
+    "%ADB_BIN%" install -r -g "%~dp0PixelHelper.apk"
+) else (
+    echo [!] Файл PixelHelper.apk не найден в папке установщика!
+    echo [*] Поместите PixelHelper.apk в эту папку и повторите запуск.
+    pause
+    exit /b
+)
+
+echo.
+echo [*] [2/6] Активация прав администратора устройства (Device Administrator)...
+"%ADB_BIN%" shell dpm set-active-admin com.pixelhelper.android/.DeviceAdminReceiver
+
+echo.
+echo [*] [3/6] Выдача необходимых разрешений фонового слежения и оверлея...
+"%ADB_BIN%" shell pm grant com.pixelhelper.android android.permission.ACCESS_FINE_LOCATION 2>nul
+"%ADB_BIN%" shell pm grant com.pixelhelper.android android.permission.ACCESS_COARSE_LOCATION 2>nul
+"%ADB_BIN%" shell pm grant com.pixelhelper.android android.permission.ACCESS_BACKGROUND_LOCATION 2>nul
+"%ADB_BIN%" shell pm grant com.pixelhelper.android android.permission.READ_PHONE_STATE 2>nul
+"%ADB_BIN%" shell pm grant com.pixelhelper.android android.permission.POST_NOTIFICATIONS 2>nul
+"%ADB_BIN%" shell appops set com.pixelhelper.android SYSTEM_ALERT_WINDOW allow 2>nul
+
+echo.
+echo [*] [4/6] Отключение ограничений энергосбережения Doze (работа 24/7)...
+"%ADB_BIN%" shell dumpsys deviceidle whitelist +com.pixelhelper.android 2>nul
+
+echo.
+echo [*] [5/6] Передача конфигурации сервера...
+"%ADB_BIN%" shell "mkdir -p /sdcard/Android/data/com.pixelhelper.android/files" 2>nul
+if exist "%~dp0config.json" (
+    "%ADB_BIN%" push "%~dp0config.json" /sdcard/Android/data/com.pixelhelper.android/files/config.json
+)
+
+echo.
+echo [*] [6/6] Запуск службы Pixel Little Helper...
+"%ADB_BIN%" shell am start -n com.pixelhelper.android/.MainActivity
+
+echo.
+echo [*] Ожидание генерации ключей WireGuard...
+timeout /t 3 /nobreak >nul
+
+set WG_PUB=
+for /f "tokens=*" %%k in ('"%ADB_BIN%" shell "cat /sdcard/Android/data/com.pixelhelper.android/files/wg_public.key 2>/dev/null"') do set WG_PUB=%%k
+
+echo.
+echo =====================================================================
+echo [OK] УСТАНОВКА И НАСТРОЙКА УСПЕШНО ЗАВЕРШЕНЫ!
+echo =====================================================================
+if not "!WG_PUB!"=="" (
+    echo [!] Публичный ключ WireGuard клиента:
+    echo     !WG_PUB!
+    echo.
+    <nul set /p="!WG_PUB!"| clip
+    echo [OK] Публичный ключ WireGuard автоматически скопирован в буфер обмена Windows!
+    echo     Вставьте его в карточку смартфона в панели управления или в MikroTik.
+) else (
+    echo [*] Ключ WireGuard будет передан автоматически при первом выходе смартфона на связь.
+)
+echo.
+pause
+""";
+    }
+
+    private static string BuildReadmeTxt(string serverUrl)
+    {
+        return $"""
+Pixel Little Helper — Автономный USB-установщик для Android
+============================================================
+
+Этот пакет предназначен для быстрой автоматической установки и настройки клиента
+Pixel Anti-Theft на корпоративные смартфоны и планшеты под управлением Android.
+
+ПРЕИМУЩЕСТВА:
+- Не требует сброса устройства к заводским настройкам (работает на уже настроенном
+  телефоне с личными и рабочими аккаунтами Google, Telegram и др.).
+- Включает все необходимые права Device Administrator без лишних кликов.
+- Включает фоновую геолокацию, обход энергосбережения (Doze) и оверлей поверх всех окон.
+- Автоматически считывает публичный ключ WireGuard и копирует его в буфер обмена.
+
+ИНСТРУКЦИЯ ПО УСТАНОВКЕ:
+1. Включите «Отладку по USB» на телефоне:
+   - Откройте Настройки -> О телефоне.
+   - Быстро нажмите 7 раз на «Номер сборки» (появится сообщение «Вы стали разработчиком!»).
+   - Вернитесь в Настройки -> Система / Для разработчиков -> Включите «Отладка по USB».
+2. Подключите смартфон кабелем USB к компьютеру.
+3. Запустите файл `setup-android.bat`.
+4. При появлении запроса на экране смартфона отметьте «Всегда разрешать с этого компьютера»
+   и нажмите «Разрешить».
+5. Подтвердите установку в окне установщика (нажмите клавишу Y).
+6. После завершения публичный ключ WireGuard будет скопирован в буфер обмена Windows.
+
+Адрес сервера Helper: {serverUrl}
+""";
     }
 
     public record ButtonActive(bool IsActive);

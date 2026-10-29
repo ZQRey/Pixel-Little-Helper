@@ -178,12 +178,8 @@ function renderPxeDashboard(settings, initialStatus) {
             </div>
         </div>
 
-        <!-- Microservices Controller Cards -->
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:24px;">
-            ${renderServiceCard('dnsmasq', 'Dnsmasq', 'DHCP Proxy + TFTP', 'UDP 67, 69, 4011', services)}
-            ${renderServiceCard('nginx', 'Nginx HTTP', 'Раздача ISO и ядер на гигабите', 'TCP 80', services)}
-            ${renderServiceCard('smbd', 'Samba (SMB)', 'Сетевая шара дистрибутивов WinPE', 'TCP 445', services)}
-        </div>
+        <!-- Microservices Controller Row -->
+        ${renderServiceRow(services)}
 
         <!-- Inner Navigation Tabs -->
         <div class="settings-tabs" style="margin-bottom:18px;">
@@ -248,27 +244,42 @@ function renderPxeDashboard(settings, initialStatus) {
     renderPxeInnerTab();
 }
 
-function renderServiceCard(name, title, desc, ports, services) {
-    const s = services.find(x => x.name === name) || {};
-    const isActive = s.active === true;
+function renderServiceRow(services) {
+    const srvs = [
+        { name: 'dnsmasq', icon: '⚡', title: 'Dnsmasq', desc: 'DHCP Proxy + TFTP', ports: 'UDP 67, 69, 4011' },
+        { name: 'nginx', icon: '🌐', title: 'Nginx HTTP', desc: 'Раздача образов', ports: 'TCP 8088' },
+        { name: 'smbd', icon: '📁', title: 'Samba SMB', desc: 'Сетевая папка WinPE', ports: 'TCP 445' }
+    ];
     return `
-        <div style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;justify-content:space-between;gap:12px;">
-            <div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <strong style="font-size:14px;color:#1e293b;">${escape(title)}</strong>
-                    <span class="status ${isActive?'':'off'}" style="font-size:11px;">
-                        ${isActive ? '● Работает' : '○ Остановлен'}
-                    </span>
-                </div>
-                <div style="font-size:12px;color:var(--muted);">${escape(desc)}</div>
-                <div style="font-size:11px;color:#64748b;margin-top:6px;">Порты: <code>${ports}</code></div>
-            </div>
-            <div style="display:flex;gap:6px;border-top:1px solid #f1f5f9;padding-top:10px;">
-                <button class="secondary" data-service="${name}" data-service-action="restart" style="flex:1;font-size:11px;padding:5px 8px;">Перезапуск</button>
-                ${isActive ? 
-                    `<button class="danger" data-service="${name}" data-service-action="stop" style="flex:1;font-size:11px;padding:5px 8px;">Остановить</button>` :
-                    `<button class="primary" data-service="${name}" data-service-action="start" style="flex:1;font-size:11px;padding:5px 8px;">Запустить</button>`
-                }
+        <div style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:20px;">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;align-items:center;">
+                ${srvs.map((srv) => {
+                    const s = services.find(x => x.name === srv.name) || {};
+                    const isActive = s.active === true;
+                    return `
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+                            <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+                                <div style="width:34px;height:34px;border-radius:8px;background:${isActive?'#10b98115':'#ef444415'};color:${isActive?'#10b981':'#ef4444'};display:grid;place-items:center;font-size:16px;flex-shrink:0;">
+                                    ${srv.icon}
+                                </div>
+                                <div style="min-width:0;">
+                                    <div style="display:flex;align-items:center;gap:6px;">
+                                        <strong style="font-size:13px;white-space:nowrap;color:#0f172a;">${srv.title}</strong>
+                                        <span class="status ${isActive?'':'off'}" style="font-size:10px;padding:1px 5px;border-radius:4px;">${isActive?'ON':'OFF'}</span>
+                                    </div>
+                                    <div style="font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${srv.desc} · <code>${srv.ports}</code></div>
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:4px;flex-shrink:0;">
+                                <button class="secondary quiet" data-service="${srv.name}" data-service-action="restart" title="Перезапустить" style="padding:4px 8px;font-size:12px;">↻</button>
+                                ${isActive ?
+                                    `<button class="danger quiet" data-service="${srv.name}" data-service-action="stop" title="Остановить" style="padding:4px 8px;font-size:11px;">■ Стоп</button>` :
+                                    `<button class="primary quiet" data-service="${srv.name}" data-service-action="start" title="Запустить" style="padding:4px 8px;font-size:11px;">▶ Пуск</button>`
+                                }
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
             </div>
         </div>
     `;
@@ -369,7 +380,7 @@ async function renderPxeImagesTab(container) {
                     </button>
                 </div>
                 <div style="font-size:12px;color:var(--muted);">
-                    Хранилище: <code>/srv/www/pxe/os/</code>
+                    Единое хранилище: <code>/srv/www/pxe/images/</code>
                 </div>
             </div>
 
@@ -450,50 +461,39 @@ async function renderPxeImagesTab(container) {
 // Upload Modal
 function showPxeUploadModal(parentContainer) {
     modal('Загрузка образа ОС на PXE-сервер', `
-        <form id="pxe-upload-form" style="gap:14px;">
-            <p style="font-size:12px;color:var(--muted);margin:0;">
-                Файл загружается напрямую в хранилище PXE-сервера (без промежуточной записи на диск помощника).
-            </p>
+        <form id="pxe-upload-form" style="display:flex;flex-direction:column;gap:14px;">
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;padding:12px;border-radius:8px;font-size:12px;line-height:1.5;">
+                📁 <strong>Единый каталог образов:</strong> Файл будет сохранён в каталог <code>/srv/www/pxe/images/</code> и автоматически появится в списке дистрибутивов и меню PXE-загрузки.
+            </div>
             <label>
-                <span>Целевая папка</span>
-                <select name="target_dir" style="width:100%;">
-                    <option value="isos">os/isos/ (ISO-образы)</option>
-                    <option value="windows">os/windows/ (Windows WinPE)</option>
-                    <option value="debian">os/debian/ (Debian Netboot)</option>
-                    <option value="clonezilla">os/clonezilla/ (Clonezilla Live)</option>
-                    <option value="sysrescue">os/sysrescue/ (SystemRescue)</option>
-                </select>
-            </label>
-            <label>
-                <span>Выберите файл (.iso, .wim, .squashfs)</span>
-                <input type="file" id="pxe-upload-file" required>
+                <span style="font-weight:600;font-size:13px;display:block;margin-bottom:6px;">Выберите файл образа (.iso, .wim, .img)</span>
+                <input type="file" id="pxe-upload-file" accept=".iso,.wim,.img,.squashfs" required style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;">
             </label>
             <div id="pxe-upload-progress" style="display:none;margin-top:10px;">
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:4px;">
-                    <span>Передача файла…</span>
+                    <span id="pxe-upload-status">Передача файла…</span>
                     <span id="pxe-upload-percent">0%</span>
                 </div>
-                <div style="background:#e2e8f0;height:6px;border-radius:3px;overflow:hidden;">
+                <div style="background:#e2e8f0;height:8px;border-radius:4px;overflow:hidden;">
                     <div id="pxe-upload-bar" style="background:#246bfd;width:0%;height:100%;transition:width .15s;"></div>
                 </div>
             </div>
-            <div class="form-actions">
+            <div class="form-actions" style="margin-top:10px;">
                 <button type="submit" class="primary" id="btn-start-upload">Начать загрузку</button>
             </div>
         </form>
     `);
 
-    $('#pxe-upload-form').addEventListener('submit', (e) => {
+    $('#pxe-upload-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const fileInput = $('#pxe-upload-file');
         if (!fileInput.files || !fileInput.files[0]) return;
 
         const file = fileInput.files[0];
-        const targetDir = e.target.target_dir.value;
-
         const pBox = $('#pxe-upload-progress');
         const pBar = $('#pxe-upload-bar');
         const pPercent = $('#pxe-upload-percent');
+        const pStatus = $('#pxe-upload-status');
         const btn = $('#btn-start-upload');
 
         btn.disabled = true;
@@ -501,32 +501,43 @@ function showPxeUploadModal(parentContainer) {
 
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('target_dir', targetDir);
+        formData.append('target_dir', 'images');
+
+        let uploadEndpoint = 'http://172.16.16.61:8080/api/upload';
+        try {
+            const s = await api('/pxe/settings');
+            if (s && s.serverUrl) uploadEndpoint = s.serverUrl.replace(/\/$/, '') + '/api/upload';
+        } catch {}
 
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/pxe/upload', true); // or direct PXE upload
+        xhr.open('POST', uploadEndpoint, true);
 
         xhr.upload.onprogress = (evt) => {
             if (evt.lengthComputable) {
                 const percent = Math.round((evt.loaded / evt.total) * 100);
                 pBar.style.width = percent + '%';
                 pPercent.textContent = percent + '%';
+                const loadedMb = (evt.loaded / (1024 * 1024)).toFixed(1);
+                const totalMb = (evt.total / (1024 * 1024)).toFixed(1);
+                pStatus.textContent = `Загрузка: ${loadedMb} / ${totalMb} MB`;
             }
         };
 
-        xhr.onload = () => {
-            if (xhr.status === 200) {
-                toast(`Файл ${file.name} успешно загружен на PXE!`);
-                $('#modal').close();
-                renderPxeImagesTab(parentContainer);
+        xhr.onload = async () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                toast(`Файл ${file.name} успешно загружен в PXE!`);
+                closeModal();
+                await renderPxeImagesTab(parentContainer);
             } else {
-                toast('Ошибка при загрузке файла', true);
+                let errText = xhr.statusText;
+                try { errText = JSON.parse(xhr.responseText).detail || errText; } catch {}
+                toast(`Ошибка загрузки: ${errText}`, true);
                 btn.disabled = false;
             }
         };
 
         xhr.onerror = () => {
-            toast('Сетевая ошибка при передаче файла', true);
+            toast('Сетевая ошибка при передаче файла на PXE сервер', true);
             btn.disabled = false;
         };
 

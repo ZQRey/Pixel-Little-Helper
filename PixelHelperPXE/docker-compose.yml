@@ -43,20 +43,21 @@ services:
     container_name: pxe-panel
     network_mode: host
     environment:
-      - SERVER_IP=172.16.16.6
+      - SERVER_IP=172.16.16.61
       - TFTP_ROOT=/srv/tftp
       - WEB_ROOT=/srv/www/pxe
-      - CONFIGS_DIR=/home/zqrey/pxe-server/configs
-      - SCRIPTS_DIR=/home/zqrey/pxe-server/scripts
+      - CONFIGS_DIR=/opt/pxe-panel/configs
+      - SCRIPTS_DIR=/opt/pxe-panel/scripts
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
       - /proc/meminfo:/proc/meminfo:ro
       - ./panel/app:/opt/pxe-panel/app
+      - ./configs:/opt/pxe-panel/configs:ro
+      - ./scripts:/opt/pxe-panel/scripts:ro
       - /srv/tftp:/srv/tftp
       - /srv/www/pxe:/srv/www/pxe
       - /var/log/nginx:/var/log/nginx:ro
-      - /home/zqrey/pxe-server:/home/zqrey/pxe-server
     restart: unless-stopped
     depends_on:
       - dnsmasq

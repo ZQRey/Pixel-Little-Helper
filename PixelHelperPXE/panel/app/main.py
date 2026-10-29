@@ -289,33 +289,36 @@ async def api_service_action(service_name: str, action: str):
 
 @app.get("/api/images")
 async def api_list_images():
-    os_dir = WEB_ROOT / "os"
     images = []
+    scan_dirs = [WEB_ROOT / "images", WEB_ROOT / "os"]
     
-    if os_dir.exists():
-        for root, dirs, files in os.walk(os_dir):
-            for file in files:
-                p = Path(root) / file
-                rel_path = p.relative_to(WEB_ROOT)
-                stat = p.stat()
-                images.append({
-                    "name": file,
-                    "path": str(rel_path),
-                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                    "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-                })
+    seen = set()
+    for s_dir in scan_dirs:
+        if s_dir.exists():
+            for root, dirs, files in os.walk(s_dir):
+                for file in files:
+                    p = Path(root) / file
+                    if p in seen or p.name.startswith("."):
+                        continue
+                    seen.add(p)
+                    rel_path = p.relative_to(WEB_ROOT)
+                    stat = p.stat()
+                    images.append({
+                        "name": file,
+                        "path": str(rel_path).replace("\\", "/"),
+                        "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                        "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                    })
     return {"images": images}
-
 
 
 @app.delete("/api/images")
 async def api_delete_image(path: str = Query(...)):
     safe_path = Path(path).as_posix().lstrip("/")
     full_path = (WEB_ROOT / safe_path).resolve()
-    os_root = (WEB_ROOT / "os").resolve()
     
-    # Security check: must reside inside /srv/www/pxe/os
-    if not str(full_path).startswith(str(os_root)) or not full_path.exists():
+    # Security check: must reside inside /srv/www/pxe
+    if not str(full_path).startswith(str(WEB_ROOT.resolve())) or not full_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     
     if full_path.is_file():
@@ -324,10 +327,12 @@ async def api_delete_image(path: str = Query(...)):
     
     raise HTTPException(status_code=400, detail="Cannot delete directories")
 
+
 @app.post("/api/upload")
-async def api_upload_image(file: UploadFile = File(...), target_dir: str = Form("isos")):
+async def api_upload_image(file: UploadFile = File(...), target_dir: Optional[str] = Form("images")):
     safe_name = os.path.basename(file.filename or "uploaded.iso")
-    dest_folder = WEB_ROOT / "os" / target_dir
+    # Always save to unified images folder
+    dest_folder = WEB_ROOT / "images"
     dest_folder.mkdir(parents=True, exist_ok=True)
     dest_path = dest_folder / safe_name
     
@@ -335,19 +340,23 @@ async def api_upload_image(file: UploadFile = File(...), target_dir: str = Form(
         shutil.copyfileobj(file.file, buffer)
     
     os.chmod(dest_path, 0o644)
-    return {"status": "ok", "filename": safe_name, "path": str(dest_path), "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2)}
+    return {"status": "ok", "filename": safe_name, "path": str(dest_path.relative_to(WEB_ROOT)).replace("\\", "/"), "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2)}
 
 
 class WinPeProcessRequest(BaseModel):
     iso_path: str
-    server_ip: Optional[str] = "172.16.16.6"
+    server_ip: Optional[str] = "172.16.16.61"
 
 
 @app.post("/api/process-windows")
 async def api_process_windows(req: WinPeProcessRequest):
     iso_file = Path(req.iso_path)
     if not iso_file.is_absolute():
-        iso_file = WEB_ROOT / "os" / req.iso_path
+        iso_file = WEB_ROOT / req.iso_path
+        if not iso_file.exists():
+            iso_file = WEB_ROOT / "images" / req.iso_path
+        if not iso_file.exists():
+            iso_file = WEB_ROOT / "os" / req.iso_path
     
     if not iso_file.exists():
         raise HTTPException(status_code=404, detail=f"ISO file not found: {iso_file}")
@@ -373,9 +382,25 @@ async def api_get_config(config_type: str):
         "preseed": WEB_ROOT / "os" / "debian" / "preseed.cfg"
     }
     
+    fallbacks = {
+        "grub": CONFIGS_DIR / "grub.cfg",
+        "syslinux": CONFIGS_DIR / "pxelinux.cfg.default",
+        "dnsmasq": CONFIGS_DIR / "dnsmasq-pxe.conf",
+        "preseed": CONFIGS_DIR / "preseed.cfg"
+    }
+    
     target = paths.get(config_type)
-    if not target or not target.exists():
-        raise HTTPException(status_code=404, detail="Config not found")
+    if not target:
+        raise HTTPException(status_code=400, detail="Invalid config type")
+    
+    if not target.exists():
+        fb = fallbacks.get(config_type)
+        if fb and fb.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(fb, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(f"# Default configuration for {config_type}\n", encoding="utf-8")
     
     with open(target, "r", encoding="utf-8") as f:
         content = f.read()
@@ -400,6 +425,7 @@ async def api_save_config(config_type: str, req: ConfigSaveRequest):
     if not target:
         raise HTTPException(status_code=400, detail="Invalid config type")
     
+    target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
         f.write(req.content)
     

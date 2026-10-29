@@ -209,20 +209,79 @@ public static class UserTicketsApi
         string machine = c.MachineName.ToLowerInvariant();
         string cleanOwner = owner.ToLowerInvariant();
 
-        var t = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId || x.GlpiId == ticketId, token);
-        if (t == null) return null;
+        // 1. Search strictly among tickets belonging to this user or computer
+        var userScope = db.Tickets.AsNoTracking().Where(x =>
+            x.Username.ToLower() == cleanOwner ||
+            x.Username.ToLower() == reportedUser ||
+            x.MachineName.ToLower() == machine);
 
-        // Security check: must belong to this user or computer
-        if (!t.Username.ToLower().Equals(cleanOwner, StringComparison.OrdinalIgnoreCase) &&
-            !t.Username.ToLower().Equals(reportedUser, StringComparison.OrdinalIgnoreCase) &&
-            !t.MachineName.ToLower().Equals(machine, StringComparison.OrdinalIgnoreCase))
+        // Prefer exact DB Id match first, then GlpiId match
+        var t = await userScope.FirstOrDefaultAsync(x => x.Id == ticketId, token)
+             ?? await userScope.FirstOrDefaultAsync(x => x.GlpiId == ticketId, token);
+
+        // 2. If not found in user's scope, allow Admin or SuperAdmin to view any ticket
+        if (t == null)
         {
-            return null;
+            var u = await db.Users.AsNoTracking().FirstOrDefaultAsync(user =>
+                user.IsActive && !user.MustChangePassword &&
+                (user.Username.ToLower() == cleanOwner || user.Username.ToLower() == reportedUser || user.AssistantMachine == c.MachineName), token);
+            if (u != null && (u.Role == Roles.Admin || u.Role == Roles.SuperAdmin || Access.Can(u, "tickets.manage")))
+            {
+                t = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId, token)
+                 ?? await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.GlpiId == ticketId, token);
+            }
         }
 
-        var summaries = await GetUserTicketsCoreAsync(db, glpi, c, owner, token);
-        var summary = summaries.FirstOrDefault(s => s.Id == t.Id || s.GlpiId == t.GlpiId);
-        if (summary == null) return null;
+        if (t == null) return null;
+
+        // Build summary directly for this ticket without re-querying the whole list
+        int stCode = StaffTicketsApi.StatusCode(t.Status);
+        string stName = StaffTicketsApi.StatusName(t.Status);
+        double? score = null;
+        string? comment = null;
+        DateTime? closedAt = t.SyncedAt;
+        bool isClosed = stCode >= 5;
+
+        var inv = await db.TicketSurveyInvitations.AsNoTracking().FirstOrDefaultAsync(i => i.TicketId == t.GlpiId, token);
+        if (inv != null)
+        {
+            if (inv.State == "Answered" || inv.PendingScore > 0)
+            {
+                score = inv.PendingScore > 0 ? inv.PendingScore : null;
+                comment = !string.IsNullOrWhiteSpace(inv.PendingComment) ? inv.PendingComment : null;
+            }
+            if (inv.ClosedAt != default) closedAt = inv.ClosedAt;
+            isClosed = true;
+        }
+
+        if (isClosed && !closedAt.HasValue) closedAt = t.SyncedAt ?? t.CreatedAt;
+
+        bool canRate = false;
+        if (isClosed && (!score.HasValue || score.Value <= 0))
+        {
+            DateTime refDate = closedAt ?? t.CreatedAt;
+            if ((DateTime.UtcNow - refDate).TotalDays <= 15.0) canRate = true;
+        }
+
+        string specialist = !string.IsNullOrWhiteSpace(t.AssignedUsername) ? t.AssignedUsername : "Назначается";
+
+        var summary = new UserTicketSummary(
+            t.Id,
+            t.GlpiId,
+            t.Title,
+            t.Description,
+            t.Status,
+            stName,
+            t.BranchName,
+            t.Room,
+            specialist,
+            t.CreatedAt,
+            closedAt,
+            score,
+            comment,
+            canRate,
+            0
+        );
 
         // Fetch followups from GLPI
         List<StaffTicketFollowup> followups = [];
@@ -307,15 +366,15 @@ public static class UserTicketsApi
         string machine = c.MachineName.ToLowerInvariant();
         string cleanOwner = owner.ToLowerInvariant();
 
-        var t = await db.Tickets.FirstOrDefaultAsync(x => x.Id == ticketId || x.GlpiId == ticketId, token);
-        if (t == null) return false;
+        var userScope = db.Tickets.Where(x =>
+            x.Username.ToLower() == cleanOwner ||
+            x.Username.ToLower() == reportedUser ||
+            x.MachineName.ToLower() == machine);
 
-        if (!t.Username.ToLower().Equals(cleanOwner, StringComparison.OrdinalIgnoreCase) &&
-            !t.Username.ToLower().Equals(reportedUser, StringComparison.OrdinalIgnoreCase) &&
-            !t.MachineName.ToLower().Equals(machine, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
+        var t = await userScope.FirstOrDefaultAsync(x => x.Id == ticketId, token)
+             ?? await userScope.FirstOrDefaultAsync(x => x.GlpiId == ticketId, token);
+
+        if (t == null) return false;
 
         // Verify <= 15 days
         DateTime referenceDate = t.SyncedAt ?? t.CreatedAt;

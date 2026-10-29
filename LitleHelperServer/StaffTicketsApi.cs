@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace LitleHelperServer;
@@ -72,6 +74,49 @@ public static class StaffTicketsApi
 
     public static void MapStaffTicketsApi(this WebApplication app)
     {
+        app.MapPost("/api/staff-tickets/auto-auth", async (HttpContext context, HelperDb db, IConfiguration config, CancellationToken token) =>
+        {
+            string key = context.Request.Headers["X-Client-Key"].ToString();
+            string machine = Security.Canonical(context.Request.Headers["X-Machine-Name"].ToString());
+            if (string.IsNullOrEmpty(key) || !Security.MachineValid(machine))
+                return Results.Unauthorized();
+
+            var computer = await db.Computers.AsNoTracking().FirstOrDefaultAsync(x => x.MachineName == machine, token);
+            if (computer == null || string.IsNullOrEmpty(computer.AgentKeyHash) ||
+                !CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(computer.AgentKeyHash), Encoding.ASCII.GetBytes(Security.KeyHash(key))))
+            {
+                return Results.Unauthorized();
+            }
+
+            string cu = (computer.CurrentUser ?? "").ToLowerInvariant();
+            string ticketUser = Security.TicketUser(computer.CurrentUser ?? "").ToLowerInvariant();
+
+            var adminUser = await db.Users.AsNoTracking()
+                .Where(u => (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin || Access.Can(u, "tickets.manage")) && u.IsActive && !u.MustChangePassword)
+                .Where(u => u.AssistantMachine == computer.MachineName ||
+                            u.Username.ToLower() == ticketUser ||
+                            u.Username.ToLower() == cu ||
+                            (cu.Length > 0 && u.Username.ToLower().StartsWith(cu + "@")))
+                .OrderByDescending(u => u.Role == Roles.SuperAdmin)
+                .FirstOrDefaultAsync(token);
+
+            if (adminUser == null)
+                return Results.Unauthorized();
+
+            string jwtToken = Security.Token(adminUser, config);
+            return Results.Ok(new
+            {
+                token = jwtToken,
+                user = new
+                {
+                    id = adminUser.Id,
+                    username = adminUser.Username,
+                    fullName = adminUser.FullName,
+                    role = adminUser.Role
+                }
+            });
+        });
+
         app.MapGet("/api/staff-tickets/overview", async (ClaimsPrincipal p, HelperDb db, GlpiService glpi, CancellationToken token) =>
         {
             var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Username == p.Identity!.Name, token);

@@ -833,7 +833,11 @@ public sealed class UserTicketsWindow : Window
             Cursor = Cursors.Hand,
             VerticalAlignment = VerticalAlignment.Center
         };
-        btnOpen.Click += async (_, _) => await OpenTicketCardAsync(ticket.Id);
+        btnOpen.Click += async (_, e) =>
+        {
+            e.Handled = true;
+            await OpenTicketCardAsync(ticket.Id);
+        };
         DockPanel.SetDock(btnOpen, Dock.Right);
         mainDock.Children.Add(btnOpen);
 
@@ -910,7 +914,11 @@ public sealed class UserTicketsWindow : Window
 
         mainDock.Children.Add(infoStack);
         card.Child = mainDock;
-        card.MouseLeftButtonUp += async (_, _) => await OpenTicketCardAsync(ticket.Id);
+        card.MouseLeftButtonUp += async (_, e) =>
+        {
+            if (e.Handled) return;
+            await OpenTicketCardAsync(ticket.Id);
+        };
 
         return card;
     }

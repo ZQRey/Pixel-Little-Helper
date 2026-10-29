@@ -75,8 +75,62 @@ public sealed class StaffTicketsWindow : Window
         }
         else
         {
-            ShowLoginScreen();
+            _ = TryAutoLoginAsync();
         }
+    }
+
+    private void ShowLoadingScreen(string message)
+    {
+        var container = new Grid
+        {
+            Background = (Brush)new BrushConverter().ConvertFromString("#0F172A")!,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        stack.Children.Add(new TextBlock { Text = "📋", FontSize = 36, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 14) });
+        stack.Children.Add(new TextBlock
+        {
+            Text = message,
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#E2E8F0")!,
+            HorizontalAlignment = HorizontalAlignment.Center
+        });
+        container.Children.Add(stack);
+        mainContent.Content = container;
+    }
+
+    private async Task TryAutoLoginAsync()
+    {
+        ShowLoadingScreen("Проверка полномочий администратора…");
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "staff-tickets/auto-auth");
+            using var resp = await http.SendAsync(req, lifetime.Token);
+            if (resp.IsSuccessStatusCode)
+            {
+                string json = await resp.Content.ReadAsStringAsync(lifetime.Token);
+                using var doc = JsonDocument.Parse(json);
+                string token = doc.RootElement.GetProperty("token").GetString()!;
+                var userObj = doc.RootElement.GetProperty("user").Clone();
+
+                authToken = token;
+                ApplyTechnicianInfo(userObj);
+                cachedSession = (token, userObj, DateTime.UtcNow.AddHours(8));
+                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", authToken);
+
+                ShowMainWorkspace();
+                await LoadOverviewAsync();
+                return;
+            }
+        }
+        catch
+        {
+            // Fall back to manual login screen
+        }
+
+        ShowLoginScreen();
     }
 
     private void ApplyTechnicianInfo(JsonElement user)

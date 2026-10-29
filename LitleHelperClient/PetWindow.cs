@@ -80,7 +80,8 @@ public sealed partial class PetWindow : Window
     private List<ActionButton> systemButtons = [];
     private SuperAdminWindow? superWindow;
     private EmergencyAlertWindow? activeAlertWindow;
-    private bool superAvailable, announcementVisible;
+    private StaffTicketsWindow? staffTicketsWindow;
+    private bool superAvailable, adminAvailable, announcementVisible;
     private MessengerClient? messenger;
     private MessengerWindow? messengerWindow;
     private TrayIcon? tray;
@@ -314,7 +315,7 @@ public sealed partial class PetWindow : Window
             printerWatchdog?.Dispose();
             certWatchdog?.Dispose();
             animation.Stop(); inactivity.Stop(); refresh.Stop(); outsideClick.Stop();
-            lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); source?.RemoveHook(Hook);
+            lifetime.Cancel(); ticket?.Close(); superWindow?.Close(); staffTicketsWindow?.Close(); source?.RemoveHook(Hook);
             messengerWindow?.Close();
             tray?.Dispose();
             if (messenger != null) await messenger.DisposeAsync();
@@ -573,6 +574,7 @@ public sealed partial class PetWindow : Window
                 hub = new HubConnectionService(settings);
                 antivirus = new AntivirusService(settings, hub);
                 hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; RefreshMenuIfOpen(); }));
+                hub.AdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { adminAvailable = available; RefreshMenuIfOpen(); }));
                 hub.NoticeReceived += notice => Dispatcher.InvokeAsync(() => ReceiveAnnouncement(notice)).Task;
                 hub.CartridgeReadyReceived += notice => Dispatcher.InvokeAsync(() => HandleCartridgeReady(notice));
                 hub.TicketReplyReceived += notice => Dispatcher.InvokeAsync(() => HandleTicketReply(notice));
@@ -1356,6 +1358,7 @@ public sealed partial class PetWindow : Window
         if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "mail")) visibleActions.Add(new("mail", Loc.T("TrayMail"), "mail"));
         if (!diagnostics && hub?.IsOnline == true && SystemButtonVisibility.Enabled(systemButtons, "emergency")) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
         if (!diagnostics && pendingSurveys.Length > 0) visibleActions.Insert(0,new("pending-surveys","Ожидают оценки: " + pendingSurveys.Length,"surveys"));
+        if (!diagnostics && (adminAvailable || superAvailable)) visibleActions.Add(new("staff_tickets", "📋 Заявки", "staff_tickets"));
         int count = visibleActions.Count;
 
         const double winW = 500;
@@ -1420,6 +1423,32 @@ public sealed partial class PetWindow : Window
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0;
         outsideClick.Start();
     }
+    
+    private void OpenStaffTicketsWindow()
+    {
+        if (hub?.IsOnline != true && !adminAvailable && !superAvailable) return;
+        if (staffTicketsWindow != null)
+        {
+            if (staffTicketsWindow.WindowState == WindowState.Minimized)
+                staffTicketsWindow.WindowState = WindowState.Normal;
+            staffTicketsWindow.Activate();
+            return;
+        }
+
+        try
+        {
+            staffTicketsWindow = new StaffTicketsWindow(settings, this) { Owner = this, Topmost = true };
+            staffTicketsWindow.Closed += (_, _) => staffTicketsWindow = null;
+            staffTicketsWindow.Show();
+            staffTicketsWindow.Activate();
+        }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+            ShowNotice("Не удалось открыть заявки: " + ex.Message);
+        }
+    }
+
     private void OpenSuperAdminWindow()
     {
         if (hub?.IsOnline != true || !superAvailable) return;
@@ -1783,6 +1812,7 @@ public sealed partial class PetWindow : Window
                     OpenCompanionChat(); break;
                 case "forbidden" or "disabled":
                     ShowForbiddenNotice(); return Task.CompletedTask;
+                case "staff_tickets": OpenStaffTicketsWindow(); return Task.CompletedTask;
                 case "messenger": return OpenMessengerAsync();
                 case "mail": OpenMailWindow(); break;
                 case "surveys": return OpenSurveyQueue();

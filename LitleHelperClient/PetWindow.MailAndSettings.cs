@@ -125,6 +125,13 @@ public sealed partial class PetWindow
         };
         menu.Items.Add(quietItem);
 
+        if (!diagnostics && (adminAvailable || superAvailable))
+        {
+            var ticketsItem = new MenuItem { Header = "📋 Заявки" };
+            ticketsItem.Click += (_, _) => OpenStaffTicketsWindow();
+            menu.Items.Add(ticketsItem);
+        }
+
         menu.Items.Add(new Separator());
 
         // 8. Кнопка настроек

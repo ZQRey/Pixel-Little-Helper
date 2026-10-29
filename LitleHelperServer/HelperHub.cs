@@ -131,7 +131,11 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         }
         await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
         var buttons = await Buttons(db, c); await Clients.Caller.SendAsync("OnButtonsUpdated", buttons);
-        await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName));
+        bool isSuper = await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName);
+        string cu = (c.CurrentUser ?? "").ToLower();
+        bool isAdmin = await db.Users.AnyAsync(u => (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin) && u.IsActive && !u.MustChangePassword && (u.AssistantMachine == c.MachineName || u.Username.ToLower() == cu || (cu.Length > 0 && u.Username.ToLower().StartsWith(cu + "@"))));
+        await Clients.Caller.SendAsync("SuperAdminAvailable", isSuper);
+        await Clients.Caller.SendAsync("AdminAvailable", isAdmin);
         await Clients.Caller.SendAsync("WebGuardToggled", settings.Security().WebGuardEnabled);
         if (!string.IsNullOrWhiteSpace(c.Room))
             await Clients.Caller.SendAsync("ClientRoomUpdated", c.Room);
@@ -156,7 +160,17 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         await db.SaveChangesAsync(); EmergencyDirectorySync.Request();
         await Clients.Group("PanelStaff").SendAsync("ComputerChanged", Status(c));
     }
-    public async Task Heartbeat() { var c = await Agent(); c.LastSeen = DateTime.UtcNow; await db.SaveChangesAsync(); await Clients.Caller.SendAsync("SuperAdminAvailable", await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName)); }
+    public async Task Heartbeat()
+    {
+        var c = await Agent();
+        c.LastSeen = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        bool isSuper = await db.Users.AnyAsync(u => u.Role == Roles.SuperAdmin && u.IsActive && !u.MustChangePassword && u.AssistantMachine == c.MachineName);
+        string cu = (c.CurrentUser ?? "").ToLower();
+        bool isAdmin = await db.Users.AnyAsync(u => (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin) && u.IsActive && !u.MustChangePassword && (u.AssistantMachine == c.MachineName || u.Username.ToLower() == cu || (cu.Length > 0 && u.Username.ToLower().StartsWith(cu + "@"))));
+        await Clients.Caller.SendAsync("SuperAdminAvailable", isSuper);
+        await Clients.Caller.SendAsync("AdminAvailable", isAdmin);
+    }
     public async Task SetPortableMode(bool isPortable)
     {
         var c = await Agent();

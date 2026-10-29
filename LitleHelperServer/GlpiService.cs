@@ -244,6 +244,11 @@ public partial class GlpiService(HttpClient http, GlpiSettingsStore store, ILogg
         try { return await CallAsync(HttpMethod.Get, "Ticket/" + id + "/ITILSolution?range=0-999", null, token); }
         catch { return default; }
     }
+    public async Task<JsonElement> SatisfactionAsync(int id, CancellationToken token)
+    {
+        try { return await CallAsync(HttpMethod.Get, "Ticket/" + id + "/TicketSatisfaction?range=0-999", null, token); }
+        catch { return default; }
+    }
 }
 
 public sealed class GlpiUserNotFoundException(string message) : InvalidOperationException(message);

@@ -24,6 +24,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action? Connecting;
     public event Action<List<ActionButton>>? ButtonsUpdated;
     public event Action<bool>? SuperAdminAvailable;
+    public event Action<bool>? AdminAvailable;
     public event Func<ClientNotice, Task<string>>? NoticeReceived;
     public event Action<CartridgeReadyNotice>? CartridgeReadyReceived;
     public event Action<TicketReplyNotice>? TicketReplyReceived;
@@ -75,6 +76,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On<List<ActionButton>>("OnButtonsUpdated", buttons => { if (registered) ButtonsUpdated?.Invoke(buttons); });
         created.On<CommandEnvelope>("ExecuteCommand", RunTask);
         created.On<bool>("SuperAdminAvailable", available => SuperAdminAvailable?.Invoke(available));
+        created.On<bool>("AdminAvailable", available => AdminAvailable?.Invoke(available));
         created.On("RefreshInventory", SendInventory);
         created.On<string>("KillProcess", name => RunTask(new(Guid.NewGuid().ToString("N"), "kill", name)));
         created.On("Reboot", () => RunTask(new(Guid.NewGuid().ToString("N"), "reboot", "")));
@@ -100,7 +102,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.ServerTimeout = TimeSpan.FromSeconds(25); created.HandshakeTimeout = TimeSpan.FromSeconds(10); created.KeepAliveInterval = TimeSpan.FromSeconds(10);
         return created;
     }
-    private void Offline() { registered = false; SuperAdminAvailable?.Invoke(false); OnlineChanged?.Invoke(false); }
+    private void Offline() { registered = false; SuperAdminAvailable?.Invoke(false); AdminAvailable?.Invoke(false); OnlineChanged?.Invoke(false); }
     public void Start() => loop ??= Task.Run(ConnectLoop);
     private async Task ConnectLoop()
     {

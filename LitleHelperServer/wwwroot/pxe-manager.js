@@ -37,6 +37,9 @@ async function renderPxePage() {
     }
 }
 
+// Explicit global attachment
+window.renderPxePage = renderPxePage;
+
 // -----------------------------------------------------------------------------
 // Screen 1: Connection Settings
 // -----------------------------------------------------------------------------
@@ -823,3 +826,8 @@ async function renderPxeLogsTab(container) {
     await fetchLogs();
     pxeLogInterval = setInterval(fetchLogs, 3500);
 }
+
+// Global window registration
+window.renderPxePage = renderPxePage;
+
+

@@ -42,7 +42,22 @@ const titles = { pxe:['PXE сервер','Сетевая установка оп
 };
 const date = v => v ? new Date(v).toLocaleString('ru-RU') : '—';
 function toast(text, error=false){ $('#toast').textContent=text; $('#toast').className=error?'error':''; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(()=>$('#toast').hidden=true,6000); }
-async function api(path, method='GET', body){ const response=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:body===undefined?undefined:JSON.stringify(body)}); const result=response.status===204?null:await response.json().catch(()=>null); if(!response.ok){ if(response.status===401 && !['/auth/login','/auth/ad'].includes(path)) logout(); throw new Error(result?.error || (response.status===403?'Недостаточно прав':response.status===429?'Слишком много попыток. Подождите минуту.':'Ошибка '+response.status)); } return result; }
+async function api(path, method='GET', body){
+    if (typeof method === 'object' && method !== null) {
+        body = method.body;
+        method = method.method || 'GET';
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch {}
+        }
+    }
+    const response=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},body:body===undefined?undefined:JSON.stringify(body)});
+    const result=response.status===204?null:await response.json().catch(()=>null);
+    if(!response.ok){
+        if(response.status===401 && !['/auth/login','/auth/ad'].includes(path)) logout();
+        throw new Error(result?.error || (response.status===403?'Недостаточно прав':response.status===429?'Слишком много попыток. Подождите минуту.':'Ошибка '+response.status));
+    }
+    return result;
+}
 function modal(title,html){ $('#modal-title').textContent=title; $('#modal-content').innerHTML=html; if(!$('#modal').open)$('#modal').showModal(); }
 function closeModal(){ $('#modal').close(); }
 $('#modal-close').addEventListener('click',()=>{ if(!me?.mustChangePassword)closeModal(); });

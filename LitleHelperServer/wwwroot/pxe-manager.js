@@ -15,10 +15,7 @@ async function renderPxePage() {
     try {
         const settings = await api('/pxe/settings');
         // Test connection
-        const testRes = await api('/pxe/test-connection', {
-            method: 'POST',
-            body: JSON.stringify({ serverUrl: settings.serverUrl })
-        });
+        const testRes = await api('/pxe/test-connection', 'POST', { serverUrl: settings.serverUrl });
 
         if (!settings.enabled || !testRes.success) {
             renderPxeConnectionScreen(settings, testRes);
@@ -96,10 +93,7 @@ function renderPxeConnectionScreen(settings, testRes) {
         const url = $('#pxe-connect-form [name="serverUrl"]').value.trim();
         toast('Проверка соединения…');
         try {
-            const res = await api('/pxe/test-connection', {
-                method: 'POST',
-                body: JSON.stringify({ serverUrl: url })
-            });
+            const res = await api('/pxe/test-connection', 'POST', { serverUrl: url });
             if (res.success) {
                 toast(`Успешно! Ответ за ${res.latencyMs || 0} мс.`);
             } else {
@@ -125,10 +119,7 @@ function renderPxeConnectionScreen(settings, testRes) {
                 apiKey: f.apiKey.value.trim()
             };
 
-            await api('/pxe/settings', {
-                method: 'PUT',
-                body: JSON.stringify(payload)
-            });
+            await api('/pxe/settings', 'PUT', payload);
 
             toast('Настройки PXE сохранены');
             await renderPxePage();
@@ -243,7 +234,7 @@ function renderPxeDashboard(settings, initialStatus) {
             btn.disabled = true;
             toast(`Выполняется ${act} для ${srv}…`);
             try {
-                await api(`/pxe/services/${srv}/${act}`, { method: 'POST' });
+                await api(`/pxe/services/${srv}/${act}`, 'POST');
                 toast(`Служба ${srv}: ${act} успешно выполнен.`);
                 const st = await api('/pxe/status');
                 renderPxeDashboard(settings, st);
@@ -432,7 +423,7 @@ async function renderPxeImagesTab(container) {
                 const path = btn.dataset.deleteImage;
                 if (!confirm(`Удалить файл "${path}" с PXE-сервера?`)) return;
                 try {
-                    await api(`/pxe/images?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+                    await api(`/pxe/images?path=${encodeURIComponent(path)}`, 'DELETE');
                     toast('Файл успешно удален');
                     await renderPxeImagesTab(container);
                 } catch (e) {
@@ -698,10 +689,7 @@ function showUnattendedCustomizerModal(images) {
         };
 
         try {
-            const res = await api('/pxe/process-windows', {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            });
+            const res = await api('/pxe/process-windows', 'POST', payload);
 
             if (res.status === 'ok') {
                 statusBox.textContent = `[УСПЕХ] WinPE успешно сформирован и настроен на автоустановку!\n\n${res.stdout || ''}`;
@@ -761,10 +749,7 @@ async function renderPxeEditorTab(container) {
             const content = $('#pxe-cfg-textarea').value;
             toast('Сохранение конфигурации…');
             try {
-                await api(`/pxe/configs/${pxeCurrentConfig}`, {
-                    method: 'POST',
-                    body: JSON.stringify({ content })
-                });
+                await api(`/pxe/configs/${pxeCurrentConfig}`, 'POST', { content });
                 toast(`Конфигурация ${pxeCurrentConfig} успешно сохранена и синхронизирована!`);
             } catch (e) {
                 toast(e.message, true);

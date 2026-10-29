@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="title">PXE Server Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+    <!-- Navbar -->
+    <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="h-10 w-10 rounded-lg bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-sky-500/20">
+                    <i class="fa-solid fa-server text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold text-white leading-tight" data-i18n="title">PXE Control Center</h1>
+                    <p class="text-xs text-slate-400" data-i18n="subtitle">Autonomous Multi-Arch Boot Server (172.16.16.6)</p>
+                </div>
+            </div>
+
+            <!-- Header Controls: Status Badge, Language Switcher, Refresh -->
+            <div class="flex items-center space-x-3">
+                <div id="badge-all-status" class="flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="badge-all-status-text" data-i18n="all_online">All Services Online</span>
+                </div>
+
+                <!-- Language Selector -->
+                <div class="relative">
+                    <select id="lang-select" onchange="setLanguage(this.value)" class="bg-slate-800 hover:bg-slate-700/80 text-slate-200 text-xs font-medium py-1.5 px-2.5 rounded-lg border border-slate-700 focus:outline-none focus:border-sky-500 transition cursor-pointer">
+                        <option value="ru">🇷🇺 Русский</option>
+                        <option value="kk">🇰🇿 Қазақша</option>
+                        <option value="en">🇬🇧 English</option>
+                        <option value="zh">🇨🇳 中文</option>
+                    </select>
+                </div>
+
+                <button onclick="refreshData()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition" data-i18n-title="refresh">
+                    <i id="refresh-icon" class="fa-solid fa-rotate-right"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- Top Metrics Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <!-- CPU -->
+            <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs text-slate-400 font-medium" data-i18n="cpu_load">CPU Load</p>
+                    <h3 id="stat-cpu" class="text-2xl font-bold text-white mt-1">--%</h3>
+                </div>
+                <div class="h-10 w-10 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center">
+                    <i class="fa-solid fa-microchip text-lg"></i>
+                </div>
+            </div>
+            <!-- RAM -->
+            <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs text-slate-400 font-medium" data-i18n="ram_usage">RAM Usage</p>
+                    <h3 id="stat-ram" class="text-2xl font-bold text-white mt-1">-- / -- MB</h3>
+                </div>
+                <div class="h-10 w-10 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
+                    <i class="fa-solid fa-memory text-lg"></i>
+                </div>
+            </div>
+            <!-- Disk Storage -->
+            <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs text-slate-400 font-medium" data-i18n="storage_free">Storage (/srv Free)</p>
+                    <h3 id="stat-disk" class="text-2xl font-bold text-white mt-1">-- GB</h3>
+                </div>
+                <div class="h-10 w-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                    <i class="fa-solid fa-hard-drive text-lg"></i>
+                </div>
+            </div>
+            <!-- Active Clients -->
+            <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                <div>
+                    <p class="text-xs text-slate-400 font-medium" data-i18n="clients_detected">PXE Clients Detected</p>
+                    <h3 id="stat-clients-count" class="text-2xl font-bold text-amber-400 mt-1">0</h3>
+                </div>
+                <div class="h-10 w-10 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                    <i class="fa-solid fa-network-wired text-lg"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- Services Controller Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <!-- Dnsmasq -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="p-2.5 rounded-lg bg-sky-500/10 text-sky-400"><i class="fa-solid fa-satellite-dish"></i></div>
+                        <div>
+                            <h4 class="font-bold text-white text-sm">Dnsmasq</h4>
+                            <p class="text-xs text-slate-400" data-i18n="dnsmasq_desc">DHCP Proxy + TFTP Engine</p>
+                        </div>
+                    </div>
+                    <span id="badge-dnsmasq" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-400" data-i18n="status_loading">Loading</span>
+                </div>
+                <div class="text-xs text-slate-400 space-y-1">
+                    <p><span data-i18n="ports_label">Ports:</span> <span class="text-slate-200">UDP 67 (Proxy), UDP 69 (TFTP), UDP 4011</span></p>
+                    <p><span data-i18n="status_label">Status:</span> <span id="info-dnsmasq" class="text-slate-200 font-mono">active (running)</span></p>
+                </div>
+                <div class="pt-2 flex items-center space-x-2 border-t border-slate-800">
+                    <button onclick="controlService('dnsmasq', 'start')" class="flex-1 py-1.5 px-3 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-500/30 transition" data-i18n="btn_start">Start</button>
+                    <button onclick="controlService('dnsmasq', 'restart')" class="flex-1 py-1.5 px-3 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-medium rounded-lg border border-amber-500/30 transition" data-i18n="btn_restart">Restart</button>
+                    <button onclick="controlService('dnsmasq', 'stop')" class="flex-1 py-1.5 px-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/30 transition" data-i18n="btn_stop">Stop</button>
+                </div>
+            </div>
+
+            <!-- Nginx -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-400"><i class="fa-solid fa-globe"></i></div>
+                        <div>
+                            <h4 class="font-bold text-white text-sm">Nginx Engine</h4>
+                            <p class="text-xs text-slate-400" data-i18n="nginx_desc">High-Speed HTTP ISO/Kernel Delivery</p>
+                        </div>
+                    </div>
+                    <span id="badge-nginx" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-400" data-i18n="status_loading">Loading</span>
+                </div>
+                <div class="text-xs text-slate-400 space-y-1">
+                    <p><span data-i18n="ports_label">Ports:</span> <span class="text-slate-200">TCP 80 (HTTP)</span></p>
+                    <p><span data-i18n="status_label">Status:</span> <span id="info-nginx" class="text-slate-200 font-mono">active (running)</span></p>
+                </div>
+                <div class="pt-2 flex items-center space-x-2 border-t border-slate-800">
+                    <button onclick="controlService('nginx', 'start')" class="flex-1 py-1.5 px-3 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-500/30 transition" data-i18n="btn_start">Start</button>
+                    <button onclick="controlService('nginx', 'restart')" class="flex-1 py-1.5 px-3 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-medium rounded-lg border border-amber-500/30 transition" data-i18n="btn_restart">Restart</button>
+                    <button onclick="controlService('nginx', 'stop')" class="flex-1 py-1.5 px-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/30 transition" data-i18n="btn_stop">Stop</button>
+                </div>
+            </div>
+
+            <!-- Samba -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="p-2.5 rounded-lg bg-purple-500/10 text-purple-400"><i class="fa-brands fa-windows"></i></div>
+                        <div>
+                            <h4 class="font-bold text-white text-sm">Samba (SMB)</h4>
+                            <p class="text-xs text-slate-400" data-i18n="samba_desc">WinPE Network Share (\\install)</p>
+                        </div>
+                    </div>
+                    <span id="badge-smbd" class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 text-slate-400" data-i18n="status_loading">Loading</span>
+                </div>
+                <div class="text-xs text-slate-400 space-y-1">
+                    <p><span data-i18n="ports_label">Ports:</span> <span class="text-slate-200">TCP 445 (SMB)</span></p>
+                    <p><span data-i18n="status_label">Status:</span> <span id="info-smbd" class="text-slate-200 font-mono">active (running)</span></p>
+                </div>
+                <div class="pt-2 flex items-center space-x-2 border-t border-slate-800">
+                    <button onclick="controlService('smbd', 'start')" class="flex-1 py-1.5 px-3 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-500/30 transition" data-i18n="btn_start">Start</button>
+                    <button onclick="controlService('smbd', 'restart')" class="flex-1 py-1.5 px-3 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-medium rounded-lg border border-amber-500/30 transition" data-i18n="btn_restart">Restart</button>
+                    <button onclick="controlService('smbd', 'stop')" class="flex-1 py-1.5 px-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 text-xs font-medium rounded-lg border border-rose-500/30 transition" data-i18n="btn_stop">Stop</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="border-b border-slate-800 flex space-x-8">
+            <button onclick="switchTab('clients')" id="tab-clients" class="tab-btn py-3 border-b-2 border-sky-500 text-sky-400 font-medium text-sm flex items-center space-x-2">
+                <i class="fa-solid fa-laptop-code"></i>
+                <span data-i18n="tab_clients">Connected Devices</span>
+            </button>
+            <button onclick="switchTab('images')" id="tab-images" class="tab-btn py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2">
+                <i class="fa-solid fa-compact-disc"></i>
+                <span data-i18n="tab_images">OS Images & Media</span>
+            </button>
+            <button onclick="switchTab('editor')" id="tab-editor" class="tab-btn py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2">
+                <i class="fa-solid fa-file-code"></i>
+                <span data-i18n="tab_editor">Boot Menu Editor</span>
+            </button>
+            <button onclick="switchTab('logs')" id="tab-logs" class="tab-btn py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2">
+                <i class="fa-solid fa-terminal"></i>
+                <span data-i18n="tab_logs">Live Logs</span>
+            </button>
+        </div>
+
+        <!-- TAB 1: Connected Devices Table -->
+        <div id="content-clients" class="tab-content space-y-4">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-base font-bold text-white" data-i18n="clients_title">Live PXE Boot & DHCP Clients</h3>
+                    <p class="text-xs text-slate-400" data-i18n="clients_desc">Automatic detection of network devices requesting bootloaders via TFTP or HTTP.</p>
+                </div>
+                <input type="text" id="filter-clients" onkeyup="filterClients()" placeholder="Filter by IP, name, file..." data-i18n-placeholder="filter_placeholder" class="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-sky-500 w-64">
+            </div>
+
+            <div class="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 shadow-sm">
+                <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-slate-800/60 uppercase tracking-wider text-[11px] text-slate-400 border-b border-slate-800">
+                        <tr>
+                            <th class="px-4 py-3" data-i18n="col_ip">Client IP</th>
+                            <th class="px-4 py-3" data-i18n="col_host">Hostname / ID</th>
+                            <th class="px-4 py-3" data-i18n="col_arch">Architecture</th>
+                            <th class="px-4 py-3" data-i18n="col_file">Requested File</th>
+                            <th class="px-4 py-3" data-i18n="col_proto">Protocol</th>
+                            <th class="px-4 py-3" data-i18n="col_last_seen">Last Activity</th>
+                            <th class="px-4 py-3" data-i18n="col_status">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clients-tbody" class="divide-y divide-slate-800/60 font-mono">
+                        <tr>
+                            <td colspan="7" class="px-4 py-6 text-center text-slate-500" data-i18n="clients_empty">Scanning network for PXE boot requests...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB 2: Images & Media Management -->
+        <div id="content-images" class="tab-content hidden space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Upload Box -->
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                    <h3 class="font-bold text-white text-sm flex items-center space-x-2">
+                        <i class="fa-solid fa-cloud-arrow-up text-sky-400"></i>
+                        <span data-i18n="upload_title">Upload OS Media (ISO / WIM / SquashFS)</span>
+                    </h3>
+                    <p class="text-xs text-slate-400" data-i18n="upload_desc">Upload installation ISOs or custom kernels directly to the PXE HTTP server storage (`/srv/www/pxe/os/`).</p>
+                    
+                    <form id="upload-form" class="space-y-3">
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1" data-i18n="target_dir_label">Target Subdirectory</label>
+                            <select id="upload-target-dir" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200">
+                                <option value="isos">os/isos/ (ISO Disk Images)</option>
+                                <option value="debian">os/debian/ (Debian Netboot)</option>
+                                <option value="windows">os/windows/ (Windows WinPE)</option>
+                                <option value="sysrescue">os/sysrescue/ (SystemRescue)</option>
+                                <option value="clonezilla">os/clonezilla/ (Clonezilla)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1" data-i18n="select_file_label">Select File</label>
+                            <input type="file" id="upload-file" class="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-sky-500 file:text-white hover:file:bg-sky-600">
+                        </div>
+                        <button type="button" onclick="uploadFile()" class="w-full py-2 bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs rounded-lg transition shadow-lg shadow-sky-600/20" data-i18n="upload_btn">
+                            Upload to PXE Storage
+                        </button>
+                    </form>
+
+                    <!-- Progress Bar -->
+                    <div id="upload-progress-box" class="hidden space-y-2">
+                        <div class="flex justify-between text-xs text-slate-400">
+                            <span data-i18n="uploading">Uploading...</span>
+                            <span id="upload-percent">0%</span>
+                        </div>
+                        <div class="w-full bg-slate-800 rounded-full h-2">
+                            <div id="upload-progress-bar" class="bg-sky-500 h-2 rounded-full w-0 transition-all duration-200"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Windows WinPE Automated Generator -->
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                    <h3 class="font-bold text-white text-sm flex items-center space-x-2">
+                        <i class="fa-brands fa-windows text-purple-400"></i>
+                        <span data-i18n="winpe_title">WinPE Unattended Injector</span>
+                    </h3>
+                    <p class="text-xs text-slate-400" data-i18n="winpe_desc">Automatically extracts `boot.wim`, injects `startnet.cmd` (auto-mounts `\\172.16.16.6\install`) and prepares wimboot files.</p>
+                    
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1" data-i18n="win_iso_path_label">Path to Windows ISO</label>
+                            <input type="text" id="win-iso-path" placeholder="/home/zqrey/Win11.iso or relative in os/" data-i18n-placeholder="win_iso_path_placeholder" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200">
+                        </div>
+                        <button onclick="processWinPE()" class="w-full py-2 bg-purple-600 hover:bg-purple-500 text-white font-medium text-xs rounded-lg transition shadow-lg shadow-purple-600/20" data-i18n="process_win_btn">
+                            Process Windows ISO & Build WinPE
+                        </button>
+                    </div>
+
+                    <div id="winpe-status" class="hidden p-3 rounded-lg bg-slate-800 text-xs font-mono text-slate-300 max-h-40 overflow-y-auto"></div>
+                </div>
+
+                <!-- Quick Actions / Presets -->
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                    <h3 class="font-bold text-white text-sm flex items-center space-x-2">
+                        <i class="fa-solid fa-bolt text-amber-400"></i>
+                        <span data-i18n="presets_title">Quick Presets & Actions</span>
+                    </h3>
+                    <div class="space-y-2">
+                        <button onclick="runScript('fetch_live_images.sh')" class="w-full text-left p-3 rounded-lg bg-slate-800 hover:bg-slate-700/80 border border-slate-700 transition flex items-center justify-between">
+                            <div>
+                                <h5 class="text-xs font-semibold text-slate-200" data-i18n="preset_debian_title">Download Debian 12 Netboot</h5>
+                                <p class="text-[11px] text-slate-400" data-i18n="preset_debian_desc">Fetches latest official kernel & initrd</p>
+                            </div>
+                            <i class="fa-solid fa-download text-slate-400"></i>
+                        </button>
+                        <a href="http://172.16.16.6/" target="_blank" class="block w-full text-left p-3 rounded-lg bg-slate-800 hover:bg-slate-700/80 border border-slate-700 transition flex items-center justify-between">
+                            <div>
+                                <h5 class="text-xs font-semibold text-slate-200" data-i18n="preset_nginx_title">Browse Nginx Web Root</h5>
+                                <p class="text-[11px] text-slate-400" data-i18n="preset_nginx_desc">Open HTTP autoindex in new tab</p>
+                            </div>
+                            <i class="fa-solid fa-arrow-up-right-from-square text-slate-400"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Existing Images List -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div class="flex items-center justify-between">
+                    <h4 class="font-bold text-white text-sm" data-i18n="images_title">Installed OS Media Files</h4>
+                    <button onclick="loadImagesList()" class="text-xs text-sky-400 hover:underline" data-i18n="refresh_list">Refresh List</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs text-slate-300">
+                        <thead class="bg-slate-800/60 uppercase tracking-wider text-[11px] text-slate-400 border-b border-slate-800">
+                            <tr>
+                                <th class="px-4 py-2.5" data-i18n="col_filename">File Name</th>
+                                <th class="px-4 py-2.5" data-i18n="col_relpath">Relative Path</th>
+                                <th class="px-4 py-2.5" data-i18n="col_size">Size</th>
+                                <th class="px-4 py-2.5" data-i18n="col_modified">Last Modified</th>
+                            </tr>
+                        </thead>
+                        <tbody id="images-tbody" class="divide-y divide-slate-800/60 font-mono">
+                            <tr><td colspan="4" class="px-4 py-4 text-center text-slate-500" data-i18n="images_loading">Loading media files...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: Boot Menu Editor -->
+        <div id="content-editor" class="tab-content hidden space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex space-x-2">
+                    <button onclick="loadConfig('grub')" id="btn-cfg-grub" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 text-white">grub.cfg (UEFI)</button>
+                    <button onclick="loadConfig('syslinux')" id="btn-cfg-syslinux" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">pxelinux.cfg/default (BIOS)</button>
+                    <button onclick="loadConfig('dnsmasq')" id="btn-cfg-dnsmasq" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">dnsmasq-pxe.conf</button>
+                    <button onclick="loadConfig('preseed')" id="btn-cfg-preseed" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">preseed.cfg (Debian)</button>
+                </div>
+                <button onclick="saveCurrentConfig()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition shadow-lg shadow-emerald-600/20 flex items-center space-x-2">
+                    <i class="fa-solid fa-floppy-disk"></i>
+                    <span data-i18n="btn_save_apply">Save & Apply</span>
+                </button>
+            </div>
+
+            <div class="relative rounded-xl border border-slate-800 bg-slate-900 overflow-hidden">
+                <textarea id="config-textarea" class="w-full h-[550px] bg-slate-950 p-4 font-mono text-xs text-sky-300 focus:outline-none resize-none leading-relaxed"></textarea>
+            </div>
+        </div>
+
+        <!-- TAB 4: Live Server Logs -->
+        <div id="content-logs" class="tab-content hidden space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex space-x-2">
+                    <button onclick="switchLogSource('dnsmasq')" id="btn-log-dnsmasq" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 text-white">Dnsmasq (DHCP/TFTP)</button>
+                    <button onclick="switchLogSource('nginx-access')" id="btn-log-nginx" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">Nginx Access Log</button>
+                    <button onclick="switchLogSource('smbd')" id="btn-log-smbd" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">Samba Log</button>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <label class="flex items-center space-x-2 text-xs text-slate-400 cursor-pointer">
+                        <input type="checkbox" id="log-autoscroll" checked class="rounded bg-slate-800 border-slate-700 text-sky-500">
+                        <span data-i18n="autoscroll">Auto-scroll</span>
+                    </label>
+                    <button onclick="loadLogs()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium rounded-lg text-slate-300 flex items-center space-x-1">
+                        <i class="fa-solid fa-arrow-rotate-right"></i>
+                        <span data-i18n="refresh_logs">Refresh</span>
+                    </button>
+                </div>
+            </div>
+
+            <pre id="log-terminal" class="w-full h-[550px] bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-slate-300 overflow-y-auto leading-relaxed whitespace-pre-wrap"></pre>
+        </div>
+
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-6 right-6 hidden px-4 py-3 rounded-lg shadow-xl text-xs font-medium z-50 flex items-center space-x-2 transition-all">
+        <i id="toast-icon" class="fa-solid fa-check"></i>
+        <span id="toast-msg">Notification</span>
+    </div>
+
+    <!-- Internationalization & Script Logic -->
+    <script>
+        // -------------------------------------------------------------------------
+        // Localization Dictionaries (ru, kk, en, zh)
+        // -------------------------------------------------------------------------
+        const i18n = {
+            ru: {
+                title: "PXE Control Center",
+                subtitle: "Автономный сервер сетевой загрузки (172.16.16.6)",
+                all_online: "Все сервисы в сети",
+                action_needed: "Требуется внимание",
+                refresh: "Обновить данные",
+                cpu_load: "Нагрузка CPU",
+                ram_usage: "Использование RAM",
+                storage_free: "Хранилище (/srv свободно)",
+                clients_detected: "Обнаружено клиентов PXE",
+                dnsmasq_desc: "DHCP Proxy + TFTP сервер",
+                nginx_desc: "HTTP-сервер отдачи ISO/ядер",
+                samba_desc: "Сетевая шара WinPE (\\\\install)",
+                ports_label: "Порты:",
+                status_label: "Статус:",
+                btn_start: "Запустить",
+                btn_restart: "Перезапустить",
+                btn_stop: "Остановить",
+                status_active: "Активен",
+                status_stopped: "Остановлен",
+                status_loading: "Загрузка...",
+                tab_clients: "Подключённые устройства",
+                tab_images: "Образы ОС и файлы",
+                tab_editor: "Редактор меню загрузки",
+                tab_logs: "Журнал (Live Logs)",
+                clients_title: "Активные клиенты PXE Boot и DHCP",
+                clients_desc: "Автоматическое обнаружение устройств, запрашивающих загрузчики через TFTP или HTTP.",
+                filter_placeholder: "Фильтр по IP, имени, файлу...",
+                col_ip: "IP клиента",
+                col_host: "Имя / Идентификатор",
+                col_arch: "Архитектура",
+                col_file: "Запрошенный файл",
+                col_proto: "Протокол",
+                col_last_seen: "Активность",
+                col_status: "Статус",
+                clients_empty: "Нет активных запросов сетевой загрузки в последних логах.",
+                clients_empty_hint: "Включите сетевую загрузку (PXE Boot) в BIOS/UEFI целевого ПК.",
+                upload_title: "Загрузка образов ОС (ISO / WIM / SquashFS)",
+                upload_desc: "Загрузка установочных ISO или ядер напрямую в каталог хранилища PXE (/srv/www/pxe/os/).",
+                target_dir_label: "Целевой подкаталог",
+                select_file_label: "Выберите файл",
+                upload_btn: "Загрузить в хранилище PXE",
+                uploading: "Загрузка на сервер...",
+                winpe_title: "Генератор WinPE с автоустановкой",
+                winpe_desc: "Извлекает boot.wim, внедряет startnet.cmd (автомонтирование \\\\172.16.16.6\\install) и готовит файлы wimboot.",
+                win_iso_path_label: "Путь к ISO образу Windows",
+                win_iso_path_placeholder: "/home/zqrey/Win11.iso или путь в каталоге os/",
+                process_win_btn: "Обработать Windows ISO и собрать WinPE",
+                winpe_starting: "Запуск сборки WinPE для {path}...\nИзвлечение файлов загрузки и внедрение startnet.cmd через wimlib-imagex...\nПожалуйста, подождите (2-4 минуты)...",
+                winpe_success: "[УСПЕШНО] WinPE успешно подготовлен к сетевой установке!",
+                winpe_error: "[ОШИБКА] Ошибка сборки WinPE:",
+                presets_title: "Быстрые действия и пресеты",
+                preset_debian_title: "Скачать Debian 12 Netboot",
+                preset_debian_desc: "Загружает официальные ядро и initrd",
+                preset_nginx_title: "Открыть веб-каталог Nginx",
+                preset_nginx_desc: "Открыть autoindex в новой вкладке",
+                images_title: "Установленные файлы дистрибутивов",
+                refresh_list: "Обновить список",
+                col_filename: "Имя файла",
+                col_relpath: "Относительный путь",
+                col_size: "Размер",
+                col_modified: "Дата изменения",
+                images_empty: "Образы не найдены. Загрузите файл или выберите пресет.",
+                images_loading: "Загрузка списка файлов...",
+                btn_save_apply: "Сохранить и применить",
+                autoscroll: "Автопрокрутка",
+                refresh_logs: "Обновить",
+                logs_empty: "Нет новых записей в логах.",
+                toast_sending: "Отправка команды {action} в {service}...",
+                toast_service_success: "Сервис {service}: действие {action} выполнено.",
+                toast_service_failed: "Ошибка управления сервисом",
+                toast_config_saved: "Конфигурация {config} успешно сохранена и синхронизирована!",
+                toast_config_failed: "Ошибка сохранения файла",
+                toast_config_load_failed: "Не удалось загрузить конфигурацию {config}",
+                toast_select_file: "Пожалуйста, выберите файл для загрузки.",
+                toast_file_uploaded: "Файл {name} успешно загружен!",
+                toast_upload_failed: "Ошибка загрузки файла.",
+                toast_network_error: "Сетевая ошибка при передаче файла.",
+                toast_win_path_required: "Укажите путь к ISO-образу Windows.",
+                toast_winpe_ready: "Windows WinPE готов к сетевой загрузке!",
+                toast_winpe_failed: "Сборка WinPE завершилась ошибкой."
+            },
+            kk: {
+                title: "PXE Басқару Орталығы",
+                subtitle: "Автономды көп архитектуралы жүктеу сервері (172.16.16.6)",
+                all_online: "Барлық қызметтер қосулы",
+                action_needed: "Назар аудару қажет",
+                refresh: "Деректерді жаңарту",
+                cpu_load: "CPU жүктемесі",
+                ram_usage: "RAM пайдаланылуы",
+                storage_free: "Жад (/srv бос орын)",
+                clients_detected: "PXE клиенттері анықталды",
+                dnsmasq_desc: "DHCP Proxy + TFTP қозғалтқышы",
+                nginx_desc: "ISO/ядроларды жылдам тарататын HTTP",
+                samba_desc: "WinPE желілік бумасы (\\\\install)",
+                ports_label: "Порттар:",
+                status_label: "Күйі:",
+                btn_start: "Қосу",
+                btn_restart: "Қайта қосу",
+                btn_stop: "Тоқтату",
+                status_active: "Белсенді",
+                status_stopped: "Тоқтатылған",
+                status_loading: "Жүктелуде...",
+                tab_clients: "Қосылған құрылғылар",
+                tab_images: "ОЖ бейнелері мен файлдар",
+                tab_editor: "Жүктеу мәзірінің редакторы",
+                tab_logs: "Тікелей логтар",
+                clients_title: "Белсенді PXE Boot және DHCP клиенттері",
+                clients_desc: "TFTP немесе HTTP арқылы жүктеушілерді сұрайтын құрылғыларды автоматты анықтау.",
+                filter_placeholder: "IP, атауы, файл бойынша сүзу...",
+                col_ip: "Клиент IP",
+                col_host: "Хост атауы / ID",
+                col_arch: "Архитектура",
+                col_file: "Сұралған файл",
+                col_proto: "Хаттама",
+                col_last_seen: "Соңғы белсенділік",
+                col_status: "Күйі",
+                clients_empty: "Соңғы логтарда белсенді желілік жүктеу сұраулары жоқ.",
+                clients_empty_hint: "Мақсатты компьютердің BIOS/UEFI баптауларында PXE Boot режимін қосыңыз.",
+                upload_title: "ОЖ медиа файлдарын жүктеу (ISO / WIM / SquashFS)",
+                upload_desc: "Орнату ISO бейнелерін немесе ядроларды тікелей PXE HTTP қоймасына (/srv/www/pxe/os/) жүктеу.",
+                target_dir_label: "Мақсатты ішкі бума",
+                select_file_label: "Файлды таңдаңыз",
+                upload_btn: "PXE қоймасына жүктеу",
+                uploading: "Серверге жүктелуде...",
+                winpe_title: "Автоматты WinPE инжекторы",
+                winpe_desc: "boot.wim шығарып, startnet.cmd енгізеді (\\\\172.16.16.6\\install автоматты тіркейді) және wimboot файлдарын дайындайды.",
+                win_iso_path_label: "Windows ISO файлының жолы",
+                win_iso_path_placeholder: "/home/zqrey/Win11.iso немесе os/ бумасындағы жол",
+                process_win_btn: "Windows ISO өңдеу және WinPE жинау",
+                winpe_starting: "{path} үшін WinPE құрастыру басталды...\nwimlib-imagex арқылы жүктеу файлдары алынып, startnet.cmd енгізілуде...\nКүте тұрыңыз (2-4 минут)...",
+                winpe_success: "[СӘТТІ] WinPE желілік орнатуға сәтті дайындалды!",
+                winpe_error: "[ҚАТЕ] WinPE өңдеу сәтсіз аяқталды:",
+                presets_title: "Жылдам әрекеттер мен үлгілер",
+                preset_debian_title: "Debian 12 Netboot жүктеп алу",
+                preset_debian_desc: "Ресми ядро мен initrd файлдарын алады",
+                preset_nginx_title: "Nginx веб-каталогын ашу",
+                preset_nginx_desc: "Жаңа қойындыда autoindex ашу",
+                images_title: "Орнатылған ОЖ медиа файлдары",
+                refresh_list: "Тізімді жаңарту",
+                col_filename: "Файл атауы",
+                col_relpath: "Салыстырмалы жол",
+                col_size: "Өлшемі",
+                col_modified: "Өзгертілген күні",
+                images_empty: "Бейнелер табылмады. Файл жүктеңіз немесе үлгіні таңдаңыз.",
+                images_loading: "Файлдар тізімі жүктелуде...",
+                btn_save_apply: "Сақтау және қолдану",
+                autoscroll: "Авто-айналдыру",
+                refresh_logs: "Жаңарту",
+                logs_empty: "Жаңа лог жазбалары жоқ.",
+                toast_sending: "{service} қызметіне {action} пәрмені жіберілуде...",
+                toast_service_success: "{service} қызметі: {action} сәтті орындалды.",
+                toast_service_failed: "Қызметті басқару қатесі",
+                toast_config_saved: "{config} конфигурациясы сәтті сақталып, қолданылды!",
+                toast_config_failed: "Файлды сақтау сәтсіз аяқталды",
+                toast_config_load_failed: "{config} конфигурациясын жүктеу сәтсіз болды",
+                toast_select_file: "Жүктеу үшін файлды таңдаңыз.",
+                toast_file_uploaded: "{name} файлы сәтті жүктелді!",
+                toast_upload_failed: "Файлды жүктеу қатесі.",
+                toast_network_error: "Файлды тасымалдау кезіндегі желі қатесі.",
+                toast_win_path_required: "Windows ISO файлының жолын көрсетіңіз.",
+                toast_winpe_ready: "Windows WinPE желіден жүктелуге дайын!",
+                toast_winpe_failed: "WinPE жинау сәтсіз аяқталды."
+            },
+            en: {
+                title: "PXE Control Center",
+                subtitle: "Autonomous Multi-Arch Boot Server (172.16.16.6)",
+                all_online: "All Services Online",
+                action_needed: "Action Needed",
+                refresh: "Refresh Data",
+                cpu_load: "CPU Load",
+                ram_usage: "RAM Usage",
+                storage_free: "Storage (/srv Free)",
+                clients_detected: "PXE Clients Detected",
+                dnsmasq_desc: "DHCP Proxy + TFTP Engine",
+                nginx_desc: "High-Speed HTTP ISO/Kernel Delivery",
+                samba_desc: "WinPE Network Share (\\\\install)",
+                ports_label: "Ports:",
+                status_label: "Status:",
+                btn_start: "Start",
+                btn_restart: "Restart",
+                btn_stop: "Stop",
+                status_active: "Active",
+                status_stopped: "Stopped",
+                status_loading: "Loading...",
+                tab_clients: "Connected Devices",
+                tab_images: "OS Images & Media",
+                tab_editor: "Boot Menu Editor",
+                tab_logs: "Live Logs",
+                clients_title: "Live PXE Boot & DHCP Clients",
+                clients_desc: "Automatic detection of network devices requesting bootloaders via TFTP or HTTP.",
+                filter_placeholder: "Filter by IP, name, file...",
+                col_ip: "Client IP",
+                col_host: "Hostname / ID",
+                col_arch: "Architecture",
+                col_file: "Requested File",
+                col_proto: "Protocol",
+                col_last_seen: "Last Activity",
+                col_status: "Status",
+                clients_empty: "No active network boot requests in recent logs.",
+                clients_empty_hint: "Start a client with PXE boot enabled in BIOS/UEFI.",
+                upload_title: "Upload OS Media (ISO / WIM / SquashFS)",
+                upload_desc: "Upload installation ISOs or custom kernels directly to the PXE HTTP server storage (/srv/www/pxe/os/).",
+                target_dir_label: "Target Subdirectory",
+                select_file_label: "Select File",
+                upload_btn: "Upload to PXE Storage",
+                uploading: "Uploading...",
+                winpe_title: "WinPE Unattended Injector",
+                winpe_desc: "Automatically extracts boot.wim, injects startnet.cmd (auto-mounts \\\\172.16.16.6\\install) and prepares wimboot files.",
+                win_iso_path_label: "Path to Windows ISO",
+                win_iso_path_placeholder: "/home/zqrey/Win11.iso or relative in os/",
+                process_win_btn: "Process Windows ISO & Build WinPE",
+                winpe_starting: "Starting WinPE generation for {path}...\nExtracting boot files and injecting startnet.cmd via wimlib-imagex...\nPlease wait (may take 2-4 minutes)...",
+                winpe_success: "[SUCCESS] WinPE prepared successfully for network installation!",
+                winpe_error: "[ERROR] Processing failed:",
+                presets_title: "Quick Presets & Actions",
+                preset_debian_title: "Download Debian 12 Netboot",
+                preset_debian_desc: "Fetches latest official kernel & initrd",
+                preset_nginx_title: "Browse Nginx Web Root",
+                preset_nginx_desc: "Open HTTP autoindex in new tab",
+                images_title: "Installed OS Media Files",
+                refresh_list: "Refresh List",
+                col_filename: "File Name",
+                col_relpath: "Relative Path",
+                col_size: "Size",
+                col_modified: "Last Modified",
+                images_empty: "No images found. Upload or download an OS image.",
+                images_loading: "Loading media files...",
+                btn_save_apply: "Save & Apply",
+                autoscroll: "Auto-scroll",
+                refresh_logs: "Refresh",
+                logs_empty: "No recent log records.",
+                toast_sending: "Sending {action} to {service}...",
+                toast_service_success: "Service {service} {action} succeeded.",
+                toast_service_failed: "Service control failed",
+                toast_config_saved: "Saved and synced {config} successfully!",
+                toast_config_failed: "Save failed",
+                toast_config_load_failed: "Failed to load {config} config",
+                toast_select_file: "Please select a file to upload.",
+                toast_file_uploaded: "File {name} uploaded successfully!",
+                toast_upload_failed: "Upload failed.",
+                toast_network_error: "Network error during upload.",
+                toast_win_path_required: "Please enter the path to the Windows ISO.",
+                toast_winpe_ready: "Windows WinPE ready for network boot!",
+                toast_winpe_failed: "WinPE processing failed."
+            },
+            zh: {
+                title: "PXE 控制中心",
+                subtitle: "多架构自主网络启动服务器 (172.16.16.6)",
+                all_online: "所有服务在线",
+                action_needed: "需要处理",
+                refresh: "刷新数据",
+                cpu_load: "CPU 负载",
+                ram_usage: "内存使用率",
+                storage_free: "存储空间 (/srv 剩余)",
+                clients_detected: "检测到的 PXE 客户端",
+                dnsmasq_desc: "DHCP 代理 + TFTP 引擎",
+                nginx_desc: "高速 HTTP 镜像/内核分发",
+                samba_desc: "WinPE 网络共享 (\\\\install)",
+                ports_label: "端口:",
+                status_label: "状态:",
+                btn_start: "启动",
+                btn_restart: "重启",
+                btn_stop: "停止",
+                status_active: "运行中",
+                status_stopped: "已停止",
+                status_loading: "加载中...",
+                tab_clients: "已连接设备",
+                tab_images: "系统镜像与介质",
+                tab_editor: "启动菜单编辑器",
+                tab_logs: "实时日志",
+                clients_title: "实时 PXE 启动与 DHCP 客户端",
+                clients_desc: "自动检测通过 TFTP 或 HTTP 请求引导程序的网络设备。",
+                filter_placeholder: "按 IP、主机名或文件过滤...",
+                col_ip: "客户端 IP",
+                col_host: "主机名 / ID",
+                col_arch: "架构",
+                col_file: "请求文件",
+                col_proto: "协议",
+                col_last_seen: "最后活动",
+                col_status: "状态",
+                clients_empty: "最近日志中没有活跃的网络启动请求。",
+                clients_empty_hint: "请在目标电脑的 BIOS/UEFI 中启用 PXE 网络启动。",
+                upload_title: "上传系统介质 (ISO / WIM / SquashFS)",
+                upload_desc: "将安装 ISO 或自定义内核直接上传到 PXE HTTP 存储目录 (/srv/www/pxe/os/)。",
+                target_dir_label: "目标子目录",
+                select_file_label: "选择文件",
+                upload_btn: "上传到 PXE 存储",
+                uploading: "正在上传...",
+                winpe_title: "WinPE 无人值守注入器",
+                winpe_desc: "自动提取 boot.wim，注入 startnet.cmd (自动挂载 \\\\172.16.16.6\\install) 并准备 wimboot 文件。",
+                win_iso_path_label: "Windows ISO 镜像路径",
+                win_iso_path_placeholder: "/home/zqrey/Win11.iso 或 os/ 目录下的相对路径",
+                process_win_btn: "处理 Windows ISO 并构建 WinPE",
+                winpe_starting: "正在为 {path} 生成 WinPE...\n提取引导文件并通过 wimlib-imagex 注入 startnet.cmd...\n请稍候 (约需 2-4 分钟)...",
+                winpe_success: "[成功] WinPE 网络安装介质制作完成！",
+                winpe_error: "[错误] 处理失败:",
+                presets_title: "快捷预设与操作",
+                preset_debian_title: "下载 Debian 12 网络安装源",
+                preset_debian_desc: "获取最新的官方内核和 initrd",
+                preset_nginx_title: "浏览 Nginx Web 目录",
+                preset_nginx_desc: "在新标签页中打开 HTTP autoindex",
+                images_title: "已安装的系统介质文件",
+                refresh_list: "刷新列表",
+                col_filename: "文件名",
+                col_relpath: "相对路径",
+                col_size: "大小",
+                col_modified: "修改日期",
+                images_empty: "未找到镜像。请上传或下载系统镜像。",
+                images_loading: "正在加载介质文件...",
+                btn_save_apply: "保存并应用",
+                autoscroll: "自动滚动",
+                refresh_logs: "刷新",
+                logs_empty: "暂无最新日志记录。",
+                toast_sending: "正在向 {service} 发送 {action} 命令...",
+                toast_service_success: "服务 {service} 执行 {action} 成功。",
+                toast_service_failed: "服务控制操作失败",
+                toast_config_saved: "配置 {config} 已成功保存并同步！" ,
+                toast_config_failed: "保存配置失败",
+                toast_config_load_failed: "加载 {config} 配置失败",
+                toast_select_file: "请选择要上传的文件。",
+                toast_file_uploaded: "文件 {name} 上传成功！",
+                toast_upload_failed: "上传失败。",
+                toast_network_error: "上传时发生网络错误。",
+                toast_win_path_required: "请输入 Windows ISO 镜像路径。",
+                toast_winpe_ready: "Windows WinPE 已就绪，可进行网络引导！",
+                toast_winpe_failed: "WinPE 处理失败。"
+            }
+        };
+
+        // Current Language State
+        let currentLang = localStorage.getItem('pxe_lang') || 'ru';
+        if (!i18n[currentLang]) currentLang = 'ru';
+
+        function t(key, params = {}) {
+            let str = (i18n[currentLang] && i18n[currentLang][key]) || (i18n['ru'] && i18n['ru'][key]) || key;
+            for (const [k, v] of Object.entries(params)) {
+                str = str.replace(new RegExp(`\\{${k}\\}`, 'g'), v);
+            }
+            return str;
+        }
+
+        function setLanguage(lang) {
+            if (!i18n[lang]) return;
+            currentLang = lang;
+            localStorage.setItem('pxe_lang', lang);
+            document.documentElement.lang = lang;
+            document.getElementById('lang-select').value = lang;
+
+            // Update all DOM elements with data-i18n
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.innerText = t(key);
+            });
+
+            // Update placeholders
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.getAttribute('data-i18n-placeholder');
+                if (key) el.placeholder = t(key);
+            });
+
+            // Update titles/tooltips
+            document.querySelectorAll('[data-i18n-title]').forEach(el => {
+                const key = el.getAttribute('data-i18n-title');
+                if (key) el.title = t(key);
+            });
+
+            // Re-render dynamic components
+            refreshData();
+            if (currentTab === 'images') loadImagesList();
+        }
+
+        // -------------------------------------------------------------------------
+        // Application State & Navigation
+        // -------------------------------------------------------------------------
+        let currentTab = 'clients';
+        let currentConfigType = 'grub';
+        let currentLogSource = 'dnsmasq';
+        let cachedClients = [];
+
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toast-msg');
+            const toastIcon = document.getElementById('toast-icon');
+            
+            toastMsg.innerText = msg;
+            toast.className = `fixed bottom-6 right-6 px-4 py-3 rounded-lg shadow-xl text-xs font-medium z-50 flex items-center space-x-2 transition-all ${isError ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'}`;
+            toastIcon.className = isError ? 'fa-solid fa-circle-exclamation' : 'fa-solid fa-circle-check';
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 3500);
+        }
+
+        function switchTab(tabId) {
+            currentTab = tabId;
+            document.querySelectorAll('.tab-btn').forEach(b => {
+                b.className = 'tab-btn py-3 border-b-2 border-transparent text-slate-400 hover:text-slate-200 font-medium text-sm flex items-center space-x-2';
+            });
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+
+            document.getElementById(`tab-${tabId}`).className = 'tab-btn py-3 border-b-2 border-sky-500 text-sky-400 font-medium text-sm flex items-center space-x-2';
+            document.getElementById(`content-${tabId}`).classList.remove('hidden');
+
+            if (tabId === 'images') loadImagesList();
+            if (tabId === 'editor') loadConfig(currentConfigType);
+            if (tabId === 'logs') loadLogs();
+        }
+
+        async function refreshData() {
+            const icon = document.getElementById('refresh-icon');
+            icon.classList.add('fa-spin');
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+
+                // Stats
+                document.getElementById('stat-cpu').innerText = `${data.stats.cpu_percent}%`;
+                document.getElementById('stat-ram').innerText = `${data.stats.memory_used_mb} / ${data.stats.memory_total_mb} MB`;
+                document.getElementById('stat-disk').innerText = `${data.stats.disk_free_gb} GB`;
+                document.getElementById('stat-clients-count').innerText = data.clients.length;
+
+                // Services
+                let allOk = true;
+                data.services.forEach(s => {
+                    const badge = document.getElementById(`badge-${s.name}`);
+                    const info = document.getElementById(`info-${s.name}`);
+                    if (badge) {
+                        if (s.active) {
+                            badge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+                            badge.innerText = t('status_active');
+                        } else {
+                            allOk = false;
+                            badge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20';
+                            badge.innerText = t('status_stopped');
+                        }
+                    }
+                    if (info) {
+                        info.innerText = `${s.substate} (PID: ${s.pid})`;
+                    }
+                });
+
+                const allStatusBadge = document.getElementById('badge-all-status');
+                const allStatusText = document.getElementById('badge-all-status-text');
+                if (allOk) {
+                    allStatusBadge.className = 'flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+                    allStatusBadge.querySelector('span:first-child').className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+                    allStatusText.innerText = t('all_online');
+                } else {
+                    allStatusBadge.className = 'flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20';
+                    allStatusBadge.querySelector('span:first-child').className = 'w-2 h-2 rounded-full bg-rose-400';
+                    allStatusText.innerText = t('action_needed');
+                }
+
+                // Clients Table
+                cachedClients = data.clients;
+                renderClients(data.clients);
+
+            } catch (err) {
+                console.error("Failed to refresh status:", err);
+            } finally {
+                setTimeout(() => icon.classList.remove('fa-spin'), 400);
+            }
+        }
+
+        function filterClients() {
+            const query = (document.getElementById('filter-clients').value || '').toLowerCase().trim();
+            if (!query) {
+                renderClients(cachedClients);
+                return;
+            }
+            const filtered = cachedClients.filter(c => 
+                (c.ip && c.ip.toLowerCase().includes(query)) ||
+                (c.hostname && c.hostname.toLowerCase().includes(query)) ||
+                (c.file && c.file.toLowerCase().includes(query)) ||
+                (c.arch && c.arch.toLowerCase().includes(query))
+            );
+            renderClients(filtered);
+        }
+
+        function renderClients(clients) {
+            const tbody = document.getElementById('clients-tbody');
+            if (!clients || clients.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-8 text-center text-slate-500">${t('clients_empty')}<br><span class="text-xs text-slate-600">${t('clients_empty_hint')}</span></td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = clients.map(c => `
+                <tr class="hover:bg-slate-800/40 transition">
+                    <td class="px-4 py-3 font-bold text-sky-400">${c.ip}</td>
+                    <td class="px-4 py-3 text-slate-300">${c.hostname}</td>
+                    <td class="px-4 py-3"><span class="px-2 py-0.5 rounded text-[11px] bg-slate-800 border border-slate-700 text-slate-200">${c.arch}</span></td>
+                    <td class="px-4 py-3 text-emerald-400 font-semibold">${c.file}</td>
+                    <td class="px-4 py-3 text-slate-400">${c.protocol}</td>
+                    <td class="px-4 py-3 text-slate-400">${c.last_seen}</td>
+                    <td class="px-4 py-3">
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                            ${c.status}
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function controlService(service, action) {
+            try {
+                showToast(t('toast_sending', { service, action }));
+                const res = await fetch(`/api/service/${service}/${action}`, { method: 'POST' });
+                const json = await res.json();
+                if (res.ok) {
+                    showToast(t('toast_service_success', { service, action }));
+                    refreshData();
+                } else {
+                    showToast(json.detail || t('toast_service_failed'), true);
+                }
+            } catch (err) {
+                showToast(`Error: ${err.message}`, true);
+            }
+        }
+
+        async function loadImagesList() {
+            const tbody = document.getElementById('images-tbody');
+            try {
+                const res = await fetch('/api/images');
+                const data = await res.json();
+                if (!data.images || data.images.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="4" class="px-4 py-6 text-center text-slate-500">${t('images_empty')}</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = data.images.map(img => `
+                    <tr class="hover:bg-slate-800/40">
+                        <td class="px-4 py-2.5 font-bold text-slate-200">${img.name}</td>
+                        <td class="px-4 py-2.5 text-slate-400">${img.path}</td>
+                        <td class="px-4 py-2.5 text-sky-400 font-bold">${img.size_mb} MB</td>
+                        <td class="px-4 py-2.5 text-slate-500">${img.modified}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error("Failed to load images:", err);
+            }
+        }
+
+        async function loadConfig(type) {
+            currentConfigType = type;
+            ['grub', 'syslinux', 'dnsmasq', 'preseed'].forEach(tKey => {
+                const btn = document.getElementById(`btn-cfg-${tKey}`);
+                if (btn) btn.className = tKey === type ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 text-white' : 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white';
+            });
+
+            try {
+                const res = await fetch(`/api/configs/${type}`);
+                const data = await res.json();
+                document.getElementById('config-textarea').value = data.content;
+            } catch (err) {
+                showToast(t('toast_config_load_failed', { config: type }), true);
+            }
+        }
+
+        async function saveCurrentConfig() {
+            const content = document.getElementById('config-textarea').value;
+            try {
+                const res = await fetch(`/api/configs/${currentConfigType}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                const json = await res.json();
+                if (res.ok) {
+                    showToast(t('toast_config_saved', { config: currentConfigType }));
+                } else {
+                    showToast(json.detail || t('toast_config_failed'), true);
+                }
+            } catch (err) {
+                showToast(`Error: ${err.message}`, true);
+            }
+        }
+
+        function switchLogSource(source) {
+            currentLogSource = source;
+            ['dnsmasq', 'nginx', 'smbd'].forEach(s => {
+                const btn = document.getElementById(`btn-log-${s}`);
+                if (btn) btn.className = (s === source || (s === 'nginx' && source === 'nginx-access')) ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 text-white' : 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white';
+            });
+            loadLogs();
+        }
+
+        async function loadLogs() {
+            try {
+                const res = await fetch(`/api/logs/${currentLogSource}`);
+                const data = await res.json();
+                const term = document.getElementById('log-terminal');
+                term.innerText = data.logs || t('logs_empty');
+                if (document.getElementById('log-autoscroll').checked) {
+                    term.scrollTop = term.scrollHeight;
+                }
+            } catch (err) {
+                console.error("Failed to load logs:", err);
+            }
+        }
+
+        async function uploadFile() {
+            const fileInput = document.getElementById('upload-file');
+            const targetDir = document.getElementById('upload-target-dir').value;
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showToast(t('toast_select_file'), true);
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('target_dir', targetDir);
+
+            const pBox = document.getElementById('upload-progress-box');
+            const pBar = document.getElementById('upload-progress-bar');
+            const pPercent = document.getElementById('upload-percent');
+
+            pBox.classList.remove('hidden');
+            pBar.style.width = '0%';
+            pPercent.innerText = '0%';
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload', true);
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    pBar.style.width = `${percent}%`;
+                    pPercent.innerText = `${percent}%`;
+                }
+            };
+
+            xhr.onload = () => {
+                pBox.classList.add('hidden');
+                if (xhr.status === 200) {
+                    showToast(t('toast_file_uploaded', { name: file.name }));
+                    fileInput.value = '';
+                    loadImagesList();
+                } else {
+                    showToast(t('toast_upload_failed'), true);
+                }
+            };
+
+            xhr.onerror = () => {
+                pBox.classList.add('hidden');
+                showToast(t('toast_network_error'), true);
+            };
+
+            xhr.send(formData);
+        }
+
+        async function processWinPE() {
+            const isoPath = document.getElementById('win-iso-path').value.trim();
+            if (!isoPath) {
+                showToast(t('toast_win_path_required'), true);
+                return;
+            }
+
+            const statusBox = document.getElementById('winpe-status');
+            statusBox.classList.remove('hidden');
+            statusBox.innerText = t('winpe_starting', { path: isoPath });
+
+            try {
+                const res = await fetch('/api/process-windows', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ iso_path: isoPath, server_ip: '172.16.16.6' })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    statusBox.innerText = `${t('winpe_success')}\n\n${data.stdout}`;
+                    showToast(t('toast_winpe_ready'));
+                    loadImagesList();
+                } else {
+                    statusBox.innerText = `${t('winpe_error')}\n${data.stderr || data.stdout}`;
+                    showToast(t('toast_winpe_failed'), true);
+                }
+            } catch (err) {
+                statusBox.innerText = `Network Error: ${err.message}`;
+                showToast(`Error: ${err.message}`, true);
+            }
+        }
+
+        // Auto-refresh interval
+        setInterval(() => {
+            refreshData();
+            if (currentTab === 'logs') loadLogs();
+        }, 3000);
+
+        // Initialize Language and Page State on load
+        document.addEventListener('DOMContentLoaded', () => {
+            setLanguage(currentLang);
+        });
+        setLanguage(currentLang);
+    </script>
+</body>
+</html>

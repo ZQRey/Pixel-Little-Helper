@@ -1,0 +1,74 @@
+# ==============================================================================
+# /srv/tftp/pxelinux.cfg/default
+# Legacy BIOS PXE Menu (Syslinux 32-bit / LPXELINUX)
+# ==============================================================================
+
+DEFAULT menu.c32
+PROMPT 0
+TIMEOUT 100
+ONTIMEOUT local
+
+MENU TITLE ================= AUTONOMOUS PXE BOOT MENU (BIOS) =================
+MENU COLOR border       30;44   #40ffffff #a0000000 std
+MENU COLOR title        1;36;44 #9033b5e5 #a0000000 std
+MENU COLOR sel          7;37;40 #e0ffffff #20ffffff all
+MENU COLOR unsel        37;44   #50ffffff #a0000000 std
+MENU COLOR help         37;40   #c0ffffff #a0000000 std
+
+# ------------------------------------------------------------------------------
+# 1. Local Disk Boot (Default on timeout)
+# ------------------------------------------------------------------------------
+LABEL local
+    MENU LABEL ^1. Boot from Local Hard Drive (Default)
+    MENU DEFAULT
+    COM32 chain.c32
+    APPEND hd0
+
+# ------------------------------------------------------------------------------
+# 2. Debian Netinstall
+# ------------------------------------------------------------------------------
+LABEL debian
+    MENU LABEL ^2. Debian GNU/Linux Netinstall (Interactive)
+    KERNEL http://SERVER_IP_PLACEHOLDER/os/debian/linux
+    APPEND initrd=http://SERVER_IP_PLACEHOLDER/os/debian/initrd.gz vga=788 --- quiet
+
+LABEL debian_auto
+    MENU LABEL    Debian Netinstall (Automated via Preseed)
+    KERNEL http://SERVER_IP_PLACEHOLDER/os/debian/linux
+    APPEND initrd=http://SERVER_IP_PLACEHOLDER/os/debian/initrd.gz auto=true priority=critical preseed/url=http://SERVER_IP_PLACEHOLDER/os/debian/preseed.cfg --- quiet
+
+# ------------------------------------------------------------------------------
+# 3. SystemRescue LiveCD
+# ------------------------------------------------------------------------------
+LABEL sysrescue
+    MENU LABEL ^3. SystemRescue (Live Admin Toolkit)
+    KERNEL http://SERVER_IP_PLACEHOLDER/os/sysrescue/vmlinuz
+    APPEND initrd=http://SERVER_IP_PLACEHOLDER/os/sysrescue/initram.img archisobasedir=sysrescue ip=dhcp sysrescue.http=http://SERVER_IP_PLACEHOLDER/os/sysrescue/ copytoram
+
+# ------------------------------------------------------------------------------
+# 4. Clonezilla Live
+# ------------------------------------------------------------------------------
+LABEL clonezilla
+    MENU LABEL ^4. Clonezilla Live (Disk Imaging)
+    KERNEL http://SERVER_IP_PLACEHOLDER/os/clonezilla/vmlinuz
+    APPEND initrd=http://SERVER_IP_PLACEHOLDER/os/clonezilla/initrd.img boot=live config components union=overlay noswap edd=on nomodeset ocs_live_run="ocs-live-general" ocs_live_extra_param="" ocs_live_batch="no" net.ifnames=0 nosplash noprompt fetch=http://SERVER_IP_PLACEHOLDER/os/clonezilla/filesystem.squashfs
+
+# ------------------------------------------------------------------------------
+# 5. Windows Installation (WinPE via wimboot)
+# ------------------------------------------------------------------------------
+LABEL winpe
+    MENU LABEL ^5. Windows Installer (WinPE via wimboot)
+    KERNEL http://SERVER_IP_PLACEHOLDER/tools/wimboot
+    INITRD http://SERVER_IP_PLACEHOLDER/os/windows/bootmgr,http://SERVER_IP_PLACEHOLDER/os/windows/boot/bcd,http://SERVER_IP_PLACEHOLDER/os/windows/boot/boot.sdi,http://SERVER_IP_PLACEHOLDER/os/windows/sources/boot.wim
+
+# ------------------------------------------------------------------------------
+# Utilities
+# ------------------------------------------------------------------------------
+LABEL reboot
+    MENU LABEL ^R. Reboot Machine
+    COM32 reboot.c32
+
+LABEL poweroff
+    MENU LABEL ^P. Power Off Machine
+    COM32 poweroff.c32
+

@@ -19,12 +19,12 @@
 
 ---
 
-### 2. [ ] Бэкенд PixelHelper: Сервис управления и API-мост (`LitleHelperServer`)
-- [ ] **Модель и хранение настроек подключения (`PxeSettings` / `PxeSettingsStore`):**
+### 2. [x] Бэкенд PixelHelper: Сервис управления и API-мост (`LitleHelperServer`)
+- [x] **Модель и хранение настроек подключения (`PxeSettings` / `PxeSettingsStore`):**
   - Параметры: `ServerUrl` (например, `http://172.16.16.6:8080`), `TimeoutSeconds`, `ApiKey`, `AutoRefreshInterval`.
   - Сохранение настроек в базу данных `HelperDb` с шифрованием секретов и аудитом изменений.
   - Разграничение прав доступа: управление доступно только роли `SuperAdmin` или праву `deployment.manage`.
-- [ ] **API-эндпоинты проверки и проксирования (`PanelApi.cs` -> `/api/pxe/...`):**
+- [x] **API-эндпоинты проверки и проксирования (`PanelApi.cs` -> `/api/pxe/...`):**
   - `GET /api/pxe/status`: Ping/health-check PXE-сервера, сбор статусов контейнеров (`dnsmasq`, `nginx`, `samba`), системных ресурсов и списка подключенных клиентов.
   - `POST /api/pxe/settings`: Сохранение и тестовая проверка доступности указанного адреса и порта.
   - `POST /api/pxe/services/{service}/{action}`: Проксирование команд управления жизненным циклом служб (`start`, `stop`, `restart`).

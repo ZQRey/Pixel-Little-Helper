@@ -31,12 +31,13 @@ public static class Access
         ["settings.manage"] = "Настройки GLPI, AD, Telegram и филиалов",
         ["updates.manage"] = "Публикация обновлений клиента",
         ["emergency.manage"] = "Принятие и отбой экстренных тревог",
-        ["chat.broadcast"] = "Рассылка всем пользователям мессенджера"
+        ["chat.broadcast"] = "Рассылка всем пользователям мессенджера",
+        ["deployment.manage"] = "Управление сетевой установкой (PXE)"
     };
     public static string[] Defaults(string role) => role switch
     {
         Roles.SuperAdmin => Catalog.Keys.ToArray(),
-        Roles.Admin => ["ai.chat", "ai.agent", "computers.view", "computers.manage", "commands.execute", "buttons.manage", "tickets.all", "tickets.manage", "audit.view"],
+        Roles.Admin => ["ai.chat", "ai.agent", "computers.view", "computers.manage", "commands.execute", "buttons.manage", "tickets.all", "tickets.manage", "audit.view", "deployment.manage"],
         Roles.Operator => ["ai.chat", "computers.view", "tickets.all", "tickets.manage"],
         _ => ["ai.chat"]
     };

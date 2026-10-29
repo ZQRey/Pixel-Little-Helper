@@ -307,6 +307,23 @@ async def api_list_images():
     return {"images": images}
 
 
+
+@app.delete("/api/images")
+async def api_delete_image(path: str = Query(...)):
+    safe_path = Path(path).as_posix().lstrip("/")
+    full_path = (WEB_ROOT / safe_path).resolve()
+    os_root = (WEB_ROOT / "os").resolve()
+    
+    # Security check: must reside inside /srv/www/pxe/os
+    if not str(full_path).startswith(str(os_root)) or not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    if full_path.is_file():
+        full_path.unlink()
+        return {"status": "ok", "deleted": safe_path}
+    
+    raise HTTPException(status_code=400, detail="Cannot delete directories")
+
 @app.post("/api/upload")
 async def api_upload_image(file: UploadFile = File(...), target_dir: str = Form("isos")):
     safe_name = os.path.basename(file.filename or "uploaded.iso")

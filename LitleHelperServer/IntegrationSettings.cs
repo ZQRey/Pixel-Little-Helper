@@ -60,16 +60,42 @@ public record SecurityOptions(
     string ThreatAction = "quarantine"
 );
 public record RegistrationOptions(List<string> AllowedNetworks);
+public record PxeOptions(
+    bool Enabled = false,
+    string ServerUrl = "http://172.16.16.6:8080",
+    int TimeoutSeconds = 10,
+    string ApiKey = ""
+);
+public record PxeSettingsUpdate(
+    bool Enabled,
+    string ServerUrl,
+    int TimeoutSeconds = 10,
+    string ApiKey = ""
+);
 
 public class IntegrationSettings(IConfiguration configuration, IDataProtectionProvider protection)
 {
     private readonly object gate = new();
     private readonly IDataProtector protector = protection.CreateProtector("LitleHelper.Integrations.v1");
     private string PathName => configuration["Integrations:SettingsFile"] ?? Path.Combine("data", "integrations.json");
-    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null, SecurityOptions? Security = null, RegistrationOptions? Registration = null);
+    private record Stored(TelegramOptions Telegram, AdOptions Ad, GlpiImportOptions? GlpiImport = null, CartridgeOptions? Cartridge = null, EmergencyOptions? Emergency = null, Dictionary<int,int>? DepartmentMap = null, SecurityOptions? Security = null, RegistrationOptions? Registration = null, PxeOptions? Pxe = null);
     public SecurityOptions Security() { lock(gate) return ReadStored().Security ?? new(); }
     public void SaveSecurity(SecurityOptions options) { lock(gate) Write(ReadStored() with { Security = options }); }
     public RegistrationOptions Registration() { lock(gate) return ReadStored().Registration ?? new(NetworkAccess.DefaultRegistrationNetworks.ToList()); }
+    public PxeOptions Pxe() { lock(gate) return ReadStored().Pxe ?? new(); }
+    public void SavePxe(PxeSettingsUpdate update)
+    {
+        var url = (update.ServerUrl ?? "").Trim().TrimEnd('/');
+        if (update.Enabled && string.IsNullOrWhiteSpace(url))
+            throw new ArgumentException("Укажите корректный адрес PXE-сервера.");
+        var options = new PxeOptions(
+            Enabled: update.Enabled,
+            ServerUrl: string.IsNullOrWhiteSpace(url) ? "http://172.16.16.6:8080" : url,
+            TimeoutSeconds: update.TimeoutSeconds > 0 ? update.TimeoutSeconds : 10,
+            ApiKey: update.ApiKey ?? ""
+        );
+        lock(gate) Write(ReadStored() with { Pxe = options });
+    }
     public void SaveRegistration(RegistrationOptions options)
     {
         var networks = NetworkAccess.NormalizeNetworks(options.AllowedNetworks);

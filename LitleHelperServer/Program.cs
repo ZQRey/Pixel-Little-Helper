@@ -149,6 +149,7 @@ builder.Services.AddHttpClient<GlpiService>(http => { http.Timeout = TimeSpan.Fr
 builder.Services.AddSingleton<ReportGate>();
 builder.Services.AddSingleton<ReportHealth>();
 builder.Services.AddScoped<GlpiReports>();
+builder.Services.AddScoped<PxeService>();
 builder.Services.AddScoped<TicketSurveys>();
 builder.Services.AddScoped<SurveyAlerts>();
 builder.Services.AddHostedService<GlpiReportWorker>();
@@ -239,6 +240,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapHub<HelperHub>("/helperHub", options => options.CloseOnAuthenticationExpiration = true);
 app.MapPanelApi();
+app.MapPxeApi();
 app.MapMailBackupApi();
 app.MapMedicalStatuses();
 app.MapEmergencyRecipients();

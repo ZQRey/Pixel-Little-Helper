@@ -1522,7 +1522,7 @@ try
     // Verify BrandingManager
     Check(BrandingManager.DefaultManufacturer == "ReyTech", "BrandingManager DefaultManufacturer is ReyTech");
     Check(BrandingManager.DefaultModel == "PixelHelper", "BrandingManager DefaultModel is PixelHelper");
-    Check(BrandingManager.DefaultSupportPhone == "104", "BrandingManager DefaultSupportPhone is 104");
+    Check(BrandingManager.DefaultSupportHours == "Пн-Пт 08:00 – 17:00", "BrandingManager DefaultSupportHours is Пн-Пт 08:00 – 17:00");
     Check(File.Exists(BrandingManager.GetLogoPath()), "BrandingManager logo_oem.bmp exists");
     Check(File.Exists(BrandingManager.GetLockScreenPath()), "BrandingManager branding_lockscreen.jpg exists");
     bool brandingResult = BrandingManager.ApplyBranding("https://test.helper.gp1.loc", msg => { });

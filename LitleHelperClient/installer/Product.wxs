@@ -105,8 +105,8 @@
           <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\OEMInformation">
             <RegistryValue Name="Manufacturer" Type="string" Value="ReyTech" KeyPath="yes" />
             <RegistryValue Name="Model" Type="string" Value="PixelHelper" />
-            <RegistryValue Name="SupportHours" Type="string" Value="Пн-Пт 08:30 – 17:30" />
-            <RegistryValue Name="SupportPhone" Type="string" Value="104" />
+            <RegistryValue Name="SupportHours" Type="string" Value="Пн-Пт 08:00 – 17:00" />
+            <RegistryValue Name="Часы" Type="string" Value="Пн-Пт 08:00 – 17:00" />
             <RegistryValue Name="SupportURL" Type="string" Value="[SERVERURL]" />
             <RegistryValue Name="Logo" Type="string" Value="[INSTALLFOLDER]Assets\logo_oem.bmp" />
           </RegistryKey>

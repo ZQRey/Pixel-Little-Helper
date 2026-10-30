@@ -13,8 +13,7 @@ public static class BrandingManager
 {
     public const string DefaultManufacturer = "ReyTech";
     public const string DefaultModel = "PixelHelper";
-    public const string DefaultSupportHours = "Пн-Пт 08:30 – 17:30";
-    public const string DefaultSupportPhone = "104";
+    public const string DefaultSupportHours = "Пн-Пт 08:00 – 17:00";
     public const string DefaultSupportUrl = "https://helper.gp1.loc";
 
     private const string OemKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation";
@@ -66,7 +65,9 @@ public static class BrandingManager
                     oemKey.SetValue("Manufacturer", DefaultManufacturer, RegistryValueKind.String);
                     oemKey.SetValue("Model", DefaultModel, RegistryValueKind.String);
                     oemKey.SetValue("SupportHours", DefaultSupportHours, RegistryValueKind.String);
-                    oemKey.SetValue("SupportPhone", DefaultSupportPhone, RegistryValueKind.String);
+                    oemKey.SetValue("Часы", DefaultSupportHours, RegistryValueKind.String);
+                    try { oemKey.DeleteValue("SupportPhone", false); } catch { }
+                    try { oemKey.DeleteValue("Телефон", false); } catch { }
                     oemKey.SetValue("SupportURL", url, RegistryValueKind.String);
 
                     if (File.Exists(logoPath))

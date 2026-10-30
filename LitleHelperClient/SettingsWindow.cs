@@ -1159,25 +1159,72 @@ public sealed class SettingsWindow : Window
                 errText.Visibility = Visibility.Collapsed;
                 try
                 {
-                    using var handler = new HttpClientHandler { AllowAutoRedirect = false, ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
-                    using var client = new HttpClient(handler) { BaseAddress = new Uri(settings.ServerUrl!.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(15) };
-                    var res = await client.PostAsJsonAsync("api/auth/login", new { username = userBox.Text.Trim(), password = passBox.Password });
-                    if (!res.IsSuccessStatusCode)
+                    string username = userBox.Text.Trim();
+                    string password = passBox.Password;
+
+                    bool isAuthorized = false;
+
+                    // 1. Проверка через сервер помощника (учётная запись с ролью SuperAdmin, Admin, Staff)
+                    if (!string.IsNullOrWhiteSpace(settings.ServerUrl))
                     {
-                        errText.Text = "Неверный логин или пароль, либо учётная запись не обладает правами администратора.";
-                        errText.Visibility = Visibility.Visible;
-                        return;
+                        try
+                        {
+                            using var handler = new HttpClientHandler { AllowAutoRedirect = false, ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+                            using var client = new HttpClient(handler) { BaseAddress = new Uri(settings.ServerUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(10) };
+                            var res = await client.PostAsJsonAsync("api/auth/login", new { username, password });
+                            if (res.IsSuccessStatusCode)
+                            {
+                                var doc = await res.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+                                string role = "";
+                                if (doc.TryGetProperty("user", out var uElem) && uElem.TryGetProperty("role", out var rUser))
+                                {
+                                    role = rUser.GetString() ?? "";
+                                }
+                                else if (doc.TryGetProperty("role", out var rRoot))
+                                {
+                                    role = rRoot.GetString() ?? "";
+                                }
+
+                                if (role is "SuperAdmin" or "Admin" or "Staff")
+                                {
+                                    isAuthorized = true;
+                                }
+                                else if (doc.TryGetProperty("user", out var uObj) && uObj.TryGetProperty("effectivePermissions", out var permsElem) && permsElem.ValueKind == System.Text.Json.JsonValueKind.Array)
+                                {
+                                    foreach (var p in permsElem.EnumerateArray())
+                                    {
+                                        string perm = p.GetString() ?? "";
+                                        if (perm.Equals("settings.manage", StringComparison.OrdinalIgnoreCase) ||
+                                            perm.Equals("antitheft.manage", StringComparison.OrdinalIgnoreCase) ||
+                                            perm.Equals("superadmin", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            isAuthorized = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // Сервер недоступен или сетевой сбой - переход к локальной проверке Windows
+                        }
                     }
-                    var doc = await res.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-                    string role = doc.TryGetProperty("role", out var r) ? r.GetString() ?? "" : "";
-                    if (role is "SuperAdmin" or "Admin" or "Staff")
+
+                    // 2. Локальная проверка учетной записи администратора Windows / Домена Active Directory
+                    if (!isAuthorized)
+                    {
+                        isAuthorized = NativeMethods.VerifyAdminCredentials(username, password);
+                    }
+
+                    if (isAuthorized)
                     {
                         isProtectionAdminUnlocked = true;
                         SwitchTab("protection");
                     }
                     else
                     {
-                        errText.Text = "Учётная запись не имеет прав администратора.";
+                        errText.Text = "Учётная запись не имеет прав администратора, либо введён неверный логин/пароль.";
                         errText.Visibility = Visibility.Visible;
                     }
                 }

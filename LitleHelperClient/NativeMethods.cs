@@ -48,6 +48,52 @@ internal static class NativeMethods
     [DllImport("gdi32.dll")] private static extern int CombineRgn(nint dest, nint source1, nint source2, int mode);
     [DllImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool DeleteObject(nint obj);
     [DllImport("user32.dll", SetLastError = true)] private static extern int SetWindowRgn(nint hwnd, nint region, bool redraw);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    internal static extern bool LogonUser(
+        string lpszUsername,
+        string lpszDomain,
+        string lpszPassword,
+        int dwLogonType,
+        int dwLogonProvider,
+        out Microsoft.Win32.SafeHandles.SafeAccessTokenHandle phToken);
+
+    internal static bool VerifyAdminCredentials(string username, string password)
+    {
+        try
+        {
+            string u = username.Trim();
+            string d = ".";
+            if (u.Contains('\\'))
+            {
+                var parts = u.Split('\\', 2);
+                d = parts[0];
+                u = parts[1];
+            }
+            else if (u.Contains('@'))
+            {
+                var parts = u.Split('@', 2);
+                u = parts[0];
+                d = parts[1];
+            }
+
+            const int LOGON32_LOGON_NETWORK = 3;
+            const int LOGON32_PROVIDER_DEFAULT = 0;
+
+            if (LogonUser(u, d, password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, out var tokenHandle))
+            {
+                using (tokenHandle)
+                {
+                    var id = new System.Security.Principal.WindowsIdentity(tokenHandle.DangerousGetHandle());
+                    var principal = new System.Security.Principal.WindowsPrincipal(id);
+                    if (principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator)) return true;
+                    if (principal.Claims.Any(c => c.Value.EndsWith("-512") || c.Value.Equals("S-1-5-32-544"))) return true;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
     [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
     [DllImport("user32.dll")] internal static extern nint GetForegroundWindow();
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

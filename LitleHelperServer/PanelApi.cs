@@ -77,7 +77,7 @@ public static class PanelApi
                 if (localUser.IsActive && request.Password.Length <= 72 && BCrypt.Net.BCrypt.Verify(request.Password, localUser.PasswordHash))
                 {
                     localUser.IsSweetheart = Access.IsSweetheart(config, localUser.Username);
-                    return Results.Ok(new { token = Security.Token(localUser, config), user = localUser });
+                    return Results.Ok(new { token = Security.Token(localUser, config), user = localUser, role = localUser.Role });
                 }
                 return Results.Unauthorized();
             }
@@ -736,7 +736,7 @@ public static class PanelApi
 
         if (!user.IsActive) return Results.Unauthorized();
         user.IsSweetheart = Access.IsSweetheart(config, user.Username);
-        return Results.Ok(new { token = Security.Token(user, config), user });
+        return Results.Ok(new { token = Security.Token(user, config), user, role = user.Role });
     }
 
     private static async Task<IResult> AuthenticateLocalAsync(LoginRequest request, string login, HelperDb db, IConfiguration config)
@@ -745,7 +745,7 @@ public static class PanelApi
         var user = await db.Users.SingleOrDefaultAsync(u => u.Username == login);
         if (user == null || !user.IsActive || user.AuthSource == "AD" || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
         user.IsSweetheart = Access.IsSweetheart(config, user.Username);
-        return Results.Ok(new { token = Security.Token(user, config), user });
+        return Results.Ok(new { token = Security.Token(user, config), user, role = user.Role });
     }
 
     private static string BuildSetupBat(string serverUrl)

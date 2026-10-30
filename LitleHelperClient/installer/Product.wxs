@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.83" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.84" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
-    <MediaTemplate EmbedCab="yes" /><Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" /><Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" />
+    <Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="SERVERURL" Secure="yes" />
     <Property Id="EXISTINGSERVERURL">
@@ -13,124 +15,130 @@
     <SetProperty Id="SERVERURL" Action="UseDefaultServerUrl" Value="https://helper.gp1.loc" After="UseExistingServerUrl">NOT SERVERURL</SetProperty>
     <Condition Message="Укажите адрес вида https://helper.gp1.loc: прямые слеши, без пробелов и запятых.">Installed OR ((SERVERURL &lt;&lt; "http://" OR SERVERURL &lt;&lt; "https://") AND NOT (SERVERURL &gt;&lt; " ") AND NOT (SERVERURL &gt;&lt; "\") AND NOT (SERVERURL &gt;&lt; ",") AND SERVERURL &lt;&gt; "http://" AND SERVERURL &lt;&gt; "https://")</Condition>
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder"><Directory Id="INSTALLFOLDER" Name="PixelHelper">
-        <Component Id="MainExecutableComponent" Guid="96F581E4-391C-490F-B3E7-2CD0B03BAC75" Win64="yes">
-          <File Id="MainExecutable" Source="$(var.PublishDir)\PixelHelper.exe" KeyPath="yes">
-            <Shortcut Id="StartMenuLink" Directory="StartMenuFolder" Name="PixelHelper" Icon="HelperIcon.ico" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
-          </File>
-          <ServiceInstall Id="InstallUpdater" Name="PixelHelperUpdater" DisplayName="PixelHelper — обновления" Description="Проверка и установка подписанных обновлений клиента PixelHelper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--update-service" />
-          <ServiceControl Id="ControlUpdater" Name="PixelHelperUpdater" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
-          <ServiceInstall Id="InstallAntiTheft" Name="PixelAntiTheft" DisplayName="Pixel Anti-Theft — служба защиты" Description="Фоновая служба геолокации, мониторинга Wi-Fi сетей и защиты переносных устройств Pixel Little Helper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--anti-theft-service" />
-          <ServiceControl Id="ControlAntiTheft" Name="PixelAntiTheft" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
-          <RemoveFolder Id="RemoveStartMenu" Directory="StartMenuFolder" On="uninstall" />
-        </Component>
-      </Directory></Directory>
-      <Directory Id="CommonAppDataFolder"><Directory Id="ProgramDataShortcut" Name="PixelHelper">
-        <Component Id="GlobalShortcut" Guid="6EF29E6E-26B8-49CF-9B6E-6E2AEBDCA86B" Win64="yes">
-          <Shortcut Id="ProgramDataLink" Name="PixelHelper" Icon="HelperIcon.ico" Target="[INSTALLFOLDER]PixelHelper.exe" WorkingDirectory="INSTALLFOLDER" />
-          <RemoveFolder Id="RemoveShortcutDir" On="uninstall" />
-          <RegistryValue Root="HKLM" Key="Software\PixelHelper" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
-        </Component>
-      </Directory></Directory>
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="PixelHelper">
+          <Component Id="MainExecutableComponent" Guid="96F581E4-391C-490F-B3E7-2CD0B03BAC75" Win64="yes">
+            <File Id="MainExecutable" Source="$(var.PublishDir)\PixelHelper.exe" KeyPath="yes">
+              <Shortcut Id="StartMenuLink" Directory="StartMenuFolder" Name="PixelHelper" Icon="HelperIcon.ico" WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
+            </File>
+            <ServiceInstall Id="InstallUpdater" Name="PixelHelperUpdater" DisplayName="PixelHelper — обновления" Description="Проверка и установка подписанных обновлений клиента PixelHelper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--update-service" />
+            <ServiceControl Id="ControlUpdater" Name="PixelHelperUpdater" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+            <ServiceInstall Id="InstallAntiTheft" Name="PixelAntiTheft" DisplayName="Pixel Anti-Theft — служба защиты" Description="Фоновая служба геолокации, мониторинга Wi-Fi сетей и защиты переносных устройств Pixel Little Helper." Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Arguments="--anti-theft-service" />
+            <ServiceControl Id="ControlAntiTheft" Name="PixelAntiTheft" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+            <RemoveFolder Id="RemoveStartMenu" Directory="StartMenuFolder" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="ProgramDataShortcut" Name="PixelHelper">
+          <Component Id="GlobalShortcut" Guid="6EF29E6E-26B8-49CF-9B6E-6E2AEBDCA86B" Win64="yes">
+            <Shortcut Id="ProgramDataLink" Name="PixelHelper" Icon="HelperIcon.ico" Target="[INSTALLFOLDER]PixelHelper.exe" WorkingDirectory="INSTALLFOLDER" />
+            <RemoveFolder Id="RemoveShortcutDir" On="uninstall" />
+            <RegistryValue Root="HKLM" Key="Software\PixelHelper" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
 
-      <Directory Id="ProgramMenuFolder"><Directory Id="StartMenuFolder" Name="PixelHelper" /></Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="StartMenuFolder" Name="PixelHelper" />
+      </Directory>
     </Directory>
-      <DirectoryRef Id="INSTALLFOLDER">
-        <Component Id="MachineStartup" Guid="4E44554C-1C23-4CB0-9AF6-BC19F339990A" Win64="yes">
-          <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="PixelHelper" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;" KeyPath="yes" />
-        </Component>
-        <Component Id="ServerConnection" Guid="B3CF3359-C01D-48FC-95C2-111DCBEE9B6F" Win64="yes">
-          <RegistryValue Root="HKLM" Key="Software\PixelHelper" Name="ServerUrl" Type="string" Value="[SERVERURL]" KeyPath="yes" />
-        </Component>
-        <Component Id="WebGuardBrowserRegistration" Guid="5B73E1B9-45B1-4DF5-96BE-8608F87C9A44" Win64="yes">
-          <RegistryKey Root="HKLM" Key="Software\Clients\StartMenuInternet\PixelHelper">
-            <RegistryValue Type="string" Value="PixelHelper Web Guard" KeyPath="yes" />
-            <RegistryValue Key="Capabilities" Name="ApplicationDescription" Type="string" Value="Защита от фишинга и опасных ссылок PixelHelper" />
-            <RegistryValue Key="Capabilities" Name="ApplicationName" Type="string" Value="PixelHelper Web Guard" />
-            <RegistryValue Key="Capabilities\URLAssociations" Name="http" Type="string" Value="PixelHelperURL" />
-            <RegistryValue Key="Capabilities\URLAssociations" Name="https" Type="string" Value="PixelHelperURL" />
-            <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
-            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --guard-url &quot;%1&quot;" />
-          </RegistryKey>
-          <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PixelHelper" Type="string" Value="Software\Clients\StartMenuInternet\PixelHelper\Capabilities" />
-          <RegistryKey Root="HKLM" Key="Software\Classes\PixelHelperURL">
-            <RegistryValue Type="string" Value="PixelHelper Guard URL" />
-            <RegistryValue Name="FriendlyTypeName" Type="string" Value="PixelHelper Guard URL" />
-            <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
-            <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --guard-url &quot;%1&quot;" />
-          </RegistryKey>
-        </Component>
-        <Component Id="BrowserExtensionPolicies" Guid="3F8A7D6E-5C4B-4E3A-9F2D-8B7C6E5A4D3C" Win64="yes">
-          <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Edge\ExtensionInstallForcelist">
-            <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
-          </RegistryKey>
-          <RegistryKey Root="HKLM" Key="Software\Microsoft\Edge\NativeMessagingHosts\com.pixelhelper.webguard">
-            <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" KeyPath="yes" />
-          </RegistryKey>
-          <RegistryKey Root="HKLM" Key="Software\Policies\Google\Chrome\ExtensionInstallForcelist">
-            <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
-          </RegistryKey>
-          <RegistryKey Root="HKLM" Key="Software\Google\Chrome\NativeMessagingHosts\com.pixelhelper.webguard">
-            <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" />
-          </RegistryKey>
-          <RegistryKey Root="HKLM" Key="Software\Policies\YandexBrowser\ExtensionInstallForcelist">
-            <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
-          </RegistryKey>
-          <RegistryKey Root="HKLM" Key="Software\YandexBrowser\NativeMessagingHosts\com.pixelhelper.webguard">
-            <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" />
-          </RegistryKey>
-        </Component>
-        <Component Id="ExplorerContextMenu" Guid="B4E17C2F-4389-4B52-9A2E-8E7C5D1F6A34" Win64="yes">
-          <!-- Files context menu -->
-          <RegistryKey Root="HKLM" Key="Software\Classes\*\shell\PixelHelperScan">
-            <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" KeyPath="yes" />
-            <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
-            <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
-          </RegistryKey>
-          <!-- Folders / Directories context menu -->
-          <RegistryKey Root="HKLM" Key="Software\Classes\Directory\shell\PixelHelperScan">
-            <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" />
-            <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
-            <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
-          </RegistryKey>
-          <!-- Drives context menu -->
-          <RegistryKey Root="HKLM" Key="Software\Classes\Drive\shell\PixelHelperScan">
-            <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" />
-            <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
-            <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
-          </RegistryKey>
-        </Component>
-        <Component Id="CorporateBranding" Guid="7C3F2A1E-8B9D-4F2A-B6D1-0C9E8A7F6E5D" Win64="yes">
-          <!-- OEM Information in System Properties -->
-          <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\OEMInformation">
-            <RegistryValue Name="Manufacturer" Type="string" Value="ReyTech" KeyPath="yes" />
-            <RegistryValue Name="Model" Type="string" Value="PixelHelper" />
-            <RegistryValue Name="SupportHours" Type="string" Value="Пн-Пт 08:00 – 17:00" />
-            <RegistryValue Name="Часы" Type="string" Value="Пн-Пт 08:00 – 17:00" />
-            <RegistryValue Name="SupportURL" Type="string" Value="[SERVERURL]" />
-            <RegistryValue Name="Logo" Type="string" Value="[INSTALLFOLDER]Assets\logo_oem.bmp" />
-          </RegistryKey>
-          <!-- Windows 10/11 Lock Screen Policy (Enterprise/Edu/Server) -->
-          <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\Personalization">
-            <RegistryValue Name="LockScreenImage" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
-            <RegistryValue Name="NoChangingLockScreen" Type="integer" Value="1" />
-          </RegistryKey>
-          <!-- Windows 10/11 PersonalizationCSP (Pro/Home/Enterprise MDM Provider) -->
-          <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\PersonalizationCSP">
-            <RegistryValue Name="LockScreenImagePath" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
-            <RegistryValue Name="LockScreenImageUrl" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
-            <RegistryValue Name="LockScreenImageStatus" Type="integer" Value="1" />
-          </RegistryKey>
-          <!-- Enable background on logon/sign-in screen -->
-          <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\System">
-            <RegistryValue Name="DisableLogonBackgroundImage" Type="integer" Value="0" />
-          </RegistryKey>
-          <!-- Windows 7 Logon Background Support -->
-          <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\Background">
-            <RegistryValue Name="OEMBackground" Type="integer" Value="1" />
-          </RegistryKey>
-        </Component>
-      </DirectoryRef>
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MachineStartup" Guid="4E44554C-1C23-4CB0-9AF6-BC19F339990A" Win64="yes">
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="PixelHelper" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;" KeyPath="yes" />
+      </Component>
+      <Component Id="ServerConnection" Guid="B3CF3359-C01D-48FC-95C2-111DCBEE9B6F" Win64="yes">
+        <RegistryValue Root="HKLM" Key="Software\PixelHelper" Name="ServerUrl" Type="string" Value="[SERVERURL]" KeyPath="yes" />
+      </Component>
+      <Component Id="WebGuardBrowserRegistration" Guid="5B73E1B9-45B1-4DF5-96BE-8608F87C9A44" Win64="yes">
+        <RegistryKey Root="HKLM" Key="Software\Clients\StartMenuInternet\PixelHelper">
+          <RegistryValue Type="string" Value="PixelHelper Web Guard" KeyPath="yes" />
+          <RegistryValue Key="Capabilities" Name="ApplicationDescription" Type="string" Value="Защита от фишинга и опасных ссылок PixelHelper" />
+          <RegistryValue Key="Capabilities" Name="ApplicationName" Type="string" Value="PixelHelper Web Guard" />
+          <RegistryValue Key="Capabilities\URLAssociations" Name="http" Type="string" Value="PixelHelperURL" />
+          <RegistryValue Key="Capabilities\URLAssociations" Name="https" Type="string" Value="PixelHelperURL" />
+          <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+          <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --guard-url &quot;%1&quot;" />
+        </RegistryKey>
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PixelHelper" Type="string" Value="Software\Clients\StartMenuInternet\PixelHelper\Capabilities" />
+        <RegistryKey Root="HKLM" Key="Software\Classes\PixelHelperURL">
+          <RegistryValue Type="string" Value="PixelHelper Guard URL" />
+          <RegistryValue Name="FriendlyTypeName" Type="string" Value="PixelHelper Guard URL" />
+          <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+          <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --guard-url &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+      <Component Id="BrowserExtensionPolicies" Guid="3F8A7D6E-5C4B-4E3A-9F2D-8B7C6E5A4D3C" Win64="yes">
+        <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Edge\ExtensionInstallForcelist">
+          <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Edge\NativeMessagingHosts\com.pixelhelper.webguard">
+          <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" KeyPath="yes" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Policies\Google\Chrome\ExtensionInstallForcelist">
+          <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Google\Chrome\NativeMessagingHosts\com.pixelhelper.webguard">
+          <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\Policies\YandexBrowser\ExtensionInstallForcelist">
+          <RegistryValue Name="1" Type="string" Value="jhmfmcbcjmhpoogeljiailchclchcccp;file:///[INSTALLFOLDER]extension\update.xml" />
+        </RegistryKey>
+        <RegistryKey Root="HKLM" Key="Software\YandexBrowser\NativeMessagingHosts\com.pixelhelper.webguard">
+          <RegistryValue Type="string" Value="[INSTALLFOLDER]extension\com.pixelhelper.webguard.json" />
+        </RegistryKey>
+      </Component>
+      <Component Id="ExplorerContextMenu" Guid="B4E17C2F-4389-4B52-9A2E-8E7C5D1F6A34" Win64="yes">
+        <!-- Files context menu -->
+        <RegistryKey Root="HKLM" Key="Software\Classes\*\shell\PixelHelperScan">
+          <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" KeyPath="yes" />
+          <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+          <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
+        </RegistryKey>
+        <!-- Folders / Directories context menu -->
+        <RegistryKey Root="HKLM" Key="Software\Classes\Directory\shell\PixelHelperScan">
+          <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" />
+          <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+          <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
+        </RegistryKey>
+        <!-- Drives context menu -->
+        <RegistryKey Root="HKLM" Key="Software\Classes\Drive\shell\PixelHelperScan">
+          <RegistryValue Type="string" Value="Сканировать с помощью PixelHelper" />
+          <RegistryValue Name="Icon" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot;,0" />
+          <RegistryValue Key="command" Type="string" Value="&quot;[INSTALLFOLDER]PixelHelper.exe&quot; --scan &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+      <Component Id="CorporateBranding" Guid="7C3F2A1E-8B9D-4F2A-B6D1-0C9E8A7F6E5D" Win64="yes">
+        <!-- OEM Information in System Properties -->
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\OEMInformation">
+          <RegistryValue Name="Manufacturer" Type="string" Value="ReyTech" KeyPath="yes" />
+          <RegistryValue Name="Model" Type="string" Value="PixelHelper" />
+          <RegistryValue Name="SupportHours" Type="string" Value="Пн-Пт 08:00 – 17:00" />
+          <RegistryValue Name="Часы" Type="string" Value="Пн-Пт 08:00 – 17:00" />
+          <RegistryValue Name="SupportURL" Type="string" Value="[SERVERURL]" />
+          <RegistryValue Name="Logo" Type="string" Value="[INSTALLFOLDER]Assets\logo_oem.bmp" />
+        </RegistryKey>
+        <!-- Windows 10/11 Lock Screen Policy (Enterprise/Edu/Server) -->
+        <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\Personalization">
+          <RegistryValue Name="LockScreenImage" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+          <RegistryValue Name="NoChangingLockScreen" Type="integer" Value="1" />
+        </RegistryKey>
+        <!-- Windows 10/11 PersonalizationCSP (Pro/Home/Enterprise MDM Provider) -->
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\PersonalizationCSP">
+          <RegistryValue Name="LockScreenImagePath" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+          <RegistryValue Name="LockScreenImageUrl" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+          <RegistryValue Name="LockScreenImageStatus" Type="integer" Value="1" />
+        </RegistryKey>
+        <!-- Enable background on logon/sign-in screen -->
+        <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\System">
+          <RegistryValue Name="DisableLogonBackgroundImage" Type="integer" Value="0" />
+        </RegistryKey>
+        <!-- Windows 7 Logon Background Support -->
+        <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\Background">
+          <RegistryValue Name="OEMBackground" Type="integer" Value="1" />
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
     <Feature Id="Complete" Title="PixelHelper" Level="1">
       <ComponentGroupRef Id="PublishedFiles" />
       <ComponentRef Id="MainExecutableComponent" />
@@ -169,11 +177,15 @@
           <Condition Action="disable">NOT ((SERVERURL &lt;&lt; "http://" OR SERVERURL &lt;&lt; "https://") AND NOT (SERVERURL &gt;&lt; " ") AND NOT (SERVERURL &gt;&lt; "\") AND NOT (SERVERURL &gt;&lt; ",") AND SERVERURL &lt;&gt; "http://" AND SERVERURL &lt;&gt; "https://")</Condition>
           <Condition Action="enable">(SERVERURL &lt;&lt; "http://" OR SERVERURL &lt;&lt; "https://") AND NOT (SERVERURL &gt;&lt; " ") AND NOT (SERVERURL &gt;&lt; "\") AND NOT (SERVERURL &gt;&lt; ",") AND SERVERURL &lt;&gt; "http://" AND SERVERURL &lt;&gt; "https://"</Condition>
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="275" Y="175" Width="75" Height="23" Cancel="yes" Text="Отмена"><Publish Event="EndDialog" Value="Exit">1</Publish></Control>
+        <Control Id="Cancel" Type="PushButton" X="275" Y="175" Width="75" Height="23" Cancel="yes" Text="Отмена">
+          <Publish Event="EndDialog" Value="Exit">1</Publish>
+        </Control>
       </Dialog>
       <Dialog Id="InstallProgressDlg" Width="370" Height="120" Title="PixelHelper" Modeless="yes">
         <Control Id="Label" Type="Text" X="20" Y="20" Width="330" Height="20" TabSkip="no" Text="Применение изменений…" />
-        <Control Id="Progress" Type="ProgressBar" X="20" Y="55" Width="330" Height="15"><Subscribe Event="SetProgress" Attribute="Progress" /></Control>
+        <Control Id="Progress" Type="ProgressBar" X="20" Y="55" Width="330" Height="15">
+          <Subscribe Event="SetProgress" Attribute="Progress" />
+        </Control>
       </Dialog>
 
       <InstallUISequence>

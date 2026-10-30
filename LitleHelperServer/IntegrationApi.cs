@@ -41,7 +41,7 @@ public static class IntegrationApi
             try { user = await Messenger.ResolveAdUserAsync(identity, db, token); }
             catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
             user.IsSweetheart = Access.IsSweetheart(config, user.Username);
-            return Results.Ok(new { token = Security.Token(user, config), user });
+            return Results.Ok(new { token = Security.Token(user, config), user, role = user.Role });
         }).RequireRateLimiting("login");
         app.MapGet("/api/settings/telegram", async (IntegrationSettings settings, HelperDb db, TelegramBotHealth health) => Results.Ok(new
         {

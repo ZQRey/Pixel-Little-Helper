@@ -320,6 +320,10 @@ async def api_service_action(service_name: str, action: str):
     return {"status": "ok", "service": service_name, "action": action, "info": get_service_status(service_name)}
 
 
+VALID_IMAGE_EXTENSIONS = {".iso", ".img", ".wim", ".vhd", ".vhdx", ".qcow2", ".squashfs"}
+EXCLUDED_IMAGE_DIRS = {"iso_extracted", "extracted", "efi", "boot", "sources", "support"}
+
+
 @app.get("/api/images")
 async def api_list_images():
     images = []
@@ -329,19 +333,26 @@ async def api_list_images():
     for s_dir in scan_dirs:
         if s_dir.exists():
             for root, dirs, files in os.walk(s_dir):
+                # Don't recurse into extracted/internal system directories
+                dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_IMAGE_DIRS and not d.startswith(".")]
                 for file in files:
                     p = Path(root) / file
                     if p in seen or p.name.startswith("."):
                         continue
+                    if p.suffix.lower() not in VALID_IMAGE_EXTENSIONS:
+                        continue
                     seen.add(p)
                     rel_path = p.relative_to(WEB_ROOT)
-                    stat = p.stat()
-                    images.append({
-                        "name": file,
-                        "path": str(rel_path).replace("\\", "/"),
-                        "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                        "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-                    })
+                    try:
+                        stat = p.stat()
+                        images.append({
+                            "name": file,
+                            "path": str(rel_path).replace("\\", "/"),
+                            "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                    except Exception:
+                        pass
     return {"images": images}
 
 

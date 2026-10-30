@@ -371,7 +371,11 @@ async function renderPxeImagesTab(container) {
 
     try {
         const data = await api('/pxe/images');
-        const images = data.images || [];
+        const validExts = ['iso', 'img', 'wim', 'vhd', 'vhdx', 'qcow2', 'squashfs'];
+        const images = (data.images || []).filter(img => {
+            const ext = img.name.split('.').pop()?.toLowerCase();
+            return validExts.includes(ext);
+        });
 
         container.innerHTML = `
             <!-- Action Toolbar -->

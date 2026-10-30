@@ -895,7 +895,7 @@ public sealed class SuperAdminWindow : Window
             AcceptsReturn = true,
             IsReadOnly = true,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Text = $"PixelHelper SuperAdmin Remote Terminal v1.2.82\nПодключено к: {settings.ServerUrl}\nДля выполнения команды введите текст внизу и нажмите Enter.\n--------------------------------------------------------------\n"
+            Text = $"PixelHelper SuperAdmin Remote Terminal v1.2.83\nПодключено к: {settings.ServerUrl}\nДля выполнения команды введите текст внизу и нажмите Enter.\n--------------------------------------------------------------\n"
         };
         consoleBorder.Child = txtTerminalOutput;
         Grid.SetRow(consoleBorder, 2);

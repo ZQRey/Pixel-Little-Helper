@@ -88,17 +88,62 @@ public static class StaffTicketsApi
                 return Results.Unauthorized();
             }
 
-            string cu = (computer.CurrentUser ?? "").ToLowerInvariant();
-            string ticketUser = Security.TicketUser(computer.CurrentUser ?? "").ToLowerInvariant();
+            // 1. Try verified user session
+            PanelUser? adminUser = await AgentUserSessions.UserAsync(computer, db);
+            if (adminUser != null && (!adminUser.IsActive || adminUser.MustChangePassword ||
+                (adminUser.Role != Roles.SuperAdmin && adminUser.Role != Roles.Admin && !Access.Can(adminUser, "tickets.manage"))))
+            {
+                adminUser = null;
+            }
 
-            var adminUser = await db.Users.AsNoTracking()
-                .Where(u => (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin || Access.Can(u, "tickets.manage")) && u.IsActive && !u.MustChangePassword)
-                .Where(u => u.AssistantMachine == computer.MachineName ||
-                            u.Username.ToLower() == ticketUser ||
-                            u.Username.ToLower() == cu ||
-                            (cu.Length > 0 && u.Username.ToLower().StartsWith(cu + "@")))
-                .OrderByDescending(u => u.Role == Roles.SuperAdmin)
-                .FirstOrDefaultAsync(token);
+            // 2. If not found in active session, find among registered admin/staff users
+            if (adminUser == null)
+            {
+                var allUsers = await db.Users.AsNoTracking()
+                    .Where(u => u.IsActive && !u.MustChangePassword)
+                    .ToListAsync(token);
+
+                var staffUsers = allUsers
+                    .Where(u => u.Role is Roles.SuperAdmin or Roles.Admin || Access.Can(u, "tickets.manage"))
+                    .ToList();
+
+                string cu = (computer.CurrentUser ?? "").ToLowerInvariant();
+                string ticketUser = Security.TicketUser(computer.CurrentUser ?? "").ToLowerInvariant();
+
+                // Find candidate matching current user or assistant machine
+                var candidates = staffUsers.Where(u =>
+                {
+                    string uName = (u.Username ?? "").ToLowerInvariant();
+                    string uNorm = Security.TicketUser(uName);
+                    string uAssignedMachine = Security.Canonical(u.AssistantMachine ?? "");
+
+                    if (!string.IsNullOrEmpty(uAssignedMachine) && uAssignedMachine == computer.MachineName)
+                        return true;
+
+                    if (!string.IsNullOrEmpty(ticketUser) && (uNorm == ticketUser || uName == ticketUser || uName.StartsWith(ticketUser + "@")))
+                        return true;
+
+                    if (!string.IsNullOrEmpty(cu) && (uName == cu || uNorm == Security.TicketUser(cu)))
+                        return true;
+
+                    if (Access.IsSweetheart(config, u.Username) || Access.IsSweetheart(config, cu) || Access.IsSweetheart(config, ticketUser))
+                        return true;
+
+                    return false;
+                }).ToList();
+
+                adminUser = candidates
+                    .OrderByDescending(u => u.Role == Roles.SuperAdmin)
+                    .ThenByDescending(u => Security.Canonical(u.AssistantMachine ?? "") == computer.MachineName)
+                    .ThenByDescending(u => u.Role == Roles.Admin)
+                    .FirstOrDefault();
+
+                // If still not found, but this machine was bound to an admin assistant machine
+                if (adminUser == null)
+                {
+                    adminUser = staffUsers.FirstOrDefault(u => Security.Canonical(u.AssistantMachine ?? "") == computer.MachineName);
+                }
+            }
 
             if (adminUser == null)
                 return Results.Unauthorized();

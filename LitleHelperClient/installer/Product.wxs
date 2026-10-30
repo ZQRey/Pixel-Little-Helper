@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.82" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
+  <Product Id="*" Name="PixelHelper" Language="1049" Codepage="1251" Version="1.2.83" Manufacturer="PixelHelper" UpgradeCode="0C2B80D1-52E0-4931-8F48-FBB031A89A55">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Установлена более новая версия PixelHelper." />
     <MediaTemplate EmbedCab="yes" /><Icon Id="HelperIcon.ico" SourceFile="$(var.PublishDir)\Assets\PixelHelper.ico" /><Property Id="ARPPRODUCTICON" Value="HelperIcon.ico" />
@@ -110,9 +110,20 @@
             <RegistryValue Name="SupportURL" Type="string" Value="[SERVERURL]" />
             <RegistryValue Name="Logo" Type="string" Value="[INSTALLFOLDER]Assets\logo_oem.bmp" />
           </RegistryKey>
-          <!-- Windows 10/11 Lock Screen Policy -->
+          <!-- Windows 10/11 Lock Screen Policy (Enterprise/Edu/Server) -->
           <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\Personalization">
             <RegistryValue Name="LockScreenImage" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+            <RegistryValue Name="NoChangingLockScreen" Type="integer" Value="1" />
+          </RegistryKey>
+          <!-- Windows 10/11 PersonalizationCSP (Pro/Home/Enterprise MDM Provider) -->
+          <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\PersonalizationCSP">
+            <RegistryValue Name="LockScreenImagePath" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+            <RegistryValue Name="LockScreenImageUrl" Type="string" Value="[INSTALLFOLDER]Assets\branding_lockscreen.jpg" />
+            <RegistryValue Name="LockScreenImageStatus" Type="integer" Value="1" />
+          </RegistryKey>
+          <!-- Enable background on logon/sign-in screen -->
+          <RegistryKey Root="HKLM" Key="Software\Policies\Microsoft\Windows\System">
+            <RegistryValue Name="DisableLogonBackgroundImage" Type="integer" Value="0" />
           </RegistryKey>
           <!-- Windows 7 Logon Background Support -->
           <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\Background">

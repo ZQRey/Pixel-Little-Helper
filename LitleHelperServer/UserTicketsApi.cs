@@ -133,6 +133,10 @@ public static class UserTicketsApi
         var result = new List<UserTicketSummary>();
         var now = DateTime.UtcNow;
 
+        var activeStaffUsers = await db.Users.AsNoTracking()
+            .Where(u => u.IsActive && (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin))
+            .ToListAsync(token);
+
         foreach (var t in tickets)
         {
             int stCode = StaffTicketsApi.StatusCode(t.Status);
@@ -166,12 +170,12 @@ public static class UserTicketsApi
                 closedAt = t.SyncedAt ?? t.CreatedAt;
             }
 
-            // 15 days rating window
+            // 15 days rating window (exclude self-created or self-handled tickets by technicians/admins)
             bool canRate = false;
             if (isClosed && (!score.HasValue || score.Value <= 0))
             {
                 DateTime referenceDate = closedAt ?? t.CreatedAt;
-                if ((now - referenceDate).TotalDays <= 15.0)
+                if ((now - referenceDate).TotalDays <= 15.0 && !IsTechnicianSelfRating(t, cleanOwner, reportedUser, activeStaffUsers))
                 {
                     canRate = true;
                 }
@@ -256,11 +260,16 @@ public static class UserTicketsApi
 
         if (isClosed && !closedAt.HasValue) closedAt = t.SyncedAt ?? t.CreatedAt;
 
+        var activeStaffUsers = await db.Users.AsNoTracking()
+            .Where(u => u.IsActive && (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin))
+            .ToListAsync(token);
+
         bool canRate = false;
         if (isClosed && (!score.HasValue || score.Value <= 0))
         {
             DateTime refDate = closedAt ?? t.CreatedAt;
-            if ((DateTime.UtcNow - refDate).TotalDays <= 15.0) canRate = true;
+            if ((DateTime.UtcNow - refDate).TotalDays <= 15.0 && !IsTechnicianSelfRating(t, cleanOwner, reportedUser, activeStaffUsers))
+                canRate = true;
         }
 
         string specialist = !string.IsNullOrWhiteSpace(t.AssignedUsername) ? t.AssignedUsername : "Назначается";
@@ -376,6 +385,14 @@ public static class UserTicketsApi
 
         if (t == null) return false;
 
+        // Disallow technician self-rating (when technician rated their own ticket or is the assigned specialist)
+        var activeStaffUsers = await db.Users.AsNoTracking()
+            .Where(u => u.IsActive && (u.Role == Roles.SuperAdmin || u.Role == Roles.Admin))
+            .ToListAsync(token);
+
+        if (IsTechnicianSelfRating(t, cleanOwner, reportedUser, activeStaffUsers))
+            return false;
+
         // Verify <= 15 days
         DateTime referenceDate = t.SyncedAt ?? t.CreatedAt;
         var inv = await db.TicketSurveyInvitations.FirstOrDefaultAsync(i => i.TicketId == t.GlpiId, token);
@@ -439,6 +456,52 @@ public static class UserTicketsApi
         }
 
         return true;
+    }
+
+    internal static bool IsTechnicianSelfRating(TicketRecord t, string cleanOwner, string reportedUser, IEnumerable<PanelUser> users)
+    {
+        string creator = (t.Username ?? "").Trim().ToLowerInvariant();
+        string assigned = (t.AssignedUsername ?? "").Trim().ToLowerInvariant();
+        string owner = (cleanOwner ?? "").Trim().ToLowerInvariant();
+        string rep = (reportedUser ?? "").Trim().ToLowerInvariant();
+
+        if (string.IsNullOrEmpty(assigned)) return false;
+
+        static string StripDomain(string s) => s.Contains('\\') ? s.Substring(s.LastIndexOf('\\') + 1) : (s.Contains('@') ? s.Substring(0, s.IndexOf('@')) : s);
+        string creatorShort = StripDomain(creator);
+        string assignedShort = StripDomain(assigned);
+        string ownerShort = StripDomain(owner);
+        string repShort = StripDomain(rep);
+
+        // 1. Direct or short name equality
+        if (assigned == creator || assignedShort == creatorShort)
+            return true;
+        if (assigned == owner || assignedShort == ownerShort)
+            return true;
+        if (assigned == rep || assignedShort == repShort)
+            return true;
+
+        // 2. Lookup technician in PanelUser list
+        foreach (var u in users)
+        {
+            string uName = (u.Username ?? "").Trim().ToLowerInvariant();
+            string uNameShort = StripDomain(uName);
+            string uFullName = (u.FullName ?? "").Trim().ToLowerInvariant();
+            bool isTech = (assigned == uName || assignedShort == uNameShort || assigned == uFullName);
+            if (isTech)
+            {
+                // Is the creator also this technician?
+                if (creator == uName || creatorShort == uNameShort || creator == uFullName)
+                    return true;
+
+                // Is the current viewer/rater this technician?
+                if (owner == uName || ownerShort == uNameShort || owner == uFullName ||
+                    rep == uName || repShort == uNameShort || rep == uFullName)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private static string CleanHtml(string html)

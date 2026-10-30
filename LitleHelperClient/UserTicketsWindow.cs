@@ -1213,7 +1213,7 @@ public sealed class UserTicketsWindow : Window
                     Padding = new Thickness(12),
                     Child = new TextBlock
                     {
-                        Text = "Срок выставления оценки (15 дней после закрытия) истёк.",
+                        Text = "Оценка недоступна (заявка выполнена самостоятельно либо срок оценки 15 дней истёк).",
                         FontSize = 12,
                         Foreground = (Brush)new BrushConverter().ConvertFromString("#64748B")!
                     }

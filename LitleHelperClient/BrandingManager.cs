@@ -19,6 +19,8 @@ public static class BrandingManager
 
     private const string OemKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation";
     private const string PersonalizationPolicyKeyPath = @"SOFTWARE\Policies\Microsoft\Windows\Personalization";
+    private const string PersonalizationCspKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP";
+    private const string SystemPolicyKeyPath = @"SOFTWARE\Policies\Microsoft\Windows\System";
     private const string Win7LogonKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI\Background";
 
     public static string GetAssetsDirectory()
@@ -75,14 +77,73 @@ public static class BrandingManager
                 }
             }
 
-            // 2. Windows 10/11 Lock Screen Policy
+            // 2. Windows 10/11 Lock Screen Policy & PersonalizationCSP (Pro, Enterprise, Home)
             if (File.Exists(lockScreenPath))
             {
-                using var policyKey = Registry.LocalMachine.CreateSubKey(PersonalizationPolicyKeyPath, true);
-                if (policyKey != null)
+                try
                 {
-                    policyKey.SetValue("LockScreenImage", lockScreenPath, RegistryValueKind.String);
-                    log?.Invoke($"Lock screen policy applied: {lockScreenPath}");
+                    using var policyKey = Registry.LocalMachine.CreateSubKey(PersonalizationPolicyKeyPath, true);
+                    if (policyKey != null)
+                    {
+                        policyKey.SetValue("LockScreenImage", lockScreenPath, RegistryValueKind.String);
+                        policyKey.SetValue("NoChangingLockScreen", 1, RegistryValueKind.DWord);
+                        log?.Invoke($"Lock screen policy applied: {lockScreenPath}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke($"Personalization policy notice: {ex.Message}");
+                }
+
+                try
+                {
+                    using var cspKey = Registry.LocalMachine.CreateSubKey(PersonalizationCspKeyPath, true);
+                    if (cspKey != null)
+                    {
+                        cspKey.SetValue("LockScreenImagePath", lockScreenPath, RegistryValueKind.String);
+                        cspKey.SetValue("LockScreenImageUrl", lockScreenPath, RegistryValueKind.String);
+                        cspKey.SetValue("LockScreenImageStatus", 1, RegistryValueKind.DWord);
+                        log?.Invoke($"PersonalizationCSP applied: {lockScreenPath}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke($"PersonalizationCSP notice: {ex.Message}");
+                }
+
+                try
+                {
+                    using var sysKey = Registry.LocalMachine.CreateSubKey(SystemPolicyKeyPath, true);
+                    if (sysKey != null)
+                    {
+                        sysKey.SetValue("DisableLogonBackgroundImage", 0, RegistryValueKind.DWord);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke($"System policy notice: {ex.Message}");
+                }
+
+                // Also update Windows default lock screen image img100.jpg if accessible
+                try
+                {
+                    string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                    string screenDir = Path.Combine(winDir, "Web", "Screen");
+                    string defaultImg = Path.Combine(screenDir, "img100.jpg");
+                    if (File.Exists(defaultImg))
+                    {
+                        string backupImg = Path.Combine(screenDir, "img100.original.bak");
+                        if (!File.Exists(backupImg))
+                        {
+                            try { File.Copy(defaultImg, backupImg, false); } catch { }
+                        }
+                        File.Copy(lockScreenPath, defaultImg, true);
+                        log?.Invoke($"Windows default screen image updated: {defaultImg}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke($"Default screen file replace notice: {ex.Message}");
                 }
             }
 
@@ -158,6 +219,15 @@ public static class BrandingManager
                 if (key != null)
                 {
                     lockScreen = key.GetValue("LockScreenImage") as string;
+                }
+            }
+
+            if (string.IsNullOrEmpty(lockScreen))
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(PersonalizationCspKeyPath, false);
+                if (key != null)
+                {
+                    lockScreen = key.GetValue("LockScreenImagePath") as string;
                 }
             }
         }

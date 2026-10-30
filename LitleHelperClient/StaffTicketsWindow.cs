@@ -124,10 +124,15 @@ public sealed class StaffTicketsWindow : Window
                 await LoadOverviewAsync();
                 return;
             }
+            else
+            {
+                string err = await resp.Content.ReadAsStringAsync(lifetime.Token);
+                Console.WriteLine($"[StaffTicketsWindow] Auto-auth status: {resp.StatusCode}, body: {err}");
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // Fall back to manual login screen
+            Console.WriteLine($"[StaffTicketsWindow] Auto-auth error: {ex.Message}");
         }
 
         ShowLoginScreen();

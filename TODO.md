@@ -4152,3 +4152,44 @@ MSI: `LitleHelperClient/artifacts/release-1.2.69/PixelHelper.msi`
   - В `StaffTicketsWindow.cs` внедрен метод `TryAutoLoginAsync()` с экраном загрузки «Проверка полномочий администратора…».
   - При открытии окна администратором вход происходит автоматически без необходимости вводить логин и пароль.
   - В случае отказа сервера окно корректно переключается на стандартную форму ручного ввода учетных данных.
+
+
+---
+
+## 38. Доработки версии 1.2.83 (Защита от накрутки оценок, исправление автовхода администратора, брендинг экрана блокировки и входа в систему)
+
+### 38.1. [x] Защита от накрутки оценок в «Мои заявки» (`UserTicketsApi.cs`, `UserTicketsWindow.cs`)
+- [x] **Исключение голосования за свои заявки специалистами и администраторами:**
+  - В `UserTicketsApi.cs` добавлен метод проверки `IsTechnicianSelfRating(t, cleanOwner, reportedUser, users)`.
+  - Запрещено голосование (`canRate = false`), если:
+    1. Исполнитель заявки (`AssignedUsername`) совпадает с заявителем/создателем (`Username`) с учетом нормализации и отсечения домена.
+    2. Текущий пользователь, открывший форму («Мои заявки»), является назначенным специалистом/администратором по этой заявке.
+    3. Специалист найден в списке сотрудников `db.Users` (по `Username` или `FullName`) и совпадает с создателем или текущим пользователем.
+  - Проверка встроена в `GetUserTicketsCoreAsync` (список заявок), `GetUserTicketDetailCoreAsync` (карточка заявки) и `RateUserTicketCoreAsync` (API сохранения оценки).
+- [x] **Клиентский интерфейс:**
+  - В `UserTicketsWindow.cs` плашка ожидания оценки скрывается для заявок собственного выполнения.
+  - В карточке закрытой заявки отображается пояснение: `«Оценка недоступна (заявка выполнена самостоятельно либо срок оценки 15 дней истёк)»`.
+
+### 38.2. [x] Устранение сбоя автовхода в «Заявки (Admin)» (`StaffTicketsApi.cs`, `StaffTicketsWindow.cs`)
+- [x] **Устранение исключения трансляции LINQ в SQL (InvalidOperationException):**
+  - Вызов `Access.Can(u, "tickets.manage")` находился внутри EF Core `Where(...)`, что вызывало внутреннюю ошибку сервера (HTTP 500) и приводило к сбросу на форму ручной авторизации с вводом логина и пароля.
+  - Запрос разделен: фильтрация прав перенесена в C# по активным пользователям.
+- [x] **Поддержка активных пользовательских сессий агента (`AgentUserSessions`):**
+  - Эндпоинт `/api/staff-tickets/auto-auth` в первую очередь проверяет подтвержденную сессию `AgentUserSessions.UserAsync(computer, db)`.
+  - Добавлено сопоставление по нормализованному логину, суффиксу `@domain`, `AssistantMachine` (без учета регистра) и `Access.IsSweetheart`.
+  - В `StaffTicketsWindow.cs` расширено логирование и обеспечен стабильный бесшовный автовход без запроса пароля.
+
+### 38.3. [x] Применение экрана блокировки и экрана входа в систему (`BrandingManager.cs`, `Product.wxs`)
+- [x] **Поддержка Windows 10 / 11 Pro, Enterprise и Home через PersonalizationCSP:**
+  - Политика GPO `HKLM\Software\Policies\Microsoft\Windows\Personalization\LockScreenImage` в Windows 10/11 игнорируется редакцией Pro и Home (ограничена Microsoft только Enterprise/Education).
+  - В `BrandingManager.cs` и `Product.wxs` добавлена регистрация провайдера MDM/CSP:
+    - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP`: `LockScreenImagePath`, `LockScreenImageUrl`, `LockScreenImageStatus = 1`.
+    - `HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization`: `NoChangingLockScreen = 1`.
+    - `HKLM\SOFTWARE\Policies\Microsoft\Windows\System`: `DisableLogonBackgroundImage = 0` (включение фонового изображения на экране входа/Sign-in).
+  - Добавлена прямая замена системного изображения по умолчанию `C:\Windows\Web\Screen\img100.jpg` с созданием резервной копии `img100.original.bak` при выполнении от имени SYSTEM/администратора.
+
+### 38.4. [x] Сборка нового релизного пакета MSI версии 1.2.83
+- [x] Повышена версия клиента с `1.2.82` до `1.2.83` (`PixelHelper.csproj`, `SystemInspector.cs`, `SuperAdminWindow.cs`, `Product.wxs`).
+- [x] Успешно пройден полный набор модульных тестов (`PixelHelper.Tests.csproj`).
+- [x] Собран MSI-установщик: `LitleHelperClient\artifacts\release-1.2.83\PixelHelper.msi`.
+- [x] Пакет **не отправлен** в канал автообновления (согласно указанию).

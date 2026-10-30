@@ -116,14 +116,38 @@ def get_service_status(service_name: str) -> dict:
 
 def get_system_stats() -> dict:
     cpu_percent = psutil.cpu_percent(interval=None)
-    mem = psutil.virtual_memory()
+    used_mb, total_mb = 0, 0
+    try:
+        meminfo = {}
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    k = parts[0].strip()
+                    v = parts[1].strip().split()[0]
+                    meminfo[k] = int(v)
+        total_kb = meminfo.get("MemTotal", 0)
+        avail_kb = meminfo.get("MemAvailable", meminfo.get("MemFree", 0))
+        used_kb = max(0, total_kb - avail_kb)
+        if total_kb > 0:
+            used_mb = round(used_kb / 1024)
+            total_mb = round(total_kb / 1024)
+    except Exception:
+        pass
+
+    if total_mb == 0:
+        mem = psutil.virtual_memory()
+        used_mb = round((mem.total - mem.available) / (1024 * 1024))
+        total_mb = round(mem.total / (1024 * 1024))
+
+    mem_percent = round((used_mb / total_mb) * 100, 1) if total_mb > 0 else 0
     disk_srv = shutil.disk_usage(str(WEB_ROOT)) if WEB_ROOT.exists() else shutil.disk_usage("/")
     
     return {
         "cpu_percent": cpu_percent,
-        "memory_used_mb": round((mem.total - mem.available) / (1024 * 1024)),
-        "memory_total_mb": round(mem.total / (1024 * 1024)),
-        "memory_percent": mem.percent,
+        "memory_used_mb": used_mb,
+        "memory_total_mb": total_mb,
+        "memory_percent": mem_percent,
         "disk_free_gb": round(disk_srv.free / (1024 * 1024 * 1024), 2),
         "disk_total_gb": round(disk_srv.total / (1024 * 1024 * 1024), 2),
         "disk_used_percent": round((disk_srv.used / disk_srv.total) * 100, 1),
@@ -352,9 +376,133 @@ async def api_upload_image(file: UploadFile = File(...), target_dir: Optional[st
     return {"status": "ok", "filename": safe_name, "path": str(dest_path.relative_to(WEB_ROOT)).replace("\\", "/"), "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2)}
 
 
+def escape_xml(s: str) -> str:
+    if not s:
+        return ""
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&apos;")
+
+
+class CustomApp(BaseModel):
+    name: Optional[str] = "App"
+    path: str
+    args: Optional[str] = ""
+
+
 class WinPeProcessRequest(BaseModel):
     iso_path: str
     server_ip: Optional[str] = "172.16.16.61"
+    name_mode: Optional[str] = "prompt"
+    name_pattern: Optional[str] = "PC-%RANDOM%"
+    ad_join: Optional[bool] = False
+    ad_domain: Optional[str] = ""
+    ad_ou: Optional[str] = ""
+    ad_user: Optional[str] = ""
+    ad_password: Optional[str] = ""
+    custom_apps: Optional[List[CustomApp]] = []
+
+
+def generate_autounattend_xml(req: WinPeProcessRequest) -> str:
+    # Build ComputerName string
+    comp_name = "*"
+    if req.name_mode == "pattern" and req.name_pattern:
+        cleaned = re.sub(r"[^A-Za-z0-9\-]", "", req.name_pattern.replace("%SERIAL%", "").replace("%RANDOM%", ""))
+        if cleaned:
+            comp_name = f"{cleaned[:10]}*"
+        else:
+            comp_name = "*"
+
+    domain_xml = ""
+    if req.ad_join and req.ad_domain:
+        ou_line = f"<MachineObjectOU>{escape_xml(req.ad_ou)}</MachineObjectOU>" if req.ad_ou else ""
+        domain_xml = f"""
+        <component name="Microsoft-Windows-UnattendedSettings" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <Identification>
+                <Credentials>
+                    <Domain>{escape_xml(req.ad_domain)}</Domain>
+                    <Password>{escape_xml(req.ad_password or '')}</Password>
+                    <Username>{escape_xml(req.ad_user or '')}</Username>
+                </Credentials>
+                <JoinDomain>{escape_xml(req.ad_domain)}</JoinDomain>
+                {ou_line}
+            </Identification>
+        </component>
+        """
+
+    commands_xml = []
+    order = 1
+    srv = req.server_ip or "172.16.16.61"
+
+    # Always install PixelHelper agent
+    commands_xml.append(f"""
+                <SynchronousCommand wcm:action="add">
+                    <Order>{order}</Order>
+                    <CommandLine>msiexec /i "\\\\{srv}\\install\\PixelHelper.msi" /qn /norestart AGY_SERVER_URL="http://{srv}:5000"</CommandLine>
+                    <Description>Install PixelHelper Agent</Description>
+                </SynchronousCommand>
+    """)
+    order += 1
+
+    if req.custom_apps:
+        for app in req.custom_apps:
+            cmd = f'"{app.path}" {app.args}'.strip()
+            commands_xml.append(f"""
+                <SynchronousCommand wcm:action="add">
+                    <Order>{order}</Order>
+                    <CommandLine>{escape_xml(cmd)}</CommandLine>
+                    <Description>{escape_xml(app.name or 'Custom App')}</Description>
+                </SynchronousCommand>
+            """)
+            order += 1
+
+    commands_block = "\n".join(commands_xml)
+
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="windowsPE">
+        <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <SetupUILanguage>
+                <UILanguage>ru-RU</UILanguage>
+            </SetupUILanguage>
+            <InputLocale>0419:00000419</InputLocale>
+            <SystemLocale>ru-RU</SystemLocale>
+            <UILanguage>ru-RU</UILanguage>
+            <UserLocale>ru-RU</UserLocale>
+        </component>
+        <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <UserData>
+                <AcceptEula>true</AcceptEula>
+            </UserData>
+        </component>
+    </settings>
+    <settings pass="specialize">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <ComputerName>{comp_name}</ComputerName>
+            <TimeZone>Russian Standard Time</TimeZone>
+        </component>
+        {domain_xml}
+    </settings>
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>0419:00000419</InputLocale>
+            <SystemLocale>ru-RU</SystemLocale>
+            <UILanguage>ru-RU</UILanguage>
+            <UserLocale>ru-RU</UserLocale>
+        </component>
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <ProtectYourPC>3</ProtectYourPC>
+            </OOBE>
+            <FirstLogonCommands>
+{commands_block}
+            </FirstLogonCommands>
+        </component>
+    </settings>
+</unattend>
+"""
 
 
 @app.post("/api/process-windows")
@@ -370,8 +518,13 @@ async def api_process_windows(req: WinPeProcessRequest):
     if not iso_file.exists():
         raise HTTPException(status_code=404, detail=f"ISO file not found: {iso_file}")
     
+    # Generate autounattend.xml
+    autounattend_content = generate_autounattend_xml(req)
+    unattend_tmp = Path("/tmp/autounattend.xml")
+    unattend_tmp.write_text(autounattend_content, encoding="utf-8")
+
     script = SCRIPTS_DIR / "build_winpe.sh"
-    cmd = f"bash '{script}' '{iso_file}' '{req.server_ip}'"
+    cmd = f"bash '{script}' '{iso_file}' '{req.server_ip}' '{unattend_tmp}'"
     code, out, err = await run_cmd(cmd)
     
     return {

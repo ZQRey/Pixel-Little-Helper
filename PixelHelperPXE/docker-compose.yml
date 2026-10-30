@@ -41,6 +41,7 @@ services:
       context: .
       dockerfile: docker/panel/Dockerfile
     container_name: pxe-panel
+    privileged: true
     network_mode: host
     command: ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $${PANEL_PORT:-8080}"]
     environment:
@@ -51,6 +52,7 @@ services:
       - CONFIGS_DIR=/opt/pxe-panel/configs
       - SCRIPTS_DIR=/opt/pxe-panel/scripts
     volumes:
+      - /proc/meminfo:/proc/meminfo:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
       - ./panel/app:/opt/pxe-panel/app

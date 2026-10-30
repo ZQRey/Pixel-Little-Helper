@@ -119,8 +119,14 @@ public class PxeService
     public async Task<JsonElement?> ProcessWindowsAsync(object payload, CancellationToken token = default)
     {
         var client = CreateClient();
+        // Распаковка ISO (~5 ГБ) и правка boot.wim занимают несколько минут
+        client.Timeout = TimeSpan.FromMinutes(30);
         using var response = await client.PostAsJsonAsync("/api/process-windows", payload, token);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            string body = await response.Content.ReadAsStringAsync(token);
+            throw new InvalidOperationException($"PXE-сервер вернул {(int)response.StatusCode}: {body}");
+        }
         return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
     }
 }

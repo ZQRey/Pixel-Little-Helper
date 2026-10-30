@@ -49,7 +49,12 @@ if %errorlevel% neq 0 (
 
 echo [+] Installation share mounted successfully on drive Z:
 echo.
-if exist Z:\setup.exe (
+if exist Z:\autounattend.xml (
+    echo ==============================================================================
+    echo Starting Automated Windows Setup with Z:\autounattend.xml...
+    echo ==============================================================================
+    Z:\setup.exe /unattend:Z:\autounattend.xml
+) else if exist Z:\setup.exe (
     echo ==============================================================================
     echo Starting Windows Setup from Z:\setup.exe...
     echo ==============================================================================

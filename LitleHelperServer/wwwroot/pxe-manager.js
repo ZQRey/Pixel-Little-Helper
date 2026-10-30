@@ -7,6 +7,14 @@ let pxeCurrentLog = 'dnsmasq';
 let pxeStatusCache = null;
 let pxeLogInterval = null;
 
+function formatPxeRam(usedMb, totalMb) {
+    if (!totalMb) return '--';
+    if (totalMb >= 1024) {
+        return `${(usedMb / 1024).toFixed(1)} GB / ${(totalMb / 1024).toFixed(1)} GB`;
+    }
+    return `${usedMb || 0} / ${totalMb} MB`;
+}
+
 async function renderPxePage() {
     const content = $('#content');
     content.innerHTML = '<div class="empty">Проверка подключения к PXE серверу…</div>';
@@ -165,7 +173,7 @@ function renderPxeDashboard(settings, initialStatus) {
             </div>
             <div class="stat">
                 <span>ИСПОЛЬЗОВАНИЕ RAM</span>
-                <strong id="pxe-stat-ram">${stats.memory_used_mb || 0} / ${stats.memory_total_mb || 512} MB</strong>
+                <strong id="pxe-stat-ram">${formatPxeRam(stats.memory_used_mb, stats.memory_total_mb)}</strong>
             </div>
             <div class="stat">
                 <span>ХРАНИЛИЩЕ (/SRV)</span>
@@ -551,7 +559,7 @@ function showUnattendedCustomizerModal(images) {
     modal('✨ Редактор автоматической установки (Unattended Windows)', `
         <form id="customizer-form" style="gap:16px;max-height:75vh;overflow-y:auto;padding-right:4px;">
             <p style="font-size:12px;color:var(--muted);margin:0;">
-                Настройка полной автоматизации Windows: от администратора потребуется только включить ПК, а по завершении компьютер будет в домене, с программами и установленным помощником.
+                Настройка сетевой автоустановки Windows: сетевой загрузчик WinPE загружается по сети в оперативную память ПК, подключает сетевую папку с дистрибутивом Windows и автоматически устанавливает систему по заданному сценарию autounattend.xml.
             </p>
 
             <!-- 1. Source Image -->
@@ -629,7 +637,7 @@ function showUnattendedCustomizerModal(images) {
 
             <div class="form-actions">
                 <button type="submit" class="primary" id="btn-run-customizer">
-                    🚀 Сгенерировать и внедрить в WinPE
+                    🚀 Подготовить сетевую установку (Автоустановка Windows)
                 </button>
             </div>
         </form>
@@ -670,7 +678,7 @@ function showUnattendedCustomizerModal(images) {
 
         runBtn.disabled = true;
         statusBox.style.display = 'block';
-        statusBox.textContent = `[INFO] Старт генерации WinPE для ${f.isoPath.value}…\nИзвлечение файлов, внедрение autounattend.xml и SetupComplete.cmd…\nПожалуйста, подождите (2-4 минуты)…`;
+        statusBox.textContent = `[INFO] Подготовка сетевой автоустановки Windows для ${f.isoPath.value}…\nИзвлечение файлов, внедрение autounattend.xml и настройка загрузчика…\nПожалуйста, подождите (2-4 минуты)…`;
 
         // Collect custom apps
         const apps = [];
@@ -697,11 +705,11 @@ function showUnattendedCustomizerModal(images) {
             const res = await api('/pxe/process-windows', 'POST', payload);
 
             if (res.status === 'ok') {
-                statusBox.textContent = `[УСПЕХ] WinPE успешно сформирован и настроен на автоустановку!\n\n${res.stdout || ''}`;
+                statusBox.textContent = `[УСПЕХ] Образ Windows и сетевой загрузчик успешно подготовлены к автоустановке!\n\n${res.stdout || ''}`;
                 toast('Образ Windows успешно подготовлен к сетевой установке!');
             } else {
                 statusBox.textContent = `[ОШИБКА] Обработка не удалась:\n${res.stderr || res.stdout || ''}`;
-                toast('Ошибка при сборке образа', true);
+                toast('Ошибка при подготовке образа', true);
             }
         } catch (err) {
             statusBox.textContent = `[ОШИБКА] Сбой соединения: ${err.message}`;

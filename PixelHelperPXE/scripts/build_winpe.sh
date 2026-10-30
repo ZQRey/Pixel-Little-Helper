@@ -39,8 +39,7 @@ fi
 
 # Validate ISO archive integrity and header
 log_info "Проверка целостности ISO-образа: ${ISO_PATH}..."
-ISO_CHECK=$(7z l "${ISO_PATH}" 2>&1 || true)
-if echo "${ISO_CHECK}" | grep -qE "Unexpected end of archive|Headers Error"; then
+if ! 7z t -bso0 -bsp0 "${ISO_PATH}" bootmgr >/dev/null 2>&1; then
     ACTUAL_SIZE=$(stat -c%s "${ISO_PATH}" 2>/dev/null || echo 0)
     ACTUAL_MB=$(( ACTUAL_SIZE / 1024 / 1024 ))
     log_err "=========================================================================="

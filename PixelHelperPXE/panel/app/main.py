@@ -948,8 +948,12 @@ def _build_grub_menu(entries: List[dict]) -> str:
         rp = e.get("rel_path", "os/windows")
         out.append(f'menuentry "{e["title"]}" --class {cls} --class os {{')
         if k == "windows":
-            out.append(f"    linux (tftp,{PXE_SERVER_IP})/wimboot")
+            out.append(f'    echo "Загрузка ядра wimboot..."')
+            out.append(f"    linux {s}/tools/wimboot")
+            out.append(f'    echo "Загрузка файлов WinPE ({e["title"]})... Пожалуйста, подождите..."')
             out.append(f"    initrd newc:bootmgr.efi:{s}/{rp}/bootmgr.efi newc:bcd:{s}/{rp}/boot/bcd newc:boot.sdi:{s}/{rp}/boot/boot.sdi newc:boot.wim:{s}/{rp}/sources/boot.wim")
+            out.append(f'    echo "Запуск установщика Windows..."')
+            out.append(f"    boot")
         elif k == "debian":
             out.append(f"    linux {s}/{rp}/linux vga=788 --- quiet")
             out.append(f"    initrd {s}/{rp}/initrd.gz")

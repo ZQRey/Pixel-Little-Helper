@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -613,18 +614,84 @@ async def api_upload_complete(upload_id: str):
 
 async def _auto_prepare_iso(iso_path: Path):
     try:
+        if not iso_path.exists():
+            return
+        slug = _slugify(iso_path.stem)
+        target_dir = WEB_ROOT / "os" / "windows" / slug
+        if target_dir.exists() and ((target_dir / "sources" / "boot.wim").exists() or (target_dir / "SSTR").exists()):
+            return
+
+        # Check ISO content using 7z
         proc = await asyncio.create_subprocess_exec(
-            "7z", "l", str(iso_path), "sources/boot.wim",
+            "7z", "l", str(iso_path),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, _ = await proc.communicate()
-        if b"boot.wim" in stdout:
-            slug = _slugify(iso_path.stem)
-            target_dir = WEB_ROOT / "os" / "windows" / slug
+
+        # 1. Strelec or similar WinPE with SSTR/ directory
+        if b"SSTR/strelec" in stdout or b"SSTR\\strelec" in stdout or b"SSTR/BCD" in stdout:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            unpack = await asyncio.create_subprocess_exec(
+                "7z", "x", "-y", f"-o{target_dir}", str(iso_path)
+            )
+            await unpack.communicate()
+
+            setup_script = f"""
+cd '{target_dir}'
+ln -sf EFI/boot/bootx64.efi bootx64.efi 2>/dev/null || true
+ln -sf EFI/microsoft/boot/BCD BCD 2>/dev/null || true
+ln -sf SSTR/boot.sdi boot.sdi 2>/dev/null || true
+mkdir -p boot sources
+ln -sf ../BCD boot/bcd 2>/dev/null || true
+ln -sf ../boot.sdi boot/boot.sdi 2>/dev/null || true
+ln -sf ../SSTR/strelec11x64.wim sources/boot.wim 2>/dev/null || true
+echo '{iso_path.stem}' > .source
+chmod -R a+rX '{target_dir}'
+"""
+            await run_cmd(f"bash -c \"{setup_script}\"")
+
+            net_cmd = f"""rem Strelec PXE Network Setup for Pixel Little Helper
+net start wlansvc
+Reg Add "HKLM\\SYSTEM\\Setup" /v "SystemSetupInProgress" /t REG_DWORD /d "0x0" /f
+net start netprofm
+Reg Add "HKLM\\SYSTEM\\Setup" /v "SystemSetupInProgress" /t REG_DWORD /d "0x1" /f
+start X:\\"Program Files"\\WinXShell\\WinXShell.exe -ui -jcfg wxsUI\\UI_WIFI.zip\\main.jcfg -theme dark -hidewindow
+start pecmd.exe LINK %Desktop%\\WiFi,%ProgramFiles%\\WinXShell\\WinXShell.exe,-ui -jcfg wxsUI\\UI_WIFI.zip\\main.jcfg -theme dark,%WinDir%\\System32\\wlan.ico
+net start Netman
+net start MSiSCSI
+net start nlasvc
+net start upnphost
+net start fdPHost
+net start wcncsvc
+net start wcmsvc
+net start SSDPSRV
+fsutil.exe behavior set disablelastaccess 3
+netsh int tcp set global timestamps=enabled
+pnputil.exe /add-driver %windir%\\INF\\usbvideo.inf /install
+
+net use Z: \\\\{PXE_SERVER_IP}\\install\\{slug} /USER:guest ""
+
+pecmd.exe WAIT 2000
+if exist Z:\\SSTR\\MInst\\Portable\\x64\\Files_11_x64.exe (
+    Z:\\SSTR\\MInst\\Portable\\x64\\Files_11_x64.exe
+)
+exit
+"""
+            tmp_net = target_dir / "network_pxe.cmd"
+            tmp_net.write_text(net_cmd, encoding="latin1")
+            for w in [target_dir / "SSTR" / "strelec11x64.wim", target_dir / "SSTR" / "strelec10x64.wim"]:
+                if w.exists():
+                    await run_cmd(f"wimlib-imagex update '{w}' 1 --command='add \"{tmp_net}\" /Windows/System32/network_pxe.cmd'")
+            regenerate_boot_menus()
+
+        # 2. Standard Windows Installer ISO (sources/boot.wim)
+        elif b"boot.wim" in stdout:
             if not (target_dir / "sources" / "boot.wim").exists():
                 script = SCRIPTS_DIR / "build_winpe.sh"
                 await run_cmd(f"bash '{script}' '{iso_path}' '{PXE_SERVER_IP}' '' '{slug}'")
                 regenerate_boot_menus()
+        else:
+            regenerate_boot_menus()
     except Exception as ex:
         print(f"[auto_prepare_iso] {iso_path}: {ex}")
 
@@ -781,29 +848,72 @@ def _menu_safe(text: str) -> str:
 
 
 def _slugify(text: str) -> str:
-    return re.sub(r'[^A-Za-z0-9_-]', '_', text).strip('_')
+    return re.sub(r'[^A-Za-z0-9_]', '_', text).strip('_')
 
 
 def _available_boot_entries() -> List[dict]:
     os_dir = WEB_ROOT / "os"
     entries = []
 
-    # 1. Scan for all multi-image Windows distributions in /srv/www/pxe/os/windows/*/
+    # 1. Scan for all multi-image Windows and WinPE distributions in /srv/www/pxe/os/windows/*/
     win_base = os_dir / "windows"
+    extracted_slugs = set()
     if win_base.exists():
         for sub in sorted(win_base.iterdir()):
             if sub.is_dir() and sub.name not in ("boot", "sources", "iso_extracted"):
+                source_file = sub / ".source"
+                raw_title = source_file.read_text(encoding="utf-8").strip() if source_file.exists() else sub.name
+                title = Path(raw_title).stem
+                extracted_slugs.add(sub.name)
+                extracted_slugs.add(_slugify(sub.name))
+                extracted_slugs.add(_slugify(title))
+
+                # Check for Sergei Strelec / WinPE with SSTR/ directory
+                strelec11 = sub / "SSTR" / "strelec11x64.wim"
+                strelec10 = sub / "SSTR" / "strelec10x64.wim"
+                if strelec11.exists() or strelec10.exists():
+                    clean_title = _menu_safe(title).replace("WinPE", "").strip()
+                    if strelec11.exists():
+                        entries.append({
+                            "kind": "winpe",
+                            "slug": f"{sub.name}_pe11",
+                            "title": f"WinPE 11 Sergei Strelec (x64)",
+                            "rel_path": f"os/windows/{sub.name}",
+                            "wim_path": f"os/windows/{sub.name}/SSTR/strelec11x64.wim",
+                            "bootmgr": f"os/windows/{sub.name}/bootmgr",
+                            "bootx64": f"os/windows/{sub.name}/bootx64.efi",
+                            "bcd": f"os/windows/{sub.name}/BCD",
+                            "sdi": f"os/windows/{sub.name}/boot.sdi",
+                        })
+                    if strelec10.exists():
+                        entries.append({
+                            "kind": "winpe",
+                            "slug": f"{sub.name}_pe10",
+                            "title": f"WinPE 10 Sergei Strelec (x64)",
+                            "rel_path": f"os/windows/{sub.name}",
+                            "wim_path": f"os/windows/{sub.name}/SSTR/strelec10x64.wim",
+                            "bootmgr": f"os/windows/{sub.name}/bootmgr",
+                            "bootx64": f"os/windows/{sub.name}/bootx64.efi",
+                            "bcd": f"os/windows/{sub.name}/BCD",
+                            "sdi": f"os/windows/{sub.name}/boot.sdi",
+                        })
+                    continue
+
+                # Standard Windows setup with boot.wim
                 wim = sub / "sources" / "boot.wim"
                 bcd = sub / "boot" / "bcd"
                 if wim.exists() and bcd.exists():
-                    source_file = sub / ".source"
-                    raw_title = source_file.read_text(encoding="utf-8").strip() if source_file.exists() else sub.name
-                    title = Path(raw_title).stem
+                    action_prefix = "Install" if not ("pe" in title.lower() or "winpe" in title.lower()) else "Boot"
                     entries.append({
                         "kind": "windows",
                         "slug": sub.name,
-                        "title": f"Install {_menu_safe(title)}",
-                        "rel_path": f"os/windows/{sub.name}"
+                        "title": f"{action_prefix} {_menu_safe(title)}",
+                        "rel_path": f"os/windows/{sub.name}",
+                        "wim_path": f"os/windows/{sub.name}/sources/boot.wim",
+                        "bootmgr": f"os/windows/{sub.name}/bootmgr",
+                        "bootx64": f"os/windows/{sub.name}/bootx64.efi",
+                        "bcd": f"os/windows/{sub.name}/boot/bcd",
+                        "sdi": f"os/windows/{sub.name}/boot/boot.sdi",
                     })
 
         # Backward compatibility for legacy single-image /os/windows/
@@ -816,7 +926,12 @@ def _available_boot_entries() -> List[dict]:
                 "kind": "windows",
                 "slug": "windows",
                 "title": f"Install {_menu_safe(title)}",
-                "rel_path": "os/windows"
+                "rel_path": "os/windows",
+                "wim_path": "os/windows/sources/boot.wim",
+                "bootmgr": "os/windows/bootmgr",
+                "bootx64": "os/windows/bootx64.efi",
+                "bcd": "os/windows/boot/bcd",
+                "sdi": "os/windows/boot/boot.sdi",
             })
 
     # 2. Linux distributions
@@ -826,6 +941,21 @@ def _available_boot_entries() -> List[dict]:
         entries.append({"kind": "sysrescue", "title": "SystemRescue", "rel_path": "os/sysrescue"})
     if (os_dir / "clonezilla" / "vmlinuz").exists() and (os_dir / "clonezilla" / "filesystem.squashfs").exists():
         entries.append({"kind": "clonezilla", "title": "Clonezilla Live", "rel_path": "os/clonezilla"})
+
+    # 3. Direct ISO images in /srv/www/pxe/images/*.iso
+    images_dir = WEB_ROOT / "images"
+    if images_dir.exists():
+        for iso_file in sorted(images_dir.glob("*.iso")):
+            slug = _slugify(iso_file.stem)
+            if slug not in extracted_slugs and iso_file.stem not in extracted_slugs:
+                encoded_name = urllib.parse.quote(iso_file.name)
+                entries.append({
+                    "kind": "iso",
+                    "slug": f"iso_{slug}",
+                    "title": f"Boot {_menu_safe(iso_file.stem)} (Direct ISO)",
+                    "rel_path": f"images/{encoded_name}",
+                    "file_name": iso_file.name,
+                })
     return entries
 
 
@@ -867,9 +997,16 @@ def _build_pxelinux_menu(entries: List[dict]) -> str:
         lines.append(f"    MENU LABEL ^{i}. {e['title']}")
         k = e["kind"]
         rp = e.get("rel_path", "os/windows")
-        if k == "windows":
+        if k in ("windows", "winpe"):
+            bootmgr = e.get("bootmgr", f"{rp}/bootmgr")
+            bcd = e.get("bcd", f"{rp}/boot/bcd")
+            sdi = e.get("sdi", f"{rp}/boot/boot.sdi")
+            wim_path = e.get("wim_path", f"{rp}/sources/boot.wim")
             lines.append("    KERNEL linux.c32")
-            lines.append(f"    APPEND {h}/tools/wimboot initrdfile={h}/{rp}/bootmgr,{h}/{rp}/boot/bcd,{h}/{rp}/boot/boot.sdi,{h}/{rp}/sources/boot.wim")
+            lines.append(f"    APPEND {h}/tools/wimboot initrdfile={h}/{bootmgr},{h}/{bcd},{h}/{sdi},{h}/{wim_path}")
+        elif k == "iso":
+            lines.append("    KERNEL memdisk")
+            lines.append(f"    APPEND iso raw initrd={h}/{rp}")
         elif k == "debian":
             lines.append(f"    KERNEL {h}/{rp}/linux")
             lines.append(f"    APPEND initrd={h}/{rp}/initrd.gz vga=788 --- quiet")
@@ -937,11 +1074,21 @@ def _build_ipxe_menu(entries: List[dict]) -> str:
         rp = e.get("rel_path", "os/windows")
         lines.append(f":{slug}")
         lines.append(f"echo Загрузка {e['title']}...")
-        if k == "windows":
+        if k in ("windows", "winpe"):
+            bootx64 = e.get("bootx64", f"{rp}/bootx64.efi")
+            wim_path = e.get("wim_path", f"{rp}/sources/boot.wim")
+            bcd = e.get("bcd")
+            sdi = e.get("sdi")
             lines.append(f"kernel {h}/tools/wimboot")
-            lines.append(f"initrd --name bootx64.efi {h}/{rp}/bootx64.efi")
-            lines.append(f"initrd --name boot.wim {h}/{rp}/sources/boot.wim")
+            lines.append(f"initrd --name bootx64.efi {h}/{bootx64}")
+            if bcd:
+                lines.append(f"initrd --name bcd {h}/{bcd}")
+            if sdi:
+                lines.append(f"initrd --name boot.sdi {h}/{sdi}")
+            lines.append(f"initrd --name boot.wim {h}/{wim_path}")
             lines.append("boot || goto error")
+        elif k == "iso":
+            lines.append(f"sanboot --no-describe {h}/{rp} || goto error")
         elif k == "debian":
             lines.append(f"kernel {h}/{rp}/linux vga=788 --- quiet")
             lines.append(f"initrd {h}/{rp}/initrd.gz")
@@ -1021,7 +1168,7 @@ def _build_grub_menu(entries: List[dict]) -> str:
     for e in entries:
         k = e["kind"]
         cls = "os"
-        if k == "windows":
+        if k in ("windows", "winpe"):
             cls = "windows"
         elif k == "debian":
             cls = "debian"
@@ -1031,7 +1178,7 @@ def _build_grub_menu(entries: List[dict]) -> str:
             cls = "clonezilla"
         rp = e.get("rel_path", "os/windows")
         out.append(f'menuentry "{e["title"]}" --class {cls} --class os {{')
-        if k == "windows":
+        if k in ("windows", "winpe", "iso"):
             out.append(f'    echo "Запуск сетевого загрузчика iPXE для {e["title"]}..."')
             out.append(f"    chainloader {s}/tools/ipxe.efi")
         elif k == "debian":

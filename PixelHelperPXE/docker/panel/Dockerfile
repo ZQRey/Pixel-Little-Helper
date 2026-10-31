@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rsync \
     procps \
     docker.io \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/pxe-panel

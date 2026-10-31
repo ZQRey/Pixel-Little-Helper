@@ -6,3 +6,4 @@ if idx != -1:
     start = max(0, idx - 200)
     end = min(len(b), idx + 300)
     print(b[start:end].decode('latin1', errors='ignore'))
+

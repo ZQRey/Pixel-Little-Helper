@@ -1,21 +1,21 @@
 # Pixel Little Helper GRUB Theme
-# High-Resolution Branded UEFI Bootloader
+# High-Resolution Responsive UEFI Bootloader
 
 title-text: ""
 desktop-image: "background.png"
-desktop-color: "#0b1523"
+desktop-color: "#070d19"
 terminal-font: "dejavu_14"
 
 + boot_menu {
-    left = 370
-    top = 245
-    width = 1180
-    height = 580
+    left = 18%
+    top = 26%
+    width = 64%
+    height = 54%
     item_font = "dejavu_14"
     selected_item_font = "dejavu_bold_14"
     item_color = "#9fb5ce"
     selected_item_color = "#ffffff"
-    item_height = 40
+    item_height = 42
     item_padding = 10
     item_spacing = 6
     icon_width = 24
@@ -27,9 +27,9 @@ terminal-font: "dejavu_14"
 
 + progress_bar {
     id = "__timeout__"
-    left = 370
-    top = 845
-    width = 1180
+    left = 18%
+    top = 80%
+    width = 64%
     height = 14
     font = "dejavu_11"
     text_color = "#82caef"

@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import json
 import os
 import re
@@ -157,48 +158,73 @@ def get_system_stats() -> dict:
 
 
 def parse_pxe_clients() -> list[dict]:
+    # 1. Read kernel ARP table for real MAC addresses
+    arp_map: Dict[str, str] = {}
+    try:
+        with open("/proc/net/arp", "r", encoding="utf-8", errors="ignore") as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 4 and parts[3] != "00:00:00:00:00:00":
+                    arp_map[parts[0]] = parts[3]
+    except Exception:
+        pass
+
     clients_map: Dict[str, dict] = {}
 
-    # Get dnsmasq logs either from docker or journalctl
+    # 2. Get recent dnsmasq logs (last 200 lines)
     lines = []
     if DOCKER_MODE:
         try:
-            res = subprocess.run(["docker", "logs", "--tail", "400", "pxe-dnsmasq"], capture_output=True, text=True)
+            res = subprocess.run(["docker", "logs", "--tail", "200", "pxe-dnsmasq"], capture_output=True, text=True)
             lines = res.stdout.splitlines() + res.stderr.splitlines()
         except Exception:
             pass
 
     if not lines:
         try:
-            res = subprocess.run(["journalctl", "-u", "dnsmasq", "-n", "400", "--no-pager"], capture_output=True, text=True)
+            res = subprocess.run(["journalctl", "-u", "dnsmasq", "-n", "200", "--no-pager"], capture_output=True, text=True)
             lines = res.stdout.splitlines()
         except Exception:
             pass
 
+    today_dnsmasq = datetime.now().strftime("%b %e").strip()  # e.g. "Oct 31"
+    today_dnsmasq_alt = datetime.utcnow().strftime("%b %e").strip()
+    today_nginx = datetime.utcnow().strftime("%d/%b/%Y")      # e.g. "31/Oct/2026"
+    today_nginx_alt = datetime.now().strftime("%d/%b/%Y")
+
     for line in lines:
         ts_match = re.match(r"^([A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2})", line)
         log_time = ts_match.group(1) if ts_match else ""
+        if log_time and not any(log_time.startswith(d) for d in (today_dnsmasq, today_dnsmasq_alt)):
+            continue
 
         # TFTP file transfer log: e.g. "sent /srv/tftp/shimx64.efi to 172.16.16.50"
         tftp_match = re.search(r"dnsmasq-tftp.*:\s+sent\s+(/\S+)\s+to\s+([0-9.]+)", line)
         if tftp_match:
             file_path = tftp_match.group(1)
             ip = tftp_match.group(2)
+            if ip in ("127.0.0.1", PXE_SERVER_IP) or ip.startswith("127."):
+                continue
+
             file_name = os.path.basename(file_path)
-            
             arch = "Unknown"
-            if "shim" in file_name or "grub" in file_name:
+            if "shim" in file_name or "bootnet" in file_name or "grub" in file_name:
                 arch = "UEFI x64 (Secure Boot)"
-            elif "lpxelinux" in file_name or ".c32" in file_name:
+            elif "pxelinux" in file_name or ".c32" in file_name:
                 arch = "Legacy BIOS (x86)"
             elif "wimboot" in file_name:
                 arch = "WinPE Network Boot"
 
+            mac = arp_map.get(ip, "-")
+            host_label = f"Host-{ip.split('.')[-1]}"
+            if mac != "-":
+                host_label = f"Device ({mac[-8:]})"
+
             if ip not in clients_map:
                 clients_map[ip] = {
                     "ip": ip,
-                    "hostname": "PXE-Client",
-                    "mac": "-",
+                    "hostname": host_label,
+                    "mac": mac,
                     "arch": arch,
                     "file": file_name,
                     "protocol": "TFTP",
@@ -211,51 +237,33 @@ def parse_pxe_clients() -> list[dict]:
                 clients_map[ip]["arch"] = arch
                 clients_map[ip]["last_seen"] = log_time
 
-        # DHCP Proxy Option 93 & vendor class inspection
-        xid_match = re.search(r"dnsmasq-dhcp.*:\s+(\d+)\s+(.+)", line)
-        if xid_match:
-            xid = xid_match.group(1)
-            content = xid_match.group(2)
-
-            if "vendor class:" in content:
-                vclass = content.split("vendor class:", 1)[1].strip()
-                if "PXEClient" in vclass:
-                    arch = "UEFI x64" if ("00007" in vclass or "00009" in vclass) else "Legacy BIOS"
-                    key = f"PXE-{xid[-6:]}"
-                    if key not in clients_map:
-                        clients_map[key] = {
-                            "ip": "Assigning...",
-                            "hostname": f"Client-{xid[-4:]}",
-                            "mac": "-",
-                            "arch": arch,
-                            "file": "shimx64.efi" if "UEFI" in arch else "lpxelinux.0",
-                            "protocol": "DHCP Proxy",
-                            "status": "Requesting Bootloader",
-                            "last_seen": log_time
-                        }
-            elif "client provides name:" in content:
-                cname = content.split("client provides name:", 1)[1].strip()
-                for client in clients_map.values():
-                    if client["hostname"].startswith("Client-") and xid.endswith(client["hostname"].split("-")[1]):
-                        client["hostname"] = cname
-
-    # Correlate Nginx access log
+    # 3. Correlate recent Nginx access log (last 60 lines)
     for log_path in ["/var/log/nginx/pxe_access.log", "/var/log/nginx/access.log"]:
         p = Path(log_path)
         if p.exists():
             try:
                 with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f.readlines()[-100:]:
+                    for line in f.readlines()[-60:]:
                         m = re.match(r"^([0-9.]+)\s+-\s+-\s+\[([^\]]+)\]\s+\"GET\s+(\S+)\s+HTTP/[0-9.]+\"\s+(\d+)", line)
                         if m:
                             ip = m.group(1)
+                            if ip in ("127.0.0.1", PXE_SERVER_IP) or ip.startswith("127."):
+                                continue
+
                             req_time = m.group(2).split()[0]
+                            if not any(req_time.startswith(d) for d in (today_nginx, today_nginx_alt)):
+                                continue
                             url_path = m.group(3)
                             status_code = m.group(4)
                             file_name = os.path.basename(url_path)
 
-                            if url_path.endswith((".cfg", ".txt", ".html")):
+                            if url_path.endswith((".cfg", ".txt", ".html", ".css", ".js", ".ico")):
                                 continue
+
+                            mac = arp_map.get(ip, "-")
+                            host_label = f"Host-{ip.split('.')[-1]}"
+                            if mac != "-":
+                                host_label = f"Device ({mac[-8:]})"
 
                             if ip in clients_map:
                                 clients_map[ip]["file"] = file_name
@@ -265,8 +273,8 @@ def parse_pxe_clients() -> list[dict]:
                             else:
                                 clients_map[ip] = {
                                     "ip": ip,
-                                    "hostname": "HTTP-Boot-Client",
-                                    "mac": "-",
+                                    "hostname": host_label,
+                                    "mac": mac,
                                     "arch": "UEFI / BIOS",
                                     "file": file_name,
                                     "protocol": "HTTP",
@@ -277,7 +285,29 @@ def parse_pxe_clients() -> list[dict]:
             except Exception:
                 pass
 
-    return list(clients_map.values())
+    if not clients_map:
+        return []
+
+    # 4. Active Liveness Check (Fast parallel ping):
+    # If the user turns off the VM, ping fails and the machine is immediately dropped from the active list.
+    def check_alive(client):
+        target_ip = client["ip"]
+        try:
+            res = subprocess.run(["ping", "-c", "1", "-W", "1", target_ip], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return client, (res.returncode == 0)
+        except Exception:
+            return client, False
+
+    active_clients = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(check_alive, clients_map.values()))
+
+    for client, is_alive in results:
+        if is_alive:
+            client["status"] = "Online (Active)" if client["status"] == "Booting" else client["status"]
+            active_clients.append(client)
+
+    return active_clients
 
 
 # -----------------------------------------------------------------------------

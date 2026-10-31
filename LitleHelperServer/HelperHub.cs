@@ -226,7 +226,7 @@ public partial class HelperHub(HelperDb db, GlpiService glpi, CommandService com
         var branches = await db.Branches.AsNoTracking().Where(b => b.IsActive).OrderBy(b => b.Name).ToListAsync();
         var detected = branches.FirstOrDefault(b => b.Id == computer.BranchId)
             ?? Branches.FindByComputerName(branches, computer.MachineName, computer.IpAddress);
-        return new { branches, detectedBranchId = detected?.Id, room = computer.Room };
+        return new { branches, detectedBranchId = detected?.Id, room = computer.Room, isPortable = computer.IsPortable };
     }
     public async Task<List<KnowledgeArticle>> GetKnowledgeArticles(string? category = null, string? search = null)
     {

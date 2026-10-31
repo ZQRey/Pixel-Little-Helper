@@ -573,6 +573,16 @@ public sealed partial class PetWindow : Window
             try
             {
                 hub = new HubConnectionService(settings);
+                hub.LockdownChanged += (enabled, message, screen, session, bitlocker) =>
+                {
+                    var response = new AntiTheftTelemetryResponse(enabled, message, bitlocker, true, screen, session);
+                    if (enabled) AntiTheftLockdownState.Save(response);
+                    else AntiTheftLockdownState.Clear();
+                };
+                hub.OnlineChanged += online =>
+                {
+                    if (online && !string.IsNullOrWhiteSpace(settings.ServerUrl)) _ = AntiTheftLockdownState.RefreshFromServerAsync(settings.ServerUrl, lifetime.Token);
+                };
                 antivirus = new AntivirusService(settings, hub);
                 hub.SuperAdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { superAvailable = available; RefreshMenuIfOpen(); }));
                 hub.AdminAvailable += available => Dispatcher.BeginInvoke(new Action(() => { adminAvailable = available; RefreshMenuIfOpen(); }));
@@ -1354,13 +1364,14 @@ public sealed partial class PetWindow : Window
         actionMenuOpen = true;
         Wake();
 
-        var visibleActions = actions.Where(a => a.Type != "exit").ToList();
-        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "user_tickets")) visibleActions.Add(new("user_tickets", "📋 Заявки", "user_tickets"));
+        var visibleActions = actions.Where(a => a.Type != "exit" && (a.Type != "mail" || HasConfiguredMailbox)).ToList();
+        if (!diagnostics && (SystemButtonVisibility.Enabled(systemButtons, "user_tickets") || adminAvailable || superAvailable)) visibleActions.Add(new("tickets", "📋 Заявки", "tickets"));
         if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "messenger")) visibleActions.Add(new("messenger", Loc.T("TrayMessenger"), "messenger"));
-        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "mail")) visibleActions.Add(new("mail", Loc.T("TrayMail"), "mail"));
+        if (!diagnostics && HasConfiguredMailbox && SystemButtonVisibility.Enabled(systemButtons, "mail")) visibleActions.Add(new("mail", Loc.T("TrayMail"), "mail"));
         if (!diagnostics && hub?.IsOnline == true && SystemButtonVisibility.Enabled(systemButtons, "emergency")) visibleActions.Add(new("emergency", Loc.T("ActionEmergency"), "emergency"));
         if (!diagnostics && pendingSurveys.Length > 0) visibleActions.Insert(0,new("pending-surveys","Ожидают оценки: " + pendingSurveys.Length,"surveys"));
-        if (!diagnostics && (adminAvailable || superAvailable)) visibleActions.Add(new("staff_tickets", "💼 Заявки (Админ)", "staff_tickets"));
+
+        if (!diagnostics && hub?.IsOnline == true && superAvailable) visibleActions.Add(new("super_admin", "🛠️ Кнопки супер админов", "super_admin"));
         int count = visibleActions.Count;
 
         const double winW = 500;
@@ -1425,7 +1436,14 @@ public sealed partial class PetWindow : Window
         previousLeft = NativeMethods.GetAsyncKeyState(1) < 0;
         outsideClick.Start();
     }
-    
+
+    internal async Task SetPortableModeAsync(bool isPortable)
+    {
+        if (hub?.IsOnline != true) return;
+        try { await hub.SetPortableModeAsync(isPortable); }
+        catch (Exception ex) { Settings.Log(ex); }
+    }
+
         internal void OpenUserTicketsWindow(int initialTab = 0)
     {
         if (hub == null) return;
@@ -1451,6 +1469,12 @@ public sealed partial class PetWindow : Window
         }
     }
 
+    private void OpenTicketsWindow()
+    {
+        if (adminAvailable || superAvailable) OpenStaffTicketsWindow();
+        else OpenUserTicketsWindow();
+    }
+
     private void OpenStaffTicketsWindow()
     {
         if (hub?.IsOnline != true && !adminAvailable && !superAvailable) return;
@@ -1464,7 +1488,7 @@ public sealed partial class PetWindow : Window
 
         try
         {
-            staffTicketsWindow = new StaffTicketsWindow(settings, this) { Owner = this, Topmost = true };
+            staffTicketsWindow = new StaffTicketsWindow(settings, this, hub) { Owner = this, Topmost = true };
             staffTicketsWindow.Closed += (_, _) => staffTicketsWindow = null;
             staffTicketsWindow.Show();
             staffTicketsWindow.Activate();
@@ -1839,7 +1863,9 @@ public sealed partial class PetWindow : Window
                     OpenCompanionChat(); break;
                 case "forbidden" or "disabled":
                     ShowForbiddenNotice(); return Task.CompletedTask;
-                case "staff_tickets": OpenStaffTicketsWindow(); return Task.CompletedTask;
+                case "tickets": OpenTicketsWindow(); return Task.CompletedTask;
+                case "staff_tickets": OpenTicketsWindow(); return Task.CompletedTask;
+                case "super_admin": OpenSuperAdminWindow(); return Task.CompletedTask;
                 case "user_tickets" or "it_ticket": OpenUserTicketsWindow(); return Task.CompletedTask;
                 case "messenger": return OpenMessengerAsync();
                 case "mail": OpenMailWindow(); break;

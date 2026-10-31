@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Runtime.InteropServices;
@@ -19,6 +20,7 @@ public static class AntiTheftService
 
     public static void StartDesktopWorker(Settings settings)
     {
+        AntiTheftLockdownState.RestoreForCurrentSession();
         lock (syncGate)
         {
             if (desktopWorkerCts != null) return;
@@ -63,6 +65,7 @@ public static class AntiTheftService
         catch (OperationCanceledException) { return; }
 
         int intervalSeconds = 60;
+        bool stateConfirmed = false;
 
         while (!token.IsCancellationRequested)
         {
@@ -71,6 +74,12 @@ public static class AntiTheftService
                 var response = await SendTelemetryAsync(serverUrl, token);
                 if (response != null)
                 {
+                    stateConfirmed = true;
+                    if (response.IsLockedDown)
+                        AntiTheftLockdownState.Save(response);
+                    else
+                        AntiTheftLockdownState.Clear();
+
                     if (response.TriggerBitLockerRecovery)
                     {
                         TriggerBitLockerRecovery();
@@ -95,6 +104,8 @@ public static class AntiTheftService
                     else
                     {
                         intervalSeconds = 60;
+                        if (!response.IsLockedDown)
+                            AntiTheftLockdownState.Clear();
                         if (isDesktopApp)
                         {
                             Application.Current?.Dispatcher?.InvokeAsync(() =>
@@ -112,6 +123,8 @@ public static class AntiTheftService
             catch (Exception ex)
             {
                 Settings.Log("AntiTheft heartbeat failed: " + ex.Message);
+                if (!stateConfirmed && isDesktopApp)
+                    AntiTheftLockdownState.RestoreForCurrentSession();
             }
 
             try
@@ -163,6 +176,51 @@ public static class AntiTheftService
         if (!res.IsSuccessStatusCode) return null;
 
         return await res.Content.ReadFromJsonAsync<AntiTheftTelemetryResponse>(cancellationToken: token);
+    }
+
+    public static AntiTheftTelemetryResponse? ReadLockdownState()
+    {
+        try
+        {
+            string path = Path.Combine(Settings.Folder, "anti-theft-lockdown.json");
+            if (!File.Exists(path)) return null;
+            return System.Text.Json.JsonSerializer.Deserialize<AntiTheftTelemetryResponse>(File.ReadAllText(path));
+        }
+        catch { return null; }
+    }
+
+    public static async Task<AntiTheftTelemetryResponse?> ReadLockdownStateAsync(string serverUrl, CancellationToken token = default)
+    {
+        try
+        {
+            using var handler = new HttpClientHandler { AllowAutoRedirect = false, ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+            using var client = new HttpClient(handler) { BaseAddress = new Uri(serverUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(15) };
+            using var response = await client.PostAsJsonAsync("api/telemetry/anti-theft", new AntiTheftTelemetryRequest(
+                Environment.MachineName, SystemInspector.GetHardwareUuid(), SystemInspector.DetectIsPortable(), 0, false, "", ""), token);
+            if (!response.IsSuccessStatusCode) return null;
+            return await response.Content.ReadFromJsonAsync<AntiTheftTelemetryResponse>(cancellationToken: token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception ex) { Settings.Log("Unable to refresh anti-theft state: " + ex.Message); return null; }
+    }
+
+    public static void SaveLockdownState(AntiTheftTelemetryResponse response)
+    {
+        try
+        {
+            Directory.CreateDirectory(Settings.Folder);
+            string path = Path.Combine(Settings.Folder, "anti-theft-lockdown.json");
+            string temp = path + ".tmp";
+            File.WriteAllText(temp, System.Text.Json.JsonSerializer.Serialize(response));
+            File.Move(temp, path, true);
+        }
+        catch (Exception ex) { Settings.Log("Failed to save anti-theft lockdown state: " + ex.Message); }
+    }
+
+    public static void ClearLockdownState()
+    {
+        try { File.Delete(Path.Combine(Settings.Folder, "anti-theft-lockdown.json")); }
+        catch (Exception ex) { Settings.Log("Failed to clear anti-theft lockdown state: " + ex.Message); }
     }
 
     public static void TriggerBitLockerRecovery()
@@ -291,6 +349,51 @@ public static class AntiTheftService
             return output;
         }
         catch { return ""; }
+    }
+}
+
+internal static class AntiTheftLockdownState
+{
+    private static readonly object Gate = new();
+    private static AntiTheftTelemetryResponse? current;
+
+    internal static void Save(AntiTheftTelemetryResponse response)
+    {
+        lock (Gate)
+        {
+            current = response;
+            AntiTheftService.SaveLockdownState(response);
+            if (response.IsLockedDown && response.LockScreen)
+                Application.Current?.Dispatcher?.BeginInvoke(new Action(() => AntiTheftLockWindow.EnsureShown(response.LockMessage)));
+            else
+                Application.Current?.Dispatcher?.BeginInvoke(new Action(AntiTheftLockWindow.CloseIfOpen));
+        }
+    }
+
+    internal static void Clear()
+    {
+        lock (Gate)
+        {
+            current = null;
+            AntiTheftService.ClearLockdownState();
+            Application.Current?.Dispatcher?.BeginInvoke(new Action(AntiTheftLockWindow.CloseIfOpen));
+        }
+    }
+
+    internal static void RestoreForCurrentSession()
+    {
+        lock (Gate)
+        {
+            current ??= AntiTheftService.ReadLockdownState();
+            if (current is { IsLockedDown: true, LockScreen: true } state)
+                Application.Current?.Dispatcher?.BeginInvoke(new Action(() => AntiTheftLockWindow.EnsureShown(state.LockMessage)));
+        }
+    }
+
+    internal static async Task RefreshFromServerAsync(string serverUrl, CancellationToken token)
+    {
+        var response = await AntiTheftService.ReadLockdownStateAsync(serverUrl, token);
+        if (response != null) Save(response);
     }
 }
 

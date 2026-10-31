@@ -11,13 +11,18 @@ using System.Windows.Media.Imaging;
 namespace PixelHelper;
 
 public sealed record TicketBranch(int Id, string Name, bool IsActive = true, string ComputerPrefixes = "");
-public sealed record TicketContext(List<TicketBranch> Branches, int? DetectedBranchId = null, string Room = "");
+public sealed record TicketContext(List<TicketBranch> Branches, int? DetectedBranchId = null, string Room = "", bool IsPortable = false);
 
 internal static class TicketBranchSelection
 {
     internal static (int? Id, bool Automatic) Select(TicketContext context, string machineName, int? savedId)
     {
         var branches = context.Branches.Where(b => b.IsActive).ToList();
+        if (context.IsPortable)
+        {
+            var portable = branches.FirstOrDefault(b => b.Name.Equals("Переносное устройство", StringComparison.OrdinalIgnoreCase));
+            return portable == null ? (null, false) : (portable.Id, true);
+        }
         if (context.DetectedBranchId is int detected && branches.Any(b => b.Id == detected))
             return (detected, true);
         var match = branches.SelectMany(b => (b.ComputerPrefixes ?? "")

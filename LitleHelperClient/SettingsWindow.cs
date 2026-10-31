@@ -1259,12 +1259,13 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(0, 6, 0, 6),
             Cursor = Cursors.Hand
         };
-        chkPortable.Click += (_, _) =>
+        chkPortable.Click += async (_, _) =>
         {
             bool isPort = chkPortable.IsChecked == true;
             settings.IsPortable = isPort;
             settings.Save();
             if (wgCard != null) wgCard.Visibility = isPort ? Visibility.Visible : Visibility.Collapsed;
+            await petWindow.SetPortableModeAsync(isPort);
             _ = AntiTheftService.SendTelemetryAsync(settings.ServerUrl ?? "https://helper.gp1.loc");
         };
         deviceStack.Children.Add(chkPortable);

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -93,6 +94,60 @@ public class PxeService
 
         using var response = await client.PostAsync("/api/upload", streamContent, token);
         response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
+    }
+
+    public async Task<JsonElement?> InitUploadAsync(string uploadId, string fileName, long totalSize, CancellationToken token = default)
+    {
+        var client = CreateClient();
+        using var response = await client.PostAsJsonAsync("/api/upload/init",
+            new { upload_id = uploadId, filename = fileName, total_size = totalSize }, token);
+        return await ReadJsonOrThrow(response, token);
+    }
+
+    public async Task<JsonElement?> UploadChunkAsync(string uploadId, long offset, Stream body, long? contentLength, CancellationToken token = default)
+    {
+        var client = CreateClient();
+        client.Timeout = TimeSpan.FromMinutes(10);
+
+        using var content = new StreamContent(body);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        if (contentLength is > 0)
+        {
+            content.Headers.ContentLength = contentLength;
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Put,
+            $"/api/upload/chunk/{Uri.EscapeDataString(uploadId)}");
+        request.Headers.Add("X-Upload-Offset", offset.ToString(CultureInfo.InvariantCulture));
+        request.Content = content;
+
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        return await ReadJsonOrThrow(response, token);
+    }
+
+    public async Task<JsonElement?> UploadStatusAsync(string uploadId, CancellationToken token = default)
+    {
+        var client = CreateClient();
+        using var response = await client.GetAsync($"/api/upload/status/{Uri.EscapeDataString(uploadId)}", token);
+        return await ReadJsonOrThrow(response, token);
+    }
+
+    public async Task<JsonElement?> CompleteUploadAsync(string uploadId, CancellationToken token = default)
+    {
+        var client = CreateClient();
+        client.Timeout = TimeSpan.FromHours(1);
+        using var response = await client.PostAsync($"/api/upload/complete/{Uri.EscapeDataString(uploadId)}", null, token);
+        return await ReadJsonOrThrow(response, token);
+    }
+
+    private static async Task<JsonElement?> ReadJsonOrThrow(HttpResponseMessage response, CancellationToken token)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            string body = await response.Content.ReadAsStringAsync(token);
+            throw new InvalidOperationException($"PXE-сервер вернул {(int)response.StatusCode}: {body}");
+        }
         return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
     }
 

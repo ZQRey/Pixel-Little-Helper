@@ -66,6 +66,7 @@ public sealed class SuperAdminWindow : Window
     private RadioButton rbShellPs = null!;
     private RadioButton rbShellCmd = null!;
     private CheckBox chkElevated = null!;
+    private TextBox txtTerminalPcFilter = null!;
     private ComboBox cmbTargetPc = null!;
     private TextBox txtTerminalOutput = null!;
     private TextBox txtCommandLine = null!;
@@ -808,24 +809,35 @@ public sealed class SuperAdminWindow : Window
         row1.Children.Add(shellStack);
 
         var pcSelectStack = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        pcSelectStack.Children.Add(new TextBlock { Text = "Целевой ПК:", FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
 
-        cmbTargetPc = new ComboBox { Width = 260, Height = 32, FontSize = 12.5, VerticalContentAlignment = VerticalAlignment.Center };
-        cmbTargetPc.Items.Add(new ComboBoxItem { Content = "🌐 [Все компьютеры онлайн]", Tag = "ALL" });
-        foreach (var c in computers.OrderByDescending(x => x.IsOnline).ThenBy(x => x.MachineName))
+        txtTerminalPcFilter = new TextBox
         {
-            cmbTargetPc.Items.Add(new ComboBoxItem
-            {
-                Content = $"{(c.IsOnline ? "🟢" : "⚪")} {c.MachineName} {(c.IsOnline ? "(Онлайн)" : "(Офлайн)")}",
-                Tag = c.MachineName
-            });
-        }
-        cmbTargetPc.SelectedIndex = 1; // Default to first PC if available, otherwise ALL
+            Width = 160,
+            Height = 32,
+            FontSize = 12.5,
+            Padding = new Thickness(8, 0, 8, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            ToolTip = "🔍 Поиск компьютера по имени (фильтр списка)"
+        };
+        cmbTargetPc = new ComboBox { Width = 230, Height = 32, FontSize = 12.5, VerticalContentAlignment = VerticalAlignment.Center };
+        PopulateTargetPc("");
+        txtTerminalPcFilter.TextChanged += (_, _) => PopulateTargetPc(txtTerminalPcFilter.Text);
+        pcSelectStack.Children.Add(txtTerminalPcFilter);
         pcSelectStack.Children.Add(cmbTargetPc);
 
-        DockPanel.SetDock(pcSelectStack, Dock.Right);
-        row1.Children.Add(pcSelectStack);
         tcStack.Children.Add(row1);
+
+        var row2 = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+        row2.Children.Add(new TextBlock
+        {
+            Text = "🔍 Поиск целевого компьютера:",
+            FontWeight = FontWeights.Bold,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        DockPanel.SetDock(pcSelectStack, Dock.Right);
+        row2.Children.Add(pcSelectStack);
+        tcStack.Children.Add(row2);
 
         topCard.Child = tcStack;
         Grid.SetRow(topCard, 0);
@@ -895,7 +907,7 @@ public sealed class SuperAdminWindow : Window
             AcceptsReturn = true,
             IsReadOnly = true,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Text = $"PixelHelper SuperAdmin Remote Terminal v1.2.84\nПодключено к: {settings.ServerUrl}\nДля выполнения команды введите текст внизу и нажмите Enter.\n--------------------------------------------------------------\n"
+            Text = $"PixelHelper SuperAdmin Remote Terminal v1.2.90\nПодключено к: {settings.ServerUrl}\nДля выполнения команды введите текст внизу и нажмите Enter.\n--------------------------------------------------------------\n"
         };
         consoleBorder.Child = txtTerminalOutput;
         Grid.SetRow(consoleBorder, 2);
@@ -969,6 +981,45 @@ public sealed class SuperAdminWindow : Window
 
         moduleHost.Content = grid;
         txtCommandLine.Focus();
+    }
+
+    private void PopulateTargetPc(string query)
+    {
+        bool firstBuild = cmbTargetPc.Items.Count == 0;
+        string previous = (cmbTargetPc.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "";
+        string q = (query ?? "").Trim().ToLowerInvariant();
+
+        cmbTargetPc.Items.Clear();
+        cmbTargetPc.Items.Add(new ComboBoxItem { Content = "🌐 [Все компьютеры онлайн]", Tag = "ALL" });
+
+        var matches = computers
+            .Where(c => string.IsNullOrEmpty(q) || c.MachineName.ToLowerInvariant().Contains(q))
+            .OrderByDescending(x => x.IsOnline)
+            .ThenBy(x => x.MachineName);
+
+        foreach (var c in matches)
+        {
+            cmbTargetPc.Items.Add(new ComboBoxItem
+            {
+                Content = $"{(c.IsOnline ? "🟢" : "⚪")} {c.MachineName} {(c.IsOnline ? "(Онлайн)" : "(Офлайн)")}",
+                Tag = c.MachineName
+            });
+        }
+
+        int restore = -1;
+        if (!firstBuild && !string.IsNullOrEmpty(previous))
+        {
+            for (int i = 0; i < cmbTargetPc.Items.Count; i++)
+            {
+                if ((cmbTargetPc.Items[i] as ComboBoxItem)?.Tag?.ToString() == previous)
+                {
+                    restore = i;
+                    break;
+                }
+            }
+        }
+        if (restore < 0) restore = cmbTargetPc.Items.Count > 1 ? 1 : 0;
+        cmbTargetPc.SelectedIndex = restore;
     }
 
     private async Task ExecuteTerminalCommandAsync()

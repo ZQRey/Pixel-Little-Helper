@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -5,6 +6,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.Win32;
 
 namespace PixelHelper;
 
@@ -14,6 +16,7 @@ public sealed class StaffTicketsWindow : Window
 
     private readonly Settings settings;
     private readonly PetWindow? petWindow;
+    private readonly HubConnectionService? hub;
     private readonly HttpClient http;
     private readonly CancellationTokenSource lifetime = new();
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -30,12 +33,25 @@ public sealed class StaffTicketsWindow : Window
     private List<StaffTicketSummary> unassignedTickets = [];
     private List<StaffTicketSummary> closedTickets = [];
 
-    private int activeTab = 0; // 0 = My, 1 = Unassigned, 2 = Closed
+    private int activeTab = 1; // 0 = Create, 1 = My (accepted), 2 = Unassigned, 3 = Closed
+
+    private TextBox? createTitleBox;
+    private ComboBox? createBranchBox;
+    private TextBox? createRoomBox;
+    private TextBox? createDescBox;
+    private TextBlock? createFeedbackText;
+    private Button? createSubmitButton;
+    private StackPanel? createAttachmentsPanel;
+    private readonly List<TicketAttachmentDto> createAttachments = [];
+    private List<TicketBranch> createBranches = [];
+    private string createFeedback = "";
+    private bool createFeedbackIsError;
     
-    public StaffTicketsWindow(Settings settings, PetWindow? petWindow = null)
+    public StaffTicketsWindow(Settings settings, PetWindow? petWindow = null, HubConnectionService? hub = null)
     {
         this.settings = settings;
         this.petWindow = petWindow;
+        this.hub = hub;
 
         Title = "Заявки HelpDesk";
         Width = 920;
@@ -299,6 +315,7 @@ public sealed class StaffTicketsWindow : Window
 
     #region 2. Main Workspace & Navigation
 
+    private Button btnTabCreate = null!;
     private Button btnTabMy = null!;
     private Button btnTabUnassigned = null!;
     private Button btnTabClosed = null!;
@@ -392,10 +409,12 @@ public sealed class StaffTicketsWindow : Window
         var tabsDock = new DockPanel();
 
         var tabButtons = new StackPanel { Orientation = Orientation.Horizontal };
-        btnTabMy = MakeTabButton("💼 Мои заявки (0)", 0);
-        btnTabUnassigned = MakeTabButton("📥 Не принятые заявки (0)", 1);
-        btnTabClosed = MakeTabButton("🏁 Мои закрытые заявки (0)", 2);
+        btnTabCreate = MakeTabButton("📝 Создать заявку", 0);
+        btnTabMy = MakeTabButton("💼 Мои принятые заявки (0)", 1);
+        btnTabUnassigned = MakeTabButton("📥 Не принятые заявки (0)", 2);
+        btnTabClosed = MakeTabButton("🏁 Мои закрытые заявки (0)", 3);
 
+        tabButtons.Children.Add(btnTabCreate);
         tabButtons.Children.Add(btnTabMy);
         tabButtons.Children.Add(btnTabUnassigned);
         tabButtons.Children.Add(btnTabClosed);
@@ -463,16 +482,17 @@ public sealed class StaffTicketsWindow : Window
                 : (Brush)new BrushConverter().ConvertFromString("#CBD5E1")!;
         }
 
-        StyleBtn(btnTabMy, activeTab == 0);
-        StyleBtn(btnTabUnassigned, activeTab == 1);
-        StyleBtn(btnTabClosed, activeTab == 2);
+        StyleBtn(btnTabCreate, activeTab == 0);
+        StyleBtn(btnTabMy, activeTab == 1);
+        StyleBtn(btnTabUnassigned, activeTab == 2);
+        StyleBtn(btnTabClosed, activeTab == 3);
     }
 
     #endregion
 
     #region 3. Data Loading
 
-    private async Task LoadOverviewAsync()
+    private async Task LoadOverviewAsync(bool render = true)
     {
         statusText.Text = "Загрузка данных…";
         try
@@ -498,12 +518,12 @@ public sealed class StaffTicketsWindow : Window
             unassignedTickets = root.GetProperty("unassignedTickets").Deserialize<List<StaffTicketSummary>>(Json) ?? [];
             closedTickets = root.GetProperty("closedTickets").Deserialize<List<StaffTicketSummary>>(Json) ?? [];
 
-            btnTabMy.Content = $"💼 Мои заявки ({myTickets.Count})";
+            btnTabMy.Content = $"💼 Мои принятые заявки ({myTickets.Count})";
             btnTabUnassigned.Content = $"📥 Не принятые заявки ({unassignedTickets.Count})";
             btnTabClosed.Content = $"🏁 Мои закрытые заявки ({closedTickets.Count})";
 
             statusText.Text = $"Обновлено в {DateTime.Now:HH:mm:ss}";
-            RenderActiveModule();
+            if (render) RenderActiveModule();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -518,9 +538,383 @@ public sealed class StaffTicketsWindow : Window
 
     private void RenderActiveModule()
     {
-        if (activeTab == 0) RenderTicketsList("Мои активные заявки в работе", myTickets, canClaim: false, isClosed: false);
-        else if (activeTab == 1) RenderTicketsList("Не принятые заявки (ожидают назначения)", unassignedTickets, canClaim: true, isClosed: false);
+        if (activeTab == 0) RenderCreateTicketModule();
+        else if (activeTab == 1) RenderTicketsList("Мои принятые заявки в работе", myTickets, canClaim: false, isClosed: false);
+        else if (activeTab == 2) RenderTicketsList("Не принятые заявки (ожидают назначения)", unassignedTickets, canClaim: true, isClosed: false);
         else RenderClosedTicketsModule();
+    }
+
+    private void RenderCreateTicketModule()
+    {
+        var grid = new Grid { Margin = new Thickness(18) };
+        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var card = new Border
+        {
+            Background = Brushes.White,
+            BorderBrush = (Brush)new BrushConverter().ConvertFromString("#E2E8F0")!,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(28),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            MaxWidth = 760,
+            Margin = new Thickness(0, 0, 0, 18)
+        };
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = "📝 Создать заявку",
+            FontSize = 22,
+            FontWeight = FontWeights.Bold,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#0F172A")!
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Опишите проблему — заявка поступит в общую очередь HelpDesk, где её сможет принять любой свободный специалист.",
+            FontSize = 13,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#475569")!,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 18)
+        });
+
+        stack.Children.Add(new TextBlock { Text = "Тема обращения *", FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+        createTitleBox = new TextBox
+        {
+            Height = 36,
+            FontSize = 13.5,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(10, 0, 10, 0),
+            Margin = new Thickness(0, 0, 0, 14),
+            ToolTip = "Кратко: например, Не печатает принтер или Не открывается 1С"
+        };
+        stack.Children.Add(createTitleBox);
+
+        var rowGrid = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+        rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
+        rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
+
+        var branchStack = new StackPanel();
+        branchStack.Children.Add(new TextBlock { Text = "Филиал / Подразделение *", FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+        createBranchBox = new ComboBox
+        {
+            Height = 36,
+            FontSize = 13,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            DisplayMemberPath = "Name",
+            SelectedValuePath = "Id"
+        };
+        branchStack.Children.Add(createBranchBox);
+        Grid.SetColumn(branchStack, 0);
+        rowGrid.Children.Add(branchStack);
+
+        var roomStack = new StackPanel();
+        roomStack.Children.Add(new TextBlock { Text = "Кабинет *", FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+        createRoomBox = new TextBox
+        {
+            Height = 36,
+            FontSize = 13,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(8, 0, 8, 0),
+            Text = settings.TicketRoom ?? ""
+        };
+        roomStack.Children.Add(createRoomBox);
+        Grid.SetColumn(roomStack, 2);
+        rowGrid.Children.Add(roomStack);
+        stack.Children.Add(rowGrid);
+
+        stack.Children.Add(new TextBlock { Text = "Подробное описание проблемы *", FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+        createDescBox = new TextBox
+        {
+            Height = 130,
+            FontSize = 13,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Padding = new Thickness(10, 8, 10, 8),
+            Margin = new Thickness(0, 0, 0, 14)
+        };
+        stack.Children.Add(createDescBox);
+
+        var attachRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var attachButton = new Button
+        {
+            Content = "📎 Прикрепить файл",
+            Padding = new Thickness(10, 5, 10, 5),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Background = (Brush)new BrushConverter().ConvertFromString("#F1F5F9")!,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#334155")!,
+            BorderBrush = (Brush)new BrushConverter().ConvertFromString("#CBD5E1")!,
+            BorderThickness = new Thickness(1)
+        };
+        attachButton.Click += (_, _) => BrowseCreateAttachments();
+        DockPanel.SetDock(attachButton, Dock.Left);
+        attachRow.Children.Add(attachButton);
+        attachRow.Children.Add(new TextBlock
+        {
+            Text = "до 5 файлов (до 20 МБ)",
+            FontSize = 11,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#64748B")!,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0)
+        });
+        stack.Children.Add(attachRow);
+
+        createAttachmentsPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+        stack.Children.Add(createAttachmentsPanel);
+        RenderCreateAttachments();
+
+        createFeedbackText = new TextBlock
+        {
+            Text = createFeedback,
+            FontSize = 12.5,
+            Foreground = (Brush)new BrushConverter().ConvertFromString(createFeedbackIsError ? "#DC2626" : "#16A34A")!,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+            Visibility = string.IsNullOrWhiteSpace(createFeedback) ? Visibility.Collapsed : Visibility.Visible
+        };
+        stack.Children.Add(createFeedbackText);
+
+        createSubmitButton = new Button
+        {
+            Content = "🚀 Создать заявку",
+            Height = 44,
+            Padding = new Thickness(22, 0, 22, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            Background = (Brush)new BrushConverter().ConvertFromString("#2563EB")!,
+            Foreground = Brushes.White,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            IsEnabled = hub?.IsOnline == true
+        };
+        createSubmitButton.Click += async (_, _) => await SubmitCreateTicketAsync();
+        stack.Children.Add(createSubmitButton);
+
+        if (hub?.IsOnline != true)
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Сервер помощника недоступен — создание заявки временно невозможно.",
+                FontSize = 12,
+                Foreground = (Brush)new BrushConverter().ConvertFromString("#B91C1C")!,
+                Margin = new Thickness(0, 10, 0, 0)
+            });
+        }
+
+        card.Child = stack;
+        scroll.Content = card;
+        grid.Children.Add(scroll);
+        moduleHost.Content = grid;
+
+        if (hub?.IsOnline == true) _ = LoadCreateTicketContextAsync();
+    }
+
+    private void BrowseCreateAttachments()
+    {
+        if (createAttachments.Count >= 5)
+        {
+            createFeedback = "Достигнут максимум в 5 прикреплённых файлов.";
+            createFeedbackIsError = true;
+            UpdateCreateFeedback();
+            return;
+        }
+        var dialog = new OpenFileDialog
+        {
+            Title = "Выберите файл для прикрепления к заявке",
+            Multiselect = true,
+            Filter = "Все файлы (*.*)|*.*|Изображения (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp|Документы (*.pdf;*.docx;*.xlsx;*.txt;*.log)|*.pdf;*.docx;*.xlsx;*.txt;*.log"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        foreach (string file in dialog.FileNames)
+        {
+            if (createAttachments.Count >= 5) break;
+            try
+            {
+                var info = new FileInfo(file);
+                if (!info.Exists) continue;
+                if (info.Length > 20 * 1024 * 1024)
+                {
+                    createFeedback = $"Файл {info.Name} превышает лимит 20 МБ.";
+                    createFeedbackIsError = true;
+                    UpdateCreateFeedback();
+                    continue;
+                }
+                createAttachments.Add(new TicketAttachmentDto(info.Name, File.ReadAllBytes(file)));
+            }
+            catch (Exception ex)
+            {
+                createFeedback = "Не удалось прочитать файл: " + ex.Message;
+                createFeedbackIsError = true;
+                UpdateCreateFeedback();
+            }
+        }
+        RenderCreateAttachments();
+    }
+
+    private void RenderCreateAttachments()
+    {
+        if (createAttachmentsPanel == null) return;
+        createAttachmentsPanel.Children.Clear();
+        foreach (var attachment in createAttachments.ToList())
+        {
+            var border = new Border
+            {
+                Background = (Brush)new BrushConverter().ConvertFromString("#F8FAFC")!,
+                BorderBrush = (Brush)new BrushConverter().ConvertFromString("#E2E8F0")!,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(0, 0, 0, 5)
+            };
+            var dock = new DockPanel();
+            var removeButton = new Button
+            {
+                Content = "✕",
+                Foreground = (Brush)new BrushConverter().ConvertFromString("#EF4444")!,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                FontWeight = FontWeights.Bold,
+                Padding = new Thickness(6, 1, 6, 1)
+            };
+            removeButton.Click += (_, _) =>
+            {
+                createAttachments.Remove(attachment);
+                RenderCreateAttachments();
+            };
+            DockPanel.SetDock(removeButton, Dock.Right);
+            dock.Children.Add(removeButton);
+            dock.Children.Add(new TextBlock
+            {
+                Text = $"📄 {attachment.FileName} ({attachment.Content.Length / 1024} КБ)",
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            border.Child = dock;
+            createAttachmentsPanel.Children.Add(border);
+        }
+    }
+
+    private async Task LoadCreateTicketContextAsync()
+    {
+        try
+        {
+            var ctx = await hub!.GetTicketContextAsync(lifetime.Token);
+            if (ctx?.Branches == null || createBranchBox == null) return;
+            createBranches = ctx.Branches.Where(b => b.IsActive).ToList();
+            createBranchBox.ItemsSource = createBranches;
+            var selection = TicketBranchSelection.Select(ctx, Environment.MachineName, settings.TicketBranchId);
+            createBranchBox.SelectedValue = selection.Id;
+            if (!string.IsNullOrWhiteSpace(ctx.Room) && createRoomBox != null)
+                createRoomBox.Text = ctx.Room;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+            if (createFeedbackText != null)
+            {
+                createFeedback = "Не удалось загрузить филиалы: " + ex.Message;
+                createFeedbackIsError = true;
+                createFeedbackText.Text = createFeedback;
+                createFeedbackText.Foreground = (Brush)new BrushConverter().ConvertFromString("#DC2626")!;
+                createFeedbackText.Visibility = Visibility.Visible;
+            }
+        }
+    }
+
+    private async Task SubmitCreateTicketAsync()
+    {
+        if (hub is not { IsOnline: true })
+        {
+            MessageBox.Show(this, "Сервер помощника недоступен.", "Заявки", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        string title = createTitleBox?.Text.Trim() ?? "";
+        string desc = createDescBox?.Text.Trim() ?? "";
+        string room = createRoomBox?.Text.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            createFeedback = "Укажите тему обращения.";
+            createFeedbackIsError = true;
+            UpdateCreateFeedback();
+            createTitleBox?.Focus();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(desc))
+        {
+            createFeedback = "Подробно опишите проблему.";
+            createFeedbackIsError = true;
+            UpdateCreateFeedback();
+            createDescBox?.Focus();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(room))
+        {
+            createFeedback = "Укажите кабинет.";
+            createFeedbackIsError = true;
+            UpdateCreateFeedback();
+            createRoomBox?.Focus();
+            return;
+        }
+
+        int? branchId = createBranchBox?.SelectedValue is int id ? id : null;
+        if (createBranchBox?.Items.Count > 0 && branchId == null)
+        {
+            createFeedback = "Выберите филиал.";
+            createFeedbackIsError = true;
+            UpdateCreateFeedback();
+            return;
+        }
+
+        if (createSubmitButton != null)
+        {
+            createSubmitButton.IsEnabled = false;
+            createSubmitButton.Content = "Отправка заявки…";
+        }
+        try
+        {
+            int ticketId = await hub.CreateTicketAtWithFilesAsync(title, desc, branchId, room,
+                SystemInspector.GetUserFullName(), createAttachments.Count > 0 ? createAttachments : null, lifetime.Token);
+            settings.TicketBranchId = branchId;
+            settings.TicketRoom = room;
+            try { settings.Save(); } catch (Exception ex) { Settings.Log(ex); }
+            if (createTitleBox != null) createTitleBox.Text = "";
+            if (createDescBox != null) createDescBox.Text = "";
+            createAttachments.Clear();
+            RenderCreateAttachments();
+            createFeedback = $"✓ Заявка №{ticketId} успешно создана и передана в очередь HelpDesk.";
+            createFeedbackIsError = false;
+            UpdateCreateFeedback();
+            await LoadOverviewAsync(render: false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Settings.Log(ex);
+            createFeedback = "Не отправлено: " + ex.Message;
+            createFeedbackIsError = true;
+            UpdateCreateFeedback();
+        }
+        finally
+        {
+            if (createSubmitButton != null)
+            {
+                createSubmitButton.IsEnabled = hub.IsOnline;
+                createSubmitButton.Content = "🚀 Создать заявку";
+            }
+        }
+    }
+
+    private void UpdateCreateFeedback()
+    {
+        if (createFeedbackText == null) return;
+        createFeedbackText.Text = createFeedback;
+        createFeedbackText.Foreground = (Brush)new BrushConverter().ConvertFromString(createFeedbackIsError ? "#DC2626" : "#16A34A")!;
+        createFeedbackText.Visibility = string.IsNullOrWhiteSpace(createFeedback) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void RenderTicketsList(string title, List<StaffTicketSummary> list, bool canClaim, bool isClosed)

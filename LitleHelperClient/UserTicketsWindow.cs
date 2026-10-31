@@ -424,24 +424,43 @@ public sealed class UserTicketsWindow : Window
         moduleHost.Content = scroll;
     }
 
-    private void PopulateBranchesDropdown()
+    private void PopulateBranchesDropdown(int? preferredBranchId = null)
     {
         if (cmbBranch == null) return;
         cmbBranch.Items.Clear();
 
+        var availableBranches = branches.Where(b => IsPortableDevice()
+            ? b.Name.Equals("Переносное устройство", StringComparison.OrdinalIgnoreCase)
+            : !b.Name.Equals("Переносное устройство", StringComparison.OrdinalIgnoreCase)).ToList();
+
         int? selectedIndex = null;
-        for (int i = 0; i < branches.Count; i++)
+        int? selectedId = preferredBranchId ?? settings.TicketBranchId;
+        for (int i = 0; i < availableBranches.Count; i++)
         {
-            var b = branches[i];
+            var b = availableBranches[i];
             var item = new ComboBoxItem { Content = b.Name, Tag = b.Id };
             cmbBranch.Items.Add(item);
 
-            if (b.Id == settings.TicketBranchId) selectedIndex = i;
+            if (b.Id == selectedId) selectedIndex = i;
         }
 
         if (selectedIndex.HasValue)
             cmbBranch.SelectedIndex = selectedIndex.Value;
         else if (cmbBranch.Items.Count > 0)
+            cmbBranch.SelectedIndex = 0;
+        ApplyPortableBranchSelection();
+    }
+
+    private bool IsPortableDevice()
+    {
+        try { if (hub.IsOnline) return SystemInspector.Machine().IsPortable; }
+        catch { }
+        return settings.IsPortable || SystemInspector.DetectIsPortable();
+    }
+
+    private void ApplyPortableBranchSelection()
+    {
+        if (IsPortableDevice() && cmbBranch?.Items.Count == 1)
             cmbBranch.SelectedIndex = 0;
     }
 
@@ -641,6 +660,11 @@ public sealed class UserTicketsWindow : Window
         }
 
         int? branchId = cmbBranch?.SelectedItem is ComboBoxItem item && item.Tag is int bid ? bid : null;
+        if (IsPortableDevice())
+        {
+            ApplyPortableBranchSelection();
+            branchId = cmbBranch?.SelectedItem is ComboBoxItem portableBranch && portableBranch.Tag is int portableId ? portableId : null;
+        }
 
         btnSubmitTicket.IsEnabled = false;
         btnSubmitTicket.Content = "Отправка заявки…";
@@ -1334,7 +1358,10 @@ public sealed class UserTicketsWindow : Window
             if (ctx?.Branches != null)
             {
                 branches = ctx.Branches.Where(b => b.IsActive).ToList();
-                PopulateBranchesDropdown();
+                var selection = TicketBranchSelection.Select(ctx, Environment.MachineName, settings.TicketBranchId);
+                PopulateBranchesDropdown(selection.Id);
+                if (!string.IsNullOrWhiteSpace(ctx.Room) && txtRoom != null)
+                    txtRoom.Text = ctx.Room;
             }
         }
         catch { }

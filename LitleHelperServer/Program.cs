@@ -107,7 +107,7 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("resolve-client", context => RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
-builder.Services.AddSignalR(options => { options.MaximumReceiveMessageSize = 1_500_000; options.EnableDetailedErrors = false; });
+builder.Services.AddSignalR(options => { options.MaximumReceiveMessageSize = 32 * 1024 * 1024; options.EnableDetailedErrors = false; });
 builder.Services.AddScoped<CommandService>();
 builder.Services.AddScoped<AnnouncementService>();
 builder.Services.AddSingleton<PanelSessions>();

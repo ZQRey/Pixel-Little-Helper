@@ -43,6 +43,7 @@ public sealed class HubConnectionService : IAsyncDisposable
     public event Action? EmergencyAlertCanceled;
     public event Action<string>? EmergencyEventCanceled;
     public event Action<string>? RoomUpdated;
+    public event Action<bool, string, bool, bool, bool>? LockdownChanged;
     public event Action? LiquidationReceived;
     public event Action<bool>? WebGuardToggled;
     public event Action<string>? AntivirusSettingsReceived;
@@ -91,6 +92,7 @@ public sealed class HubConnectionService : IAsyncDisposable
         created.On("EmergencySettingsUpdated", RefreshEmergencyCodesAsync);
         created.On<List<MedicalStatusConfig>>("MedicalStatusesUpdated", ApplyMedicalStatuses);
         created.On<string>("ClientRoomUpdated", room => RoomUpdated?.Invoke(room));
+        created.On<bool, string, bool, bool, bool>("AntiTheftLockdownChanged", (enabled, message, screen, session, bitlocker) => LockdownChanged?.Invoke(enabled, message, screen, session, bitlocker));
         created.On("OnLiquidationProtocol", () => LiquidationReceived?.Invoke());
         created.On<bool>("WebGuardToggled", enabled => WebGuardToggled?.Invoke(enabled));
         created.On<string>("AntivirusSettingsUpdated", json => AntivirusSettingsReceived?.Invoke(json));
@@ -352,6 +354,12 @@ public sealed class HubConnectionService : IAsyncDisposable
             Settings.Log(ex);
             if(throwOnFailure) throw;
         }
+    }
+
+    public async Task SetPortableModeAsync(bool isPortable, CancellationToken token = default)
+    {
+        if (!IsOnline) return;
+        await connection.InvokeAsync("SetPortableMode", isPortable, token);
     }
 
     public async ValueTask DisposeAsync()

@@ -99,18 +99,74 @@ public static class PxeApi
             }
         });
 
-        // Upload image (Streaming Proxy to PXE server)
+        // Upload image (Streaming Proxy to PXE server) - legacy single-request upload.
         group.MapPost("/upload", async (HttpContext context, PxeService pxe, CancellationToken token) =>
         {
-            var maxRequestBodySizeFeature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
-            if (maxRequestBodySizeFeature != null)
-            {
-                maxRequestBodySizeFeature.MaxRequestBodySize = null;
-            }
-
+            AllowUnlimitedBody(context);
             try
             {
                 var res = await pxe.UploadImageAsync(context.Request, token);
+                return Results.Ok(res);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
+        }).DisableAntiforgery();
+
+        // Resumable (chunked) upload - create/resume a session.
+        group.MapPost("/upload/init", async ([FromBody] PxeUploadInitRequest req, PxeService pxe, CancellationToken token) =>
+        {
+            try
+            {
+                var res = await pxe.InitUploadAsync(req.UploadId, req.FileName, req.TotalSize, token);
+                return Results.Ok(res);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
+        });
+
+        // Resumable (chunked) upload - append one chunk at the given offset.
+        group.MapPut("/upload/chunk/{uploadId}", async (string uploadId, HttpContext context, PxeService pxe, CancellationToken token) =>
+        {
+            AllowUnlimitedBody(context);
+            if (!long.TryParse(context.Request.Headers["X-Upload-Offset"].FirstOrDefault(), out var offset) || offset < 0)
+            {
+                return Results.BadRequest(new { error = "Некорректное смещение X-Upload-Offset." });
+            }
+            try
+            {
+                var res = await pxe.UploadChunkAsync(uploadId, offset, context.Request.Body, context.Request.ContentLength, token);
+                return Results.Ok(res);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
+        }).DisableAntiforgery();
+
+        // Resumable (chunked) upload - query how many bytes were already received.
+        group.MapGet("/upload/status/{uploadId}", async (string uploadId, PxeService pxe, CancellationToken token) =>
+        {
+            try
+            {
+                var res = await pxe.UploadStatusAsync(uploadId, token);
+                return Results.Ok(res);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: 502);
+            }
+        });
+
+        // Resumable (chunked) upload - verify size and finalize the image.
+        group.MapPost("/upload/complete/{uploadId}", async (string uploadId, PxeService pxe, CancellationToken token) =>
+        {
+            try
+            {
+                var res = await pxe.CompleteUploadAsync(uploadId, token);
                 return Results.Ok(res);
             }
             catch (Exception ex)
@@ -175,6 +231,17 @@ public static class PxeApi
             }
         });
     }
+
+    private static void AllowUnlimitedBody(HttpContext context)
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+        if (feature is { IsReadOnly: false })
+        {
+            feature.MaxRequestBodySize = null;
+        }
+    }
 }
 
 public record PxeTestRequest(string? ServerUrl);
+
+public record PxeUploadInitRequest(string UploadId, string FileName, long TotalSize);

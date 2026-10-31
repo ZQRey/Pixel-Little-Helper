@@ -57,27 +57,6 @@
                                FontSize="12" Foreground="#EF4444" FontWeight="Medium" TextAlignment="Center" Margin="0,4,0,0" />
                 </StackPanel>
 
-                <!-- Actions -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <Button x:Name="ShutdownButton" Content="⏻ Выключить компьютер"
-                            Padding="20,10" Margin="8,0" Background="#DC2626" Foreground="White"
-                            FontWeight="SemiBold" FontSize="14" BorderThickness="0" Cursor="Hand" Click="ShutdownButton_Click">
-                        <Button.Resources>
-                            <Style TargetType="Border">
-                                <Setter Property="CornerRadius" Value="8"/>
-                            </Style>
-                        </Button.Resources>
-                    </Button>
-                    <Button x:Name="RebootButton" Content="↻ Перезагрузить"
-                            Padding="20,10" Margin="8,0" Background="#334155" Foreground="White"
-                            FontWeight="SemiBold" FontSize="14" BorderThickness="0" Cursor="Hand" Click="RebootButton_Click">
-                        <Button.Resources>
-                            <Style TargetType="Border">
-                                <Setter Property="CornerRadius" Value="8"/>
-                            </Style>
-                        </Button.Resources>
-                    </Button>
-                </StackPanel>
             </StackPanel>
         </Border>
     </Grid>

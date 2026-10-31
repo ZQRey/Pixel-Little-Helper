@@ -11,6 +11,10 @@ public sealed partial class PetWindow
     private SettingsWindow? settingsWindow;
 
     internal MailStorageEngine MailStorage => mailStorage;
+    private bool HasConfiguredMailbox => settings.MailAccounts?.Any(a => a.IsEnabled &&
+        !string.IsNullOrWhiteSpace(a.EmailAddress) &&
+        !string.IsNullOrWhiteSpace(a.IncomingHost) &&
+        !string.IsNullOrWhiteSpace(a.EncryptedPassword)) == true;
 
     private void InitializeMailSubsystem()
     {
@@ -125,18 +129,18 @@ public sealed partial class PetWindow
         };
         menu.Items.Add(quietItem);
 
-        if (!diagnostics && SystemButtonVisibility.Enabled(systemButtons, "user_tickets"))
+        if (!diagnostics && (SystemButtonVisibility.Enabled(systemButtons, "user_tickets") || adminAvailable || superAvailable))
         {
-            var userTicketsItem = new MenuItem { Header = "📋 Заявки" };
-            userTicketsItem.Click += (_, _) => OpenUserTicketsWindow();
-            menu.Items.Add(userTicketsItem);
+            var ticketsItem = new MenuItem { Header = "📋 Заявки" };
+            ticketsItem.Click += (_, _) => OpenTicketsWindow();
+            menu.Items.Add(ticketsItem);
         }
 
-        if (!diagnostics && (adminAvailable || superAvailable))
+        if (!diagnostics && hub?.IsOnline == true && superAvailable)
         {
-            var staffTicketsItem = new MenuItem { Header = "💼 Заявки (Админ)" };
-            staffTicketsItem.Click += (_, _) => OpenStaffTicketsWindow();
-            menu.Items.Add(staffTicketsItem);
+            var superAdminItem = new MenuItem { Header = "🛠️ Кнопки супер админов" };
+            superAdminItem.Click += (_, _) => OpenSuperAdminWindow();
+            menu.Items.Add(superAdminItem);
         }
 
         menu.Items.Add(new Separator());
@@ -180,6 +184,11 @@ public sealed partial class PetWindow
             ShowNotice("Функция почтового клиента временно отключена администратором через веб-панель управления.");
             return;
         }
+        if (!HasConfiguredMailbox)
+        {
+            ShowNotice("Почтовый ящик не настроен. Добавьте его в разделе «Настройки» → «Почта».");
+            return;
+        }
 
         if (mailWindow == null || !mailWindow.IsLoaded)
         {
@@ -211,6 +220,11 @@ public sealed partial class PetWindow
         if (!SystemButtonVisibility.Enabled(systemButtons, "mail"))
         {
             ShowNotice("Функция почтового клиента временно отключена администратором через веб-панель управления.");
+            return;
+        }
+        if (!HasConfiguredMailbox)
+        {
+            ShowNotice("Почтовый ящик не настроен. Добавьте его в разделе «Настройки» → «Почта».");
             return;
         }
         OpenMailWindow();

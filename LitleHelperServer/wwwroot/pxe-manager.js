@@ -507,47 +507,163 @@ function showPxeUploadModal(parentContainer) {
 
         btn.disabled = true;
         pBox.style.display = 'block';
+        pBar.style.width = '0%';
+        pPercent.textContent = '0%';
+        pStatus.textContent = 'Подготовка загрузки…';
 
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('target_dir', 'images');
+        const uploadId = pxeUploadId(file);
+        const total = file.size;
+        const CHUNK_SIZE = 8 * 1024 * 1024;
 
-        // Use same-origin proxy endpoint /api/pxe/upload
-        const uploadEndpoint = '/api/pxe/upload';
+        const setProgress = (received) => {
+            const percent = total > 0 ? Math.min(100, Math.floor((received / total) * 100)) : 0;
+            pBar.style.width = percent + '%';
+            pPercent.textContent = percent + '%';
+            const loadedMb = (received / (1024 * 1024)).toFixed(1);
+            const totalMb = (total / (1024 * 1024)).toFixed(1);
+            pStatus.textContent = `Загрузка: ${loadedMb} / ${totalMb} MB`;
+        };
 
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', uploadEndpoint, true);
-
-        xhr.upload.onprogress = (evt) => {
-            if (evt.lengthComputable) {
-                const percent = Math.round((evt.loaded / evt.total) * 100);
-                pBar.style.width = percent + '%';
-                pPercent.textContent = percent + '%';
-                const loadedMb = (evt.loaded / (1024 * 1024)).toFixed(1);
-                const totalMb = (evt.total / (1024 * 1024)).toFixed(1);
-                pStatus.textContent = `Загрузка: ${loadedMb} / ${totalMb} MB`;
+        const reconcile = async () => {
+            try {
+                const st = await pxeUploadApi('/api/pxe/upload/status/' + encodeURIComponent(uploadId), 'GET');
+                return Number(st && st.received) || 0;
+            } catch (err) {
+                // Session may be gone (PXE restart) - recreate it.
+                try {
+                    const init = await pxeUploadApi('/api/pxe/upload/init', 'POST', {
+                        uploadId, fileName: file.name, totalSize: total
+                    });
+                    return Number(init && init.offset) || 0;
+                } catch (_) {
+                    return null;
+                }
             }
         };
 
-        xhr.onload = async () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-                toast(`Файл ${file.name} успешно загружен в PXE!`);
-                closeModal();
-                await renderPxeImagesTab(parentContainer);
-            } else {
-                let errText = xhr.statusText;
-                try { errText = JSON.parse(xhr.responseText).detail || errText; } catch {}
-                toast(`Ошибка загрузки: ${errText}`, true);
-                btn.disabled = false;
-            }
-        };
-
-        xhr.onerror = () => {
-            toast('Сетевая ошибка при передаче файла на PXE сервер', true);
+        let offset = 0;
+        try {
+            const init = await pxeUploadApi('/api/pxe/upload/init', 'POST', {
+                uploadId, fileName: file.name, totalSize: total
+            });
+            offset = Number(init && init.offset) || 0;
+            if (offset > 0) pStatus.textContent = 'Возобновление прерванной загрузки…';
+            setProgress(offset);
+        } catch (err) {
+            toast('Не удалось начать загрузку: ' + err.message, true);
             btn.disabled = false;
-        };
+            return;
+        }
 
-        xhr.send(formData);
+        let lastProgressAt = Date.now();
+        let attempt = 0;
+
+        while (offset < total) {
+            const end = Math.min(offset + CHUNK_SIZE, total);
+            const blob = file.slice(offset, end);
+            try {
+                await pxeUploadChunk(uploadId, offset, blob, (loaded) => setProgress(offset + loaded));
+                offset = end;
+                lastProgressAt = Date.now();
+                attempt = 0;
+                setProgress(offset);
+            } catch (err) {
+                attempt++;
+                const silentMs = Date.now() - lastProgressAt;
+                if (silentMs >= 60000) {
+                    toast(`Соединение потеряно более чем на 1 минуту. Загрузка прервана — при повторном запуске она продолжится с ${(offset / (1024 * 1024)).toFixed(1)} MB.`, true);
+                    btn.disabled = false;
+                    return;
+                }
+                pStatus.textContent = `Связь потеряна. Восстановление… (${Math.ceil((60000 - silentMs) / 1000)} с)`;
+                await pxeSleep(Math.min(1000 * attempt, 8000));
+                const serverOffset = await reconcile();
+                if (serverOffset === null) continue;
+                offset = Math.min(serverOffset, total);
+                lastProgressAt = Date.now();
+                setProgress(offset);
+            }
+        }
+
+        pStatus.textContent = 'Завершение загрузки на сервере…';
+        try {
+            await pxeUploadApi('/api/pxe/upload/complete/' + encodeURIComponent(uploadId), 'POST');
+            toast(`Файл ${file.name} успешно загружен в PXE!`);
+            closeModal();
+            await renderPxeImagesTab(parentContainer);
+        } catch (err) {
+            toast('Ошибка завершения загрузки: ' + err.message, true);
+            btn.disabled = false;
+        }
+    });
+}
+
+function pxeUploadId(file) {
+    // Deterministic id so an interrupted upload can be resumed after a page reload.
+    const key = `${file.name}|${file.size}|${file.lastModified}`;
+    let h = 2166136261;
+    for (let i = 0; i < key.length; i++) {
+        h ^= key.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return 'u' + (h >>> 0).toString(36) + file.size.toString(36);
+}
+
+function pxeSleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function pxeUploadHeaders(extra) {
+    const token = sessionStorage.getItem('helper-token');
+    return Object.assign({}, token ? { Authorization: 'Bearer ' + token } : {}, extra || {});
+}
+
+async function pxeUploadApi(path, method, body) {
+    const response = await fetch(path, {
+        method,
+        headers: pxeUploadHeaders(body ? { 'Content-Type': 'application/json' } : {}),
+        body: body ? JSON.stringify(body) : undefined
+    });
+    const text = await response.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!response.ok) {
+        let message = (data && (data.error || data.detail || data.message)) || response.statusText || ('HTTP ' + response.status);
+        if (message && typeof message === 'object') message = message.message || JSON.stringify(message);
+        const err = new Error(message);
+        err.status = response.status;
+        throw err;
+    }
+    return data;
+}
+
+function pxeUploadChunk(uploadId, offset, blob, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', '/api/pxe/upload/chunk/' + encodeURIComponent(uploadId), true);
+        const token = sessionStorage.getItem('helper-token');
+        if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+        xhr.setRequestHeader('X-Upload-Offset', String(offset));
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.upload.onprogress = (evt) => {
+            if (evt.lengthComputable) onProgress(evt.loaded);
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+            let message = xhr.statusText;
+            try {
+                const d = JSON.parse(xhr.responseText);
+                message = d.error || d.detail || message;
+            } catch (_) { }
+            if (message && typeof message === 'object') message = message.message || JSON.stringify(message);
+            const err = new Error(message || ('HTTP ' + xhr.status));
+            err.status = xhr.status;
+            reject(err);
+        };
+        xhr.onerror = () => { const err = new Error('Сетевая ошибка'); err.network = true; reject(err); };
+        xhr.ontimeout = () => { const err = new Error('Тайм-аут'); err.network = true; reject(err); };
+        xhr.onabort = () => { const err = new Error('Загрузка прервана'); err.network = true; reject(err); };
+        xhr.send(blob);
     });
 }
 
@@ -619,9 +735,18 @@ function showUnattendedCustomizerModal(images) {
                 </div>
             </div>
 
-            <!-- 4. Silent Software Installation (.MSI and .EXE) -->
+            <!-- 4. Product Key -->
             <div style="background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:14px;">
-                <strong style="font-size:13px;display:block;margin-bottom:8px;">4. Тихая установка программ (.MSI и .EXE)</strong>
+                <strong style="font-size:13px;display:block;margin-bottom:6px;">4. Ключ продукта Windows (Product Key)</strong>
+                <label>
+                    <span style="font-size:11px;color:var(--text-dim);margin-bottom:4px;display:block;">Универсальный ключ установки (по умолчанию Windows 10/11 Pro):</span>
+                    <input name="productKey" value="VK7JG-NPHTM-C97JM-9MPGT-3V66T" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" style="width:100%;font-family:monospace;">
+                </label>
+            </div>
+
+            <!-- 5. Silent Software Installation (.MSI and .EXE) -->
+            <div style="background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:14px;">
+                <strong style="font-size:13px;display:block;margin-bottom:8px;">5. Тихая установка программ (.MSI и .EXE)</strong>
                 
                 <div style="background:#edf8f3;border:1px solid #bbf7d0;border-radius:7px;padding:8px 12px;font-size:12px;color:#166534;margin-bottom:10px;display:flex;align-items:center;gap:8px;">
                     <input type="checkbox" name="installPixelHelper" checked disabled>
@@ -702,6 +827,7 @@ function showUnattendedCustomizerModal(images) {
             ad_ou: f.adOu.value,
             ad_user: f.adUser.value,
             ad_password: f.adPassword.value,
+            product_key: f.productKey?.value?.trim() || '',
             custom_apps: apps
         };
 

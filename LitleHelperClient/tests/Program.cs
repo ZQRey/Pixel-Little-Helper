@@ -350,6 +350,9 @@ try
     Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = 999 }, "UNKNOWN", 1) == (1, false), "invalid detected branch falls back to saved active branch");
     Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = null }, "UNKNOWN", 999) == ((int?)null, false), "unknown machine never selects first branch");
     Check(TicketBranchSelection.Select(selectionContext with { DetectedBranchId = null }, "X123", 4) == ((int?)null, false), "inactive branches cannot be selected");
+    Check(TicketBranchSelection.Select(selectionContext with { IsPortable = true }, "N241", 1) == ((int?)null, false), "portable device does not select an unrelated branch");
+    var portableContext = new TicketContext([new(1, "Филиал"), new(2, "Переносное устройство")], 1, IsPortable: true);
+    Check(TicketBranchSelection.Select(portableContext, "N241", 1) == (2, true), "portable device selects the portable branch over saved branch");
     var ticketWindow = new TicketWindow((title, description, branch, room, cancellation) => Task.FromResult(1), cancellation => Task.FromResult(new TicketContext(new List<TicketBranch> { new(1, "Поликлиника"), new(2, "Больница") })), new Settings { TicketBranchId = 1, TicketRoom = "12" }, CancellationToken.None);
     Check(ticketWindow.WindowStartupLocation == System.Windows.WindowStartupLocation.CenterScreen, "ticket window startup location is CenterScreen");
     ticketWindow.Show(); ticketWindow.UpdateLayout(); ticketWindow.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);

@@ -181,7 +181,7 @@ public static class PanelApi
                 db.Computers.Add(c);
             }
             string externalIp = context.Connection.RemoteIpAddress?.ToString() ?? "";
-            c.IsPortable = request.IsPortable;
+            c.IsPortable = c.IsPortable || request.IsPortable;
             c.BatteryPercent = request.BatteryPercent;
             c.IsCharging = request.IsCharging;
             c.LastSsid = request.ConnectedSsid ?? "";

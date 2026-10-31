@@ -8,6 +8,7 @@ set -euo pipefail
 # Configurable paths (can be overridden via environment)
 TFTP_ROOT="${TFTP_ROOT:-/srv/tftp}"
 WEB_ROOT="${WEB_ROOT:-/srv/www/pxe}"
+DEBIAN_RELEASE="${DEBIAN_RELEASE:-bookworm}"
 
 log_info()  { echo -e "\033[1;34m[INFO]\033[0m $*"; }
 log_ok()    { echo -e "\033[1;32m[OK]\033[0m $*"; }
@@ -39,17 +40,25 @@ apt-get update -qq
 apt-get install -y -qq syslinux-common pxelinux binutils curl ca-certificates
 
 # -----------------------------------------------------------------------------
-# 1. UEFI Secure Boot Loaders (shimx64.efi & grubx64.efi)
+# 1. UEFI Secure Boot Loaders (shimx64.efi & signed GRUB 2.12 with ProxyDHCP)
 # -----------------------------------------------------------------------------
 log_info "Step 3: Downloading official signed Debian packages for UEFI Secure Boot..."
 cd "${TMP_DIR}"
 
-# Download signed packages directly from the configured Debian repos
-apt-get download -qq shim-signed grub-efi-amd64-signed
+# Download signed shim and signed GRUB from Debian Trixie (grub 2.12+).
+# GRUB 2.12 contains the efinet ProxyDHCP patch required for DHCP Proxy / dnsmasq setups.
+apt-get download -qq shim-signed grub-efi-amd64-signed grub-efi-amd64-bin
 
-log_info "Extracting shim-signed..."
+log_info "Extracting shim-signed and grub-efi-amd64-signed..."
+mkdir -p shim_extracted grub_signed_extracted grub_bin_extracted
 SHIM_DEB=$(ls shim-signed_*.deb | head -n 1)
 dpkg-deb -x "${SHIM_DEB}" shim_extracted/
+
+GRUB_SIGNED_DEB=$(ls grub-efi-amd64-signed_*.deb | head -n 1)
+dpkg-deb -x "${GRUB_SIGNED_DEB}" grub_signed_extracted/
+
+GRUB_BIN_DEB=$(ls grub-efi-amd64-bin_*.deb | head -n 1)
+dpkg-deb -x "${GRUB_BIN_DEB}" grub_bin_extracted/
 
 # Locate shimx64.efi.signed
 SHIM_BIN=$(find shim_extracted/ -name "shimx64.efi.signed" | head -n 1)
@@ -57,7 +66,28 @@ if [[ -z "${SHIM_BIN}" ]]; then
     log_err "shimx64.efi.signed not found in ${SHIM_DEB}!"
     exit 1
 fi
+mkdir -p "${TFTP_ROOT}/debian-installer/amd64"
 cp -v "${SHIM_BIN}" "${TFTP_ROOT}/shimx64.efi"
+cp -v "${SHIM_BIN}" "${TFTP_ROOT}/debian-installer/amd64/bootnetx64.efi"
+
+# Locate signed GRUB installer netboot binary
+GRUB_NET_BIN=$(find grub_signed_extracted/ -name "grubnetx64-installer.efi.signed" | head -n 1)
+if [[ -z "${GRUB_NET_BIN}" ]]; then
+    GRUB_NET_BIN=$(find grub_signed_extracted/ -name "grubnetx64.efi.signed" -o -name "grubx64.efi.signed" | head -n 1)
+fi
+if [[ -z "${GRUB_NET_BIN}" ]]; then
+    log_err "Signed GRUB binary not found!"
+    exit 1
+fi
+cp -v "${GRUB_NET_BIN}" "${TFTP_ROOT}/grubx64.efi"
+cp -v "${GRUB_NET_BIN}" "${TFTP_ROOT}/debian-installer/amd64/grubx64.efi"
+
+# Populate GRUB 2.12 modules across all search prefixes
+for mod_dir in "${TFTP_ROOT}/debian-installer/amd64/grub/x86_64-efi" "${TFTP_ROOT}/debian-installer/amd64/x86_64-efi" "${TFTP_ROOT}/grub/x86_64-efi" "${TFTP_ROOT}/x86_64-efi"; do
+    mkdir -p "${mod_dir}"
+    cp -a grub_bin_extracted/usr/lib/grub/x86_64-efi/. "${mod_dir}/"
+    echo "source \$prefix/grub.cfg" > "${mod_dir}/grub.cfg"
+done
 
 # Locate mmx64.efi (MokManager) which shim calls if needed for MOK enrollment
 MOK_BIN=$(find shim_extracted/ -name "mmx64.efi.signed" -o -name "mmx64.efi" | head -n 1)
@@ -65,27 +95,7 @@ if [[ -n "${MOK_BIN}" ]]; then
     cp -v "${MOK_BIN}" "${TFTP_ROOT}/mmx64.efi"
 fi
 
-log_info "Extracting grub-efi-amd64-signed..."
-GRUB_DEB=$(ls grub-efi-amd64-signed_*.deb | head -n 1)
-dpkg-deb -x "${GRUB_DEB}" grub_extracted/
-
-# For network PXE boot, Debian provides grubnetx64.efi.signed
-# When Shim loads grubx64.efi, Debian's shim looks for grubx64.efi signed by Debian CA.
-# Debian packages grubnetx64.efi.signed with network modules (efinet, tftp, http) pre-baked.
-GRUB_BIN=$(find grub_extracted/ -name "grubnetx64.efi.signed" | head -n 1)
-
-if [[ -z "${GRUB_BIN}" ]]; then
-    # Fallback: check for grubx64.efi.signed
-    GRUB_BIN=$(find grub_extracted/ -name "grubx64.efi.signed" | head -n 1)
-fi
-
-if [[ -z "${GRUB_BIN}" ]]; then
-    log_err "Signed GRUB binary not found in ${GRUB_DEB}!"
-    exit 1
-fi
-
-# shimx64.efi looks for grubx64.efi in the same directory by default
-cp -v "${GRUB_BIN}" "${TFTP_ROOT}/grubx64.efi"
+# shimx64.efi looks for grubx64.efi in the same directory by default.
 
 # -----------------------------------------------------------------------------
 # 2. Legacy BIOS Loaders (Syslinux / PXELINUX)
@@ -108,7 +118,7 @@ cp -v "${LPXE_SRC}" "${TFTP_ROOT}/lpxelinux.0"
 
 # Copy essential 32-bit Syslinux modules
 SYSLINUX_BIOS_DIR="/usr/lib/syslinux/modules/bios"
-for mod in ldlinux.c32 menu.c32 vesamenu.c32 libutil.c32 libcom32.c32 chain.c32 reboot.c32 poweroff.c32; do
+for mod in ldlinux.c32 menu.c32 vesamenu.c32 libutil.c32 libcom32.c32 chain.c32 reboot.c32 poweroff.c32 linux.c32; do
     if [[ -f "${SYSLINUX_BIOS_DIR}/${mod}" ]]; then
         cp -v "${SYSLINUX_BIOS_DIR}/${mod}" "${TFTP_ROOT}/"
     else

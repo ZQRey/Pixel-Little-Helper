@@ -58,8 +58,8 @@ LABEL clonezilla
 # ------------------------------------------------------------------------------
 LABEL winpe
     MENU LABEL ^5. Windows Installer (WinPE via wimboot)
-    KERNEL http://SERVER_IP_PLACEHOLDER:8088/tools/wimboot
-    INITRD http://SERVER_IP_PLACEHOLDER:8088/os/windows/bootmgr,http://SERVER_IP_PLACEHOLDER:8088/os/windows/boot/bcd,http://SERVER_IP_PLACEHOLDER:8088/os/windows/boot/boot.sdi,http://SERVER_IP_PLACEHOLDER:8088/os/windows/sources/boot.wim
+    KERNEL linux.c32
+    APPEND http://SERVER_IP_PLACEHOLDER:8088/tools/wimboot initrdfile=http://SERVER_IP_PLACEHOLDER:8088/os/windows/bootmgr,http://SERVER_IP_PLACEHOLDER:8088/os/windows/boot/bcd,http://SERVER_IP_PLACEHOLDER:8088/os/windows/boot/boot.sdi,http://SERVER_IP_PLACEHOLDER:8088/os/windows/sources/boot.wim
 
 # ------------------------------------------------------------------------------
 # Utilities

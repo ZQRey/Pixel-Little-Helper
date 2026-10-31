@@ -38,7 +38,7 @@ Production-ready, vendor-neutral PXE network boot solution designed for heteroge
               v                                                       v
    +--------------------+                                  +--------------------+
    | Primary DHCP       |                                  | PXE Proxy (Dnsmasq)|
-   | (MikroTik / AD)    |                                  | (172.16.16.6)      |
+   | (MikroTik / AD)    |                                  | (172.16.16.61)     |
    +--------------------+                                  +--------------------+
               |                                                       |
        Offers IP Lease                                    Detects Option 93 (Arch)
@@ -63,7 +63,7 @@ Production-ready, vendor-neutral PXE network boot solution designed for heteroge
                     +---------------------+---------------------+
                                           |
                                Switch to HTTP Engine
-                           (Nginx: http://172.16.16.6)
+                           (Nginx: http://172.16.16.61:8088)
                                           |
          +--------------------------------+--------------------------------+
          |                                |                                |
@@ -104,7 +104,7 @@ Production-ready, vendor-neutral PXE network boot solution designed for heteroge
 ### 1. Prerequisites
 - Target OS: Debian 12 (Bookworm) or Debian 13 (Trixie).
 - Root privileges (`sudo`).
-- Network interface with a static IP (e.g. `172.16.16.6/23`).
+- Network interface with a static IP (e.g. `172.16.16.61/23`).
 
 ### 2. Deploy
 Run the master installer on the server:
@@ -115,12 +115,12 @@ sudo ./deploy.sh
 
 Or pass custom parameters:
 ```bash
-sudo ./deploy.sh --ip 172.16.16.6 --iface eth0 --subnet-mask 255.255.254.0
+sudo ./deploy.sh --ip 172.16.16.61 --iface eth0 --subnet-mask 255.255.254.0
 ```
 
 The script will:
 1. Install all dependencies (`dnsmasq`, `nginx`, `samba`, `wimtools`, `syslinux-common`, `pxelinux`, `curl`, `dpkg-dev`).
-2. Download official signed Debian deb packages (`shim-signed`, `grub-efi-amd64-signed`) and extract signed `shimx64.efi` and `grubx64.efi`.
+2. Download the signed Debian `shimx64.efi` package and the Debian Installer netboot tree. The installer-specific signed GRUB binary and its modules are required so UEFI PXE loads the menu automatically.
 3. Provision Syslinux `lpxelinux.0` and modules for Legacy BIOS.
 4. Download `wimboot` from the official iPXE repository.
 5. Deploy parameterized configurations for Dnsmasq, Nginx, Samba, GRUB, and Syslinux.
@@ -134,7 +134,7 @@ The script will:
 To configure unattended Windows installation directly from an official Microsoft ISO:
 
 ```bash
-sudo ./scripts/build_winpe.sh /path/to/Windows_11_24H2.iso 172.16.16.6
+sudo ./scripts/build_winpe.sh /path/to/Windows_11_24H2.iso 172.16.16.61
 ```
 
 ### What this does:
@@ -142,7 +142,7 @@ sudo ./scripts/build_winpe.sh /path/to/Windows_11_24H2.iso 172.16.16.6
 2. Extracts UEFI `bootmgr.efi`, BIOS `bootmgr`, `bcd`, `boot.sdi`, and `boot.wim`.
 3. Injects custom `startnet.cmd` into `boot.wim` using `wimlib-imagex update` (no Windows ADK required!).
 4. Unpacks the full ISO contents into `/srv/www/pxe/os/windows/iso_extracted`.
-5. WinPE boots over HTTP via `wimboot`, initializes the network, mounts `\\172.16.16.6\install`, and automatically executes `Z:\setup.exe`.
+5. WinPE boots over HTTP via `wimboot`, initializes the network, mounts `\\172.16.16.61\install`, and automatically executes `Z:\setup.exe`.
 
 ---
 
@@ -155,7 +155,7 @@ Once deployed, verify the active services:
 | **UDP** | `69` | `dnsmasq` | TFTP bootloader delivery |
 | **UDP** | `67` | `dnsmasq` | DHCP Proxy broadcast listener |
 | **UDP** | `4011` | `dnsmasq` | ProxyDHCP PXE architecture response |
-| **TCP** | `80` | `nginx` | High-speed HTTP kernel/initrd/WinPE delivery |
+| **TCP** | `8088` | `nginx` | High-speed HTTP kernel/initrd/WinPE delivery |
 | **TCP** | `445` | `smbd` | Samba Windows install share |
 | **TCP** | `8080` | `panel` | FastAPI Web Management UI |
 
@@ -184,7 +184,7 @@ docker compose down
 
 ### 🌐 Web Control Center
 
-Navigate to `http://172.16.16.6:8080/` to access the PXE Server Control Center:
+Navigate to `http://172.16.16.61:8080/` to access the PXE Server Control Center:
 - **Service Control**: Start, stop, and restart individual containers with one click.
 - **Client Tracking**: Live table of machines requesting DHCP/PXE leases and downloading OS media.
 - **Image Manager**: Upload OS images (ISO, kernel, initrd) and automate Windows ISO conversion.
@@ -194,18 +194,18 @@ Navigate to `http://172.16.16.6:8080/` to access the PXE Server Control Center:
 ### Test Commands:
 ```bash
 # Check listening ports
-ss -tulpn | grep -E ':(67|69|80|445|4011|8080)'
+ss -tulpn | grep -E ':(67|69|445|4011|8080|8088)'
 
 # Test TFTP locally
-tftp 172.16.16.6 -c get shimx64.efi
+tftp 172.16.16.61 -c get shimx64.efi
 
 # Test HTTP locally
-curl -I http://172.16.16.6/grub/grub.cfg
+curl -I http://172.16.16.61:8088/grub/grub.cfg
 
 # Test Samba locally
-smbclient -L //172.16.16.6 -N
+smbclient -L //172.16.16.61 -N
 
 # Test Web Panel locally
-curl -s http://172.16.16.6:8080/api/status
+curl -s http://172.16.16.61:8080/api/status
 ```
 

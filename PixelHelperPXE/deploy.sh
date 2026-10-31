@@ -46,7 +46,16 @@ SERVER_IP="${SERVER_IP:-$(ip -4 addr show dev "$SERVER_IFACE" 2>/dev/null | awk 
 
 # Determine subnet mask
 SUBNET_CIDR_DETECTED=$(ip -4 addr show dev "$SERVER_IFACE" 2>/dev/null | awk '/inet / {print $2}' | head -n 1)
-SUBNET_MASK="${SUBNET_MASK:-255.255.254.0}"
+SERVER_NETWORK="${SERVER_NETWORK:-$(ip -4 route show dev "$SERVER_IFACE" proto kernel scope link 2>/dev/null | awk 'NR==1 {sub(/\/.*/, "", $1); print $1}')}"
+if [[ -z "${SUBNET_MASK:-}" || -z "${SERVER_NETWORK}" ]]; then
+    if [[ -z "${SUBNET_CIDR_DETECTED}" ]] || ! command -v python3 >/dev/null 2>&1; then
+        log_err "Could not determine IPv4 network for ${SERVER_IFACE}; set SERVER_NETWORK and SUBNET_MASK in .env"
+        exit 1
+    fi
+    read -r DETECTED_NETWORK DETECTED_MASK < <(python3 -c 'import ipaddress,sys; n=ipaddress.ip_interface(sys.argv[1]).network; print(n.network_address, n.netmask)' "${SUBNET_CIDR_DETECTED}")
+    SERVER_NETWORK="${SERVER_NETWORK:-$DETECTED_NETWORK}"
+    SUBNET_MASK="${SUBNET_MASK:-$DETECTED_MASK}"
+fi
 TFTP_ROOT="${TFTP_ROOT:-/srv/tftp}"
 WEB_ROOT="${WEB_ROOT:-/srv/www/pxe}"
 
@@ -129,7 +138,7 @@ apt-get install -y -qq \
 # ------------------------------------------------------------------------------
 log_info "[Step 2/6] Provisioning UEFI (Shim + GRUB) & BIOS bootloaders..."
 chmod +x "${SCRIPT_DIR}/setup_bootloaders.sh"
-TFTP_ROOT="${TFTP_ROOT}" WEB_ROOT="${WEB_ROOT}" "${SCRIPT_DIR}/setup_bootloaders.sh"
+DEBIAN_RELEASE="${DEBIAN_RELEASE:-bookworm}" TFTP_ROOT="${TFTP_ROOT}" WEB_ROOT="${WEB_ROOT}" "${SCRIPT_DIR}/setup_bootloaders.sh"
 
 # ------------------------------------------------------------------------------
 # 4. Configuration Deployment
@@ -139,6 +148,7 @@ log_info "[Step 3/6] Deploying service configurations..."
 # A. Dnsmasq (DHCP Proxy + TFTP)
 log_info "Configuring dnsmasq (/etc/dnsmasq.d/pxe.conf)..."
 sed -e "s/SERVER_IFACE_PLACEHOLDER/${SERVER_IFACE}/g" \
+    -e "s/SERVER_NETWORK_PLACEHOLDER/${SERVER_NETWORK}/g" \
     -e "s/SERVER_IP_PLACEHOLDER/${SERVER_IP}/g" \
     -e "s/SUBNET_MASK_PLACEHOLDER/${SUBNET_MASK}/g" \
     -e "s|TFTP_ROOT_PLACEHOLDER|${TFTP_ROOT}|g" \
@@ -166,7 +176,13 @@ sed "s/SERVER_IP_PLACEHOLDER/${SERVER_IP}/g" "${SCRIPT_DIR}/configs/grub.cfg" > 
 # Also place at root of TFTP and in web root for HTTP chainloading
 cp "${TFTP_ROOT}/grub/grub.cfg" "${TFTP_ROOT}/grub.cfg"
 cp "${TFTP_ROOT}/grub/grub.cfg" "${WEB_ROOT}/grub/grub.cfg"
-ln -sf "${TFTP_ROOT}/grub/grub.cfg" "${TFTP_ROOT}/boot/grub/grub.cfg"
+cp "${TFTP_ROOT}/grub/grub.cfg" "${TFTP_ROOT}/debian-installer/amd64/grub/grub.cfg"
+mkdir -p "${TFTP_ROOT}/boot/grub"
+cp "${TFTP_ROOT}/grub/grub.cfg" "${TFTP_ROOT}/boot/grub/grub.cfg"
+
+# Ensure x86_64-efi/grub.cfg redirects to prefix/grub.cfg rather than CD-ROM /boot/grub/grub.cfg
+echo "source \$prefix/grub.cfg" > "${TFTP_ROOT}/debian-installer/amd64/grub/x86_64-efi/grub.cfg"
+echo "source \$prefix/grub.cfg" > "${TFTP_ROOT}/grub/x86_64-efi/grub.cfg"
 
 # E. Syslinux Configuration (Legacy BIOS)
 log_info "Deploying Syslinux menus..."
@@ -229,7 +245,7 @@ check_port() {
 check_port "u" "69"   "TFTP Server"
 check_port "u" "67"   "DHCP Proxy Snooning"
 check_port "u" "4011" "ProxyDHCP Service"
-check_port "t" "80"   "Nginx HTTP Engine"
+check_port "t" "8088" "Nginx HTTP Engine"
 check_port "t" "445"  "Samba SMB File Sharing"
 
 # Smoke test TFTP locally
@@ -245,7 +261,7 @@ rm -f "${TMP_TFTP_TEST}"
 
 # Smoke test HTTP locally
 log_info "Smoke-testing local HTTP transfer..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://${SERVER_IP}/grub/grub.cfg" || true)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://${SERVER_IP}:8088/grub/grub.cfg" || true)
 if [[ "${HTTP_CODE}" == "200" ]]; then
     log_ok "HTTP self-test successful! Received HTTP 200 for grub/grub.cfg."
 else
@@ -266,7 +282,7 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}       PXE SERVER SUCCESSFULLY DEPLOYED AND OPERATIONAL!${NC}"
 echo -e "${GREEN}==============================================================================${NC}"
 echo "Server IP Address:     ${SERVER_IP}"
-echo "Web URL (HTTP):        http://${SERVER_IP}/"
+echo "Web URL (HTTP):        http://${SERVER_IP}:8088/"
 echo "SMB Share for Windows: \\\\${SERVER_IP}\\install"
 echo ""
 echo "Supported Boot Modes:"

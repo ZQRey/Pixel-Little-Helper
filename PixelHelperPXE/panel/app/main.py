@@ -891,6 +891,88 @@ def _build_pxelinux_menu(entries: List[dict]) -> str:
     return "\n".join(lines)
 
 
+def _build_ipxe_menu(entries: List[dict]) -> str:
+    h = f"http://{PXE_SERVER_IP}:{HTTP_PORT}"
+    lines = [
+        "#!ipxe",
+        "",
+        "# Pixel Little Helper - Autonomous Network Boot (UEFI / iPXE)",
+        "set menu-timeout 15000",
+        "set submenu-timeout ${menu-timeout}",
+        "",
+        "# Styling & Console Configuration",
+        f"console --picture {h}/splash_bios.png --x 1024 --y 768 ||",
+        "colour --rgb 0x246bfd 1",
+        "colour --rgb 0x9fb5ce 2",
+        "colour --rgb 0x00d2ff 3",
+        "",
+        ":menu",
+        "menu Pixel Little Helper - Autonomous Network Boot (UEFI)",
+        "item --gap -- Available Operating Systems:",
+    ]
+    for i, e in enumerate(entries, 1):
+        slug = e.get("slug", f"img{i}")
+        title = e["title"]
+        lines.append(f"item {slug} {title}")
+
+    default_slug = entries[0].get("slug", "img1") if entries else "local"
+    lines += [
+        "item --gap -- System Controls:",
+        "item local Boot from local hard drive",
+        "item reboot Reboot machine",
+        "item poweroff Power off machine",
+        "",
+        f"choose --timeout ${{menu-timeout}} --default {default_slug} target || goto local",
+        "goto ${target}",
+        "",
+    ]
+
+    for i, e in enumerate(entries, 1):
+        slug = e.get("slug", f"img{i}")
+        k = e["kind"]
+        rp = e.get("rel_path", "os/windows")
+        lines.append(f":{slug}")
+        lines.append(f"echo Загрузка {e['title']}...")
+        if k == "windows":
+            lines.append(f"kernel {h}/tools/wimboot gui")
+            lines.append(f"initrd {h}/{rp}/bootmgr.efi bootmgr.efi")
+            lines.append(f"initrd {h}/{rp}/boot/bcd bcd")
+            lines.append(f"initrd {h}/{rp}/boot/boot.sdi boot.sdi")
+            lines.append(f"initrd {h}/{rp}/sources/boot.wim boot.wim")
+            lines.append("boot || goto error")
+        elif k == "debian":
+            lines.append(f"kernel {h}/{rp}/linux vga=788 --- quiet")
+            lines.append(f"initrd {h}/{rp}/initrd.gz")
+            lines.append("boot || goto error")
+        elif k == "sysrescue":
+            lines.append(f"kernel {h}/{rp}/vmlinuz archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/{rp}/ copytoram")
+            lines.append(f"initrd {h}/{rp}/initram.img")
+            lines.append("boot || goto error")
+        elif k == "clonezilla":
+            lines.append(f"kernel {h}/{rp}/vmlinuz boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/{rp}/filesystem.squashfs")
+            lines.append(f"initrd {h}/{rp}/initrd.img")
+            lines.append("boot || goto error")
+        lines.append("")
+
+    lines += [
+        ":local",
+        "exit 1",
+        "",
+        ":reboot",
+        "reboot",
+        "",
+        ":poweroff",
+        "poweroff",
+        "",
+        ":error",
+        "echo Boot failed! Press any key to return to menu...",
+        "prompt",
+        "goto menu",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _build_grub_menu(entries: List[dict]) -> str:
     s = f"(http,{PXE_SERVER_IP}:{HTTP_PORT})"
     h = f"http://{PXE_SERVER_IP}:{HTTP_PORT}"
@@ -948,12 +1030,8 @@ def _build_grub_menu(entries: List[dict]) -> str:
         rp = e.get("rel_path", "os/windows")
         out.append(f'menuentry "{e["title"]}" --class {cls} --class os {{')
         if k == "windows":
-            out.append(f'    echo "Загрузка ядра wimboot..."')
-            out.append(f"    linux {s}/tools/wimboot")
-            out.append(f'    echo "Загрузка файлов WinPE ({e["title"]})... Пожалуйста, подождите..."')
-            out.append(f"    initrd newc:bootmgr.efi:{s}/{rp}/bootmgr.efi newc:bcd:{s}/{rp}/boot/bcd newc:boot.sdi:{s}/{rp}/boot/boot.sdi newc:boot.wim:{s}/{rp}/sources/boot.wim")
-            out.append(f'    echo "Запуск установщика Windows..."')
-            out.append(f"    boot")
+            out.append(f'    echo "Запуск сетевого загрузчика iPXE для {e["title"]}..."')
+            out.append(f"    chainloader {s}/tools/ipxe.efi")
         elif k == "debian":
             out.append(f"    linux {s}/{rp}/linux vga=788 --- quiet")
             out.append(f"    initrd {s}/{rp}/initrd.gz")
@@ -980,6 +1058,7 @@ def regenerate_boot_menus() -> List[dict]:
     entries = _available_boot_entries()
     pxe = _build_pxelinux_menu(entries)
     grub = _build_grub_menu(entries)
+    ipxe = _build_ipxe_menu(entries)
     targets = [
         (TFTP_ROOT / "pxelinux.cfg" / "default", pxe),
         (TFTP_ROOT / "grub.cfg", grub),
@@ -991,6 +1070,8 @@ def regenerate_boot_menus() -> List[dict]:
         (TFTP_ROOT / "debian-installer" / "amd64" / "grub" / "grub.cfg", grub),
         (TFTP_ROOT / "debian-installer" / "amd64" / "grub" / "x86_64-efi" / "grub.cfg", grub),
         (WEB_ROOT / "grub" / "grub.cfg", grub),
+        (TFTP_ROOT / "menu.ipxe", ipxe),
+        (WEB_ROOT / "menu.ipxe", ipxe),
     ]
     for path, content in targets:
         try:

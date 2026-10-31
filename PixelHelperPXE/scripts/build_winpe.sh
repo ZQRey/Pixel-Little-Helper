@@ -19,13 +19,24 @@ fi
 ISO_PATH="${1:-}"
 SERVER_IP="${2:-172.16.16.61}"
 AUTOUNATTEND_PATH="${3:-}"
+TARGET_SLUG="${4:-}"
+
+if [[ -z "${TARGET_SLUG}" && -n "${ISO_PATH}" ]]; then
+    ISO_BASE="$(basename "${ISO_PATH}" .iso)"
+    TARGET_SLUG="$(echo "${ISO_BASE}" | sed -e 's/[^A-Za-z0-9_-]/_/g')"
+fi
+
 WEB_ROOT="${WEB_ROOT:-/srv/www/pxe}"
-WIN_DIR="${WEB_ROOT}/os/windows"
+if [[ -n "${TARGET_SLUG}" ]]; then
+    WIN_DIR="${WEB_ROOT}/os/windows/${TARGET_SLUG}"
+else
+    WIN_DIR="${WEB_ROOT}/os/windows"
+fi
 STARTNET_SRC="$(dirname "$0")/startnet.cmd"
 
 if [[ -z "${ISO_PATH}" || ! -f "${ISO_PATH}" ]]; then
-    log_err "Usage: $0 <path-to-windows.iso> [server-ip] [autounattend-path]"
-    log_err "Example: $0 /srv/www/pxe/images/Win10.iso 172.16.16.61"
+    log_err "Usage: $0 <path-to-windows.iso> [server-ip] [autounattend-path] [target-slug]"
+    log_err "Example: $0 /srv/www/pxe/images/Win10.iso 172.16.16.61 '' win10"
     exit 1
 fi
 
@@ -154,9 +165,11 @@ fi
 
 chmod 644 "${WIN_DIR}/sources/boot.wim"
 
-log_info "Generating parameterized startnet.cmd with Server IP: ${SERVER_IP}..."
-TMP_STARTNET="/tmp/startnet_gen.cmd"
-sed "s/SERVER_IP_PLACEHOLDER/${SERVER_IP}/g" "${STARTNET_SRC}" > "${TMP_STARTNET}"
+log_info "Generating parameterized startnet.cmd for ${TARGET_SLUG:-windows} with Server IP: ${SERVER_IP}..."
+TMP_STARTNET="/tmp/startnet_gen_${TARGET_SLUG:-default}.cmd"
+sed -e "s/SERVER_IP_PLACEHOLDER/${SERVER_IP}/g" \
+    -e "s/TARGET_SLUG_PLACEHOLDER/${TARGET_SLUG:-windows}/g" \
+    "${STARTNET_SRC}" > "${TMP_STARTNET}"
 
 # Check available images in boot.wim
 IMAGE_COUNT=$(wiminfo "${WIN_DIR}/sources/boot.wim" | grep "Image Count:" | awk '{print $3}')
@@ -186,6 +199,9 @@ fi
 chmod -R a+r "${WIN_DIR}/iso_extracted/"
 find "${WIN_DIR}/iso_extracted/" -type d -exec chmod 755 {} +
 
-log_ok "Windows сетевая установка и WinPE подготовлены успешно!"
+echo "$(basename "${ISO_PATH}")" > "${WIN_DIR}/.source"
+echo "${TARGET_SLUG:-windows}" > "${WIN_DIR}/.slug"
+
+log_ok "Windows сетевая установка и WinPE подготовлены успешно (${TARGET_SLUG:-windows})!"
 log_ok "Wimboot файлы:"
 ls -lh "${WIN_DIR}/bootmgr"* "${WIN_DIR}/boot/"* "${WIN_DIR}/sources/boot.wim"

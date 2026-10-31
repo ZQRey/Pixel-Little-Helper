@@ -49,20 +49,33 @@ if %errorlevel% neq 0 (
 
 echo [+] Installation share mounted successfully on drive Z:
 echo.
-if exist Z:\autounattend.xml (
+
+set TARGET_DIR=Z:\TARGET_SLUG_PLACEHOLDER\iso_extracted
+if not exist "%TARGET_DIR%\setup.exe" set TARGET_DIR=Z:\TARGET_SLUG_PLACEHOLDER
+if not exist "%TARGET_DIR%\setup.exe" set TARGET_DIR=Z:\iso_extracted
+if not exist "%TARGET_DIR%\setup.exe" set TARGET_DIR=Z:\
+
+echo [+] Using installation media from: %TARGET_DIR%
+cd /d "%TARGET_DIR%"
+
+set INSTALL_OPT=
+if exist "%TARGET_DIR%\sources\install.esd" set INSTALL_OPT=/installfrom:"%TARGET_DIR%\sources\install.esd"
+if exist "%TARGET_DIR%\sources\install.wim" set INSTALL_OPT=/installfrom:"%TARGET_DIR%\sources\install.wim"
+
+set UNATTEND_OPT=
+if exist "%TARGET_DIR%\autounattend.xml" set UNATTEND_OPT=/unattend:"%TARGET_DIR%\autounattend.xml"
+if exist Z:\TARGET_SLUG_PLACEHOLDER\autounattend.xml set UNATTEND_OPT=/unattend:Z:\TARGET_SLUG_PLACEHOLDER\autounattend.xml
+if exist X:\autounattend.xml set UNATTEND_OPT=/unattend:X:\autounattend.xml
+
+if exist "%TARGET_DIR%\setup.exe" (
     echo ==============================================================================
-    echo Starting Automated Windows Setup with Z:\autounattend.xml...
+    echo Starting Windows Setup (%TARGET_DIR%)...
     echo ==============================================================================
-    Z:\setup.exe /unattend:Z:\autounattend.xml
-) else if exist Z:\setup.exe (
-    echo ==============================================================================
-    echo Starting Windows Setup from Z:\setup.exe...
-    echo ==============================================================================
-    Z:\setup.exe
+    "%TARGET_DIR%\setup.exe" %INSTALL_OPT% %UNATTEND_OPT%
 ) else (
-    echo [ERROR] Z:\setup.exe not found on share!
-    echo Contents of Z:
-    dir Z:\
+    echo [ERROR] setup.exe not found on share!
+    echo Contents of %TARGET_DIR%:
+    dir "%TARGET_DIR%"
     cmd /k
 )
 

@@ -31,7 +31,7 @@ services:
     container_name: pxe-samba
     network_mode: host
     volumes:
-      - /srv/www/pxe/os/windows/iso_extracted:/srv/www/pxe/os/windows/iso_extracted:ro
+      - /srv/www/pxe/os/windows:/srv/www/pxe/os/windows:ro
       - ./configs/samba-pxe.conf:/etc/samba/smb.conf:ro
       - /var/log/samba:/var/log/samba
     restart: unless-stopped

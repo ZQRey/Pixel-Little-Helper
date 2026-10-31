@@ -386,6 +386,8 @@ async def api_upload_image(file: UploadFile = File(...), target_dir: Optional[st
         shutil.copyfileobj(file.file, buffer)
     
     os.chmod(dest_path, 0o644)
+    if safe_name.lower().endswith(".iso"):
+        asyncio.create_task(_auto_prepare_iso(dest_path))
     return {"status": "ok", "filename": safe_name, "path": str(dest_path.relative_to(WEB_ROOT)).replace("\\", "/"), "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2)}
 
 
@@ -568,12 +570,33 @@ async def api_upload_complete(upload_id: str):
     except FileNotFoundError:
         pass
 
+    if safe_name.lower().endswith(".iso"):
+        asyncio.create_task(_auto_prepare_iso(dest_path))
+
     return {
         "status": "ok",
         "filename": safe_name,
         "path": str(dest_path.relative_to(WEB_ROOT)).replace("\\", "/"),
         "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2),
     }
+
+
+async def _auto_prepare_iso(iso_path: Path):
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "7z", "l", str(iso_path), "sources/boot.wim",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        if b"boot.wim" in stdout:
+            slug = _slugify(iso_path.stem)
+            target_dir = WEB_ROOT / "os" / "windows" / slug
+            if not (target_dir / "sources" / "boot.wim").exists():
+                script = SCRIPTS_DIR / "build_winpe.sh"
+                await run_cmd(f"bash '{script}' '{iso_path}' '{PXE_SERVER_IP}' '' '{slug}'")
+                regenerate_boot_menus()
+    except Exception as ex:
+        print(f"[auto_prepare_iso] {iso_path}: {ex}")
 
 
 def escape_xml(s: str) -> str:
@@ -727,25 +750,52 @@ def _menu_safe(text: str) -> str:
     return re.sub(r'[^A-Za-z0-9 \.\-\(\)_]', "", text).strip() or "Windows"
 
 
+def _slugify(text: str) -> str:
+    return re.sub(r'[^A-Za-z0-9_-]', '_', text).strip('_')
+
+
 def _available_boot_entries() -> List[dict]:
     os_dir = WEB_ROOT / "os"
     entries = []
 
-    win = os_dir / "windows"
-    win_files = [win / "bootmgr", win / "boot" / "bcd", win / "boot" / "boot.sdi", win / "sources" / "boot.wim"]
-    if all(f.exists() for f in win_files):
-        source_name = WINDOWS_SOURCE_FILE.read_text(encoding="utf-8").strip() if WINDOWS_SOURCE_FILE.exists() else ""
-        source_ok = not source_name or (WEB_ROOT / "images" / source_name).exists()
-        if source_ok:
-            title = Path(source_name).stem if source_name else "Windows"
-            entries.append({"kind": "windows", "title": f"Install {_menu_safe(title)}"})
+    # 1. Scan for all multi-image Windows distributions in /srv/www/pxe/os/windows/*/
+    win_base = os_dir / "windows"
+    if win_base.exists():
+        for sub in sorted(win_base.iterdir()):
+            if sub.is_dir() and sub.name not in ("boot", "sources", "iso_extracted"):
+                wim = sub / "sources" / "boot.wim"
+                bcd = sub / "boot" / "bcd"
+                if wim.exists() and bcd.exists():
+                    source_file = sub / ".source"
+                    raw_title = source_file.read_text(encoding="utf-8").strip() if source_file.exists() else sub.name
+                    title = Path(raw_title).stem
+                    entries.append({
+                        "kind": "windows",
+                        "slug": sub.name,
+                        "title": f"Install {_menu_safe(title)}",
+                        "rel_path": f"os/windows/{sub.name}"
+                    })
 
+        # Backward compatibility for legacy single-image /os/windows/
+        single_wim = win_base / "sources" / "boot.wim"
+        if single_wim.exists() and (win_base / "boot" / "bcd").exists() and not any(e["kind"] == "windows" for e in entries):
+            source_file = win_base / ".source"
+            raw_title = source_file.read_text(encoding="utf-8").strip() if source_file.exists() else "Windows"
+            title = Path(raw_title).stem
+            entries.append({
+                "kind": "windows",
+                "slug": "windows",
+                "title": f"Install {_menu_safe(title)}",
+                "rel_path": "os/windows"
+            })
+
+    # 2. Linux distributions
     if (os_dir / "debian" / "linux").exists() and (os_dir / "debian" / "initrd.gz").exists():
-        entries.append({"kind": "debian", "title": "Debian Netinstall"})
+        entries.append({"kind": "debian", "title": "Debian Netinstall", "rel_path": "os/debian"})
     if (os_dir / "sysrescue" / "vmlinuz").exists() and (os_dir / "sysrescue" / "initram.img").exists():
-        entries.append({"kind": "sysrescue", "title": "SystemRescue"})
+        entries.append({"kind": "sysrescue", "title": "SystemRescue", "rel_path": "os/sysrescue"})
     if (os_dir / "clonezilla" / "vmlinuz").exists() and (os_dir / "clonezilla" / "filesystem.squashfs").exists():
-        entries.append({"kind": "clonezilla", "title": "Clonezilla Live"})
+        entries.append({"kind": "clonezilla", "title": "Clonezilla Live", "rel_path": "os/clonezilla"})
     return entries
 
 
@@ -786,18 +836,19 @@ def _build_pxelinux_menu(entries: List[dict]) -> str:
         lines.append(f"LABEL img{i}")
         lines.append(f"    MENU LABEL ^{i}. {e['title']}")
         k = e["kind"]
+        rp = e.get("rel_path", "os/windows")
         if k == "windows":
             lines.append("    KERNEL linux.c32")
-            lines.append(f"    APPEND {h}/tools/wimboot initrdfile={h}/os/windows/bootmgr,{h}/os/windows/boot/bcd,{h}/os/windows/boot/boot.sdi,{h}/os/windows/sources/boot.wim")
+            lines.append(f"    APPEND {h}/tools/wimboot initrdfile={h}/{rp}/bootmgr,{h}/{rp}/boot/bcd,{h}/{rp}/boot/boot.sdi,{h}/{rp}/sources/boot.wim")
         elif k == "debian":
-            lines.append(f"    KERNEL {h}/os/debian/linux")
-            lines.append(f"    APPEND initrd={h}/os/debian/initrd.gz vga=788 --- quiet")
+            lines.append(f"    KERNEL {h}/{rp}/linux")
+            lines.append(f"    APPEND initrd={h}/{rp}/initrd.gz vga=788 --- quiet")
         elif k == "sysrescue":
-            lines.append(f"    KERNEL {h}/os/sysrescue/vmlinuz")
-            lines.append(f"    APPEND initrd={h}/os/sysrescue/initram.img archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/os/sysrescue/ copytoram")
+            lines.append(f"    KERNEL {h}/{rp}/vmlinuz")
+            lines.append(f"    APPEND initrd={h}/{rp}/initram.img archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/{rp}/ copytoram")
         elif k == "clonezilla":
-            lines.append(f"    KERNEL {h}/os/clonezilla/vmlinuz")
-            lines.append(f"    APPEND initrd={h}/os/clonezilla/initrd.img boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/os/clonezilla/filesystem.squashfs")
+            lines.append(f"    KERNEL {h}/{rp}/vmlinuz")
+            lines.append(f"    APPEND initrd={h}/{rp}/initrd.img boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/{rp}/filesystem.squashfs")
         lines.append("")
     if not entries:
         lines += ["LABEL none", "    MENU LABEL (No images available)", "    MENU DISABLE", ""]
@@ -863,19 +914,20 @@ def _build_grub_menu(entries: List[dict]) -> str:
             cls = "sysrescue"
         elif k == "clonezilla":
             cls = "clonezilla"
+        rp = e.get("rel_path", "os/windows")
         out.append(f'menuentry "{e["title"]}" --class {cls} --class os {{')
         if k == "windows":
             out.append(f"    linux {s}/tools/wimboot")
-            out.append(f"    initrd newc:bootmgr.efi:{s}/os/windows/bootmgr.efi newc:bcd:{s}/os/windows/boot/bcd newc:boot.sdi:{s}/os/windows/boot/boot.sdi newc:boot.wim:{s}/os/windows/sources/boot.wim")
+            out.append(f"    initrd newc:bootmgr.efi:{s}/{rp}/bootmgr.efi newc:bcd:{s}/{rp}/boot/bcd newc:boot.sdi:{s}/{rp}/boot/boot.sdi newc:boot.wim:{s}/{rp}/sources/boot.wim")
         elif k == "debian":
-            out.append(f"    linux {s}/os/debian/linux vga=788 --- quiet")
-            out.append(f"    initrd {s}/os/debian/initrd.gz")
+            out.append(f"    linux {s}/{rp}/linux vga=788 --- quiet")
+            out.append(f"    initrd {s}/{rp}/initrd.gz")
         elif k == "sysrescue":
-            out.append(f"    linux {s}/os/sysrescue/vmlinuz archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/os/sysrescue/ copytoram")
-            out.append(f"    initrd {s}/os/sysrescue/initram.img")
+            out.append(f"    linux {s}/{rp}/vmlinuz archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/{rp}/ copytoram")
+            out.append(f"    initrd {s}/{rp}/initram.img")
         elif k == "clonezilla":
-            out.append(f"    linux {s}/os/clonezilla/vmlinuz boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/os/clonezilla/filesystem.squashfs")
-            out.append(f"    initrd {s}/os/clonezilla/initrd.img")
+            out.append(f"    linux {s}/{rp}/vmlinuz boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/{rp}/filesystem.squashfs")
+            out.append(f"    initrd {s}/{rp}/initrd.img")
         out += ["}", ""]
     if not entries:
         out += ['menuentry "(Нет доступных образов)" { true }', ""]
@@ -940,8 +992,9 @@ async def api_process_windows(req: WinPeProcessRequest):
     unattend_tmp = Path("/tmp/autounattend.xml")
     unattend_tmp.write_text(autounattend_content, encoding="utf-8")
 
+    target_slug = _slugify(iso_file.stem)
     script = SCRIPTS_DIR / "build_winpe.sh"
-    cmd = f"bash '{script}' '{iso_file}' '{req.server_ip}' '{unattend_tmp}'"
+    cmd = f"bash '{script}' '{iso_file}' '{req.server_ip}' '{unattend_tmp}' '{target_slug}'"
     code, out, err = await run_cmd(cmd)
     if code == 0:
         try:
@@ -955,7 +1008,8 @@ async def api_process_windows(req: WinPeProcessRequest):
         "status": "ok" if code == 0 else "error",
         "return_code": code,
         "stdout": out,
-        "stderr": err
+        "stderr": err,
+        "slug": target_slug
     }
 
 

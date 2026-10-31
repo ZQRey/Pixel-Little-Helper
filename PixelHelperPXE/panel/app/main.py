@@ -838,7 +838,31 @@ def generate_autounattend_xml(req: WinPeProcessRequest) -> str:
 # -----------------------------------------------------------------------------
 # Dynamic boot menus: only show entries for images that are actually present
 # -----------------------------------------------------------------------------
-PXE_SERVER_IP = os.getenv("PXE_SERVER_IP", "172.16.16.61")
+def get_server_ip() -> str:
+    ip = os.getenv("PXE_SERVER_IP") or os.getenv("SERVER_IP")
+    if ip and ip != "172.16.16.61":
+        return ip
+    try:
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("1.1.1.1", 80))
+            return s.getsockname()[0]
+    except Exception:
+        pass
+    try:
+        import socket
+        for iface, addrs in psutil.net_if_addrs().items():
+            if any(iface.startswith(x) for x in ("lo", "docker", "veth", "br-")):
+                continue
+            for addr in addrs:
+                if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                    return addr.address
+    except Exception:
+        pass
+    return ip or "172.16.16.61"
+
+
+PXE_SERVER_IP = get_server_ip()
 HTTP_PORT = os.getenv("PXE_HTTP_PORT", "8088")
 WINDOWS_SOURCE_FILE = WEB_ROOT / "os" / "windows" / ".source"
 

@@ -920,13 +920,10 @@ def _build_grub_menu(entries: List[dict]) -> str:
         "set gfxpayload=keep",
         "terminal_output gfxterm",
         "",
-        "# Load Fonts (with and without prefix for maximum compatibility)",
+        "# Load Fonts",
         "loadfont $prefix/themes/pixel/fonts/dejavu_14.pf2",
         "loadfont $prefix/themes/pixel/fonts/dejavu_bold_14.pf2",
         "loadfont $prefix/themes/pixel/fonts/dejavu_11.pf2",
-        "loadfont /debian-installer/amd64/grub/themes/pixel/fonts/dejavu_14.pf2",
-        "loadfont /grub/themes/pixel/fonts/dejavu_14.pf2",
-        "loadfont /themes/pixel/fonts/dejavu_14.pf2",
         "loadfont $prefix/font.pf2",
         "",
         "# Set Branded Pixel Little Helper Theme",
@@ -999,6 +996,10 @@ def regenerate_boot_menus() -> List[dict]:
             path.write_text(content, encoding="utf-8")
         except Exception as ex:
             print(f"[menu] cannot write {path}: {ex}")
+    try:
+        subprocess.run(["chmod", "-R", "a+rX", str(TFTP_ROOT)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
     return entries
 
 

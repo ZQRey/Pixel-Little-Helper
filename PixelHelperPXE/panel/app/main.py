@@ -639,10 +639,18 @@ async def _auto_prepare_iso(iso_path: Path):
             setup_script = f"""
 cd '{target_dir}'
 ln -sf EFI/boot/bootx64.efi bootx64.efi 2>/dev/null || true
-ln -sf EFI/microsoft/boot/BCD BCD 2>/dev/null || true
 ln -sf SSTR/boot.sdi boot.sdi 2>/dev/null || true
 mkdir -p boot sources
-ln -sf ../BCD boot/bcd 2>/dev/null || true
+if [ -f /srv/www/pxe/tools/winpe_clean.bcd ]; then
+    cp -f /srv/www/pxe/tools/winpe_clean.bcd boot/bcd
+    cp -f /srv/www/pxe/tools/winpe_clean.bcd BCD
+elif [ -f /srv/www/pxe/os/windows/Windows_10_22H2_Setup/boot/bcd ]; then
+    cp -f /srv/www/pxe/os/windows/Windows_10_22H2_Setup/boot/bcd boot/bcd
+    cp -f /srv/www/pxe/os/windows/Windows_10_22H2_Setup/boot/bcd BCD
+else
+    ln -sf EFI/microsoft/boot/BCD BCD 2>/dev/null || true
+    ln -sf ../BCD boot/bcd 2>/dev/null || true
+fi
 ln -sf ../boot.sdi boot/boot.sdi 2>/dev/null || true
 ln -sf ../SSTR/strelec11x64.wim sources/boot.wim 2>/dev/null || true
 echo '{iso_path.stem}' > .source
@@ -679,12 +687,31 @@ exit
 """
             tmp_net = target_dir / "network_pxe.cmd"
             tmp_net.write_text(net_cmd, encoding="latin1")
+
+            winpeshl_content = "[LaunchApps]\nwpeinit.exe\ncmd.exe, /c %windir%\\system32\\network_pxe.cmd\n"
+            tmp_shl = target_dir / "winpeshl.ini"
+            tmp_shl.write_text(winpeshl_content, encoding="ascii")
+
             for w in [target_dir / "SSTR" / "strelec11x64.wim", target_dir / "SSTR" / "strelec10x64.wim"]:
                 if w.exists():
-                    await run_cmd(f"wimlib-imagex update '{w}' 1 --command='add \"{tmp_net}\" /Windows/System32/network_pxe.cmd'")
+                    await run_cmd(f"wimlib-imagex update '{w}' 1 --command='add \"{tmp_net}\" /Windows/System32/network_pxe.cmd' --command='add \"{tmp_shl}\" /Windows/System32/winpeshl.ini'")
             regenerate_boot_menus()
 
-        # 2. Standard Windows Installer ISO (sources/boot.wim)
+        # 2. Linux Live ISO with casper (Linux Mint, Ubuntu, etc.)
+        elif b"casper/vmlinuz" in stdout or b"casper\\vmlinuz" in stdout:
+            linux_target_dir = WEB_ROOT / "os" / "linux" / slug
+            linux_target_dir.mkdir(parents=True, exist_ok=True)
+            unpack = await asyncio.create_subprocess_exec(
+                "7z", "e", "-y", f"-o{linux_target_dir}", str(iso_path), "casper/vmlinuz", "casper/initrd*"
+            )
+            await unpack.communicate()
+            (linux_target_dir / ".source").write_text(iso_path.name, encoding="utf-8")
+            clean_title = iso_path.stem.replace("-", " ").replace("_", " ").title()
+            (linux_target_dir / ".title").write_text(clean_title, encoding="utf-8")
+            await run_cmd(f"chmod -R a+rX '{linux_target_dir}'")
+            regenerate_boot_menus()
+
+        # 3. Standard Windows Installer ISO (sources/boot.wim)
         elif b"boot.wim" in stdout:
             if not (target_dir / "sources" / "boot.wim").exists():
                 script = SCRIPTS_DIR / "build_winpe.sh"
@@ -891,36 +918,25 @@ def _available_boot_entries() -> List[dict]:
                 extracted_slugs.add(sub.name)
                 extracted_slugs.add(_slugify(sub.name))
                 extracted_slugs.add(_slugify(title))
+                if source_file.exists():
+                    extracted_slugs.add(_slugify(source_file.read_text(encoding="utf-8").strip()))
 
                 # Check for Sergei Strelec / WinPE with SSTR/ directory
                 strelec11 = sub / "SSTR" / "strelec11x64.wim"
                 strelec10 = sub / "SSTR" / "strelec10x64.wim"
                 if strelec11.exists() or strelec10.exists():
-                    clean_title = _menu_safe(title).replace("WinPE", "").strip()
-                    if strelec11.exists():
-                        entries.append({
-                            "kind": "winpe",
-                            "slug": f"{sub.name}_pe11",
-                            "title": f"WinPE 11 Sergei Strelec (x64)",
-                            "rel_path": f"os/windows/{sub.name}",
-                            "wim_path": f"os/windows/{sub.name}/SSTR/strelec11x64.wim",
-                            "bootmgr": f"os/windows/{sub.name}/bootmgr",
-                            "bootx64": f"os/windows/{sub.name}/bootx64.efi",
-                            "bcd": f"os/windows/{sub.name}/BCD",
-                            "sdi": f"os/windows/{sub.name}/boot.sdi",
-                        })
-                    if strelec10.exists():
-                        entries.append({
-                            "kind": "winpe",
-                            "slug": f"{sub.name}_pe10",
-                            "title": f"WinPE 10 Sergei Strelec (x64)",
-                            "rel_path": f"os/windows/{sub.name}",
-                            "wim_path": f"os/windows/{sub.name}/SSTR/strelec10x64.wim",
-                            "bootmgr": f"os/windows/{sub.name}/bootmgr",
-                            "bootx64": f"os/windows/{sub.name}/bootx64.efi",
-                            "bcd": f"os/windows/{sub.name}/BCD",
-                            "sdi": f"os/windows/{sub.name}/boot.sdi",
-                        })
+                    wim_file = "SSTR/strelec11x64.wim" if strelec11.exists() else "SSTR/strelec10x64.wim"
+                    entries.append({
+                        "kind": "winpe",
+                        "slug": sub.name,
+                        "title": "WinPE Sergei Strelec (x64)",
+                        "rel_path": f"os/windows/{sub.name}",
+                        "wim_path": f"os/windows/{sub.name}/{wim_file}",
+                        "bootmgr": f"os/windows/{sub.name}/bootmgr",
+                        "bootx64": f"os/windows/{sub.name}/bootx64.efi",
+                        "bcd": f"os/windows/{sub.name}/boot/bcd",
+                        "sdi": f"os/windows/{sub.name}/boot.sdi",
+                    })
                     continue
 
                 # Standard Windows setup with boot.wim
@@ -958,7 +974,43 @@ def _available_boot_entries() -> List[dict]:
                 "sdi": "os/windows/boot/boot.sdi",
             })
 
-    # 2. Linux distributions
+    # 2. Linux distributions in /srv/www/pxe/os/linux/*/
+    linux_base = os_dir / "linux"
+    if linux_base.exists():
+        for sub in sorted(linux_base.iterdir()):
+            if sub.is_dir():
+                vmlinuz = sub / "vmlinuz"
+                initrd_name = None
+                for cand in ["initrd.lz", "initrd.img", "initrd", "initrd.gz"]:
+                    if (sub / cand).exists():
+                        initrd_name = cand
+                        break
+                if vmlinuz.exists() and initrd_name:
+                    title_file = sub / ".title"
+                    source_file = sub / ".source"
+                    if title_file.exists():
+                        title = title_file.read_text(encoding="utf-8").strip()
+                    elif source_file.exists():
+                        src_text = source_file.read_text(encoding="utf-8").strip()
+                        title = Path(src_text).stem if src_text.lower().endswith(".iso") else src_text
+                    else:
+                        title = sub.name
+                    iso_name = source_file.read_text(encoding="utf-8").strip() if source_file.exists() else f"{sub.name}.iso"
+                    extracted_slugs.add(sub.name)
+                    extracted_slugs.add(_slugify(sub.name))
+                    extracted_slugs.add(_slugify(title))
+                    extracted_slugs.add(_slugify(iso_name))
+                    entries.append({
+                        "kind": "casper",
+                        "slug": f"linux_{sub.name}",
+                        "title": _menu_safe(title),
+                        "rel_path": f"os/linux/{sub.name}",
+                        "vmlinuz": f"os/linux/{sub.name}/vmlinuz",
+                        "initrd": f"os/linux/{sub.name}/{initrd_name}",
+                        "iso_url": f"http://{PXE_SERVER_IP}:{HTTP_PORT}/images/{urllib.parse.quote(iso_name)}",
+                        "iso_name": iso_name,
+                    })
+
     if (os_dir / "debian" / "linux").exists() and (os_dir / "debian" / "initrd.gz").exists():
         entries.append({"kind": "debian", "title": "Debian Netinstall", "rel_path": "os/debian"})
     if (os_dir / "sysrescue" / "vmlinuz").exists() and (os_dir / "sysrescue" / "initram.img").exists():
@@ -1031,6 +1083,12 @@ def _build_pxelinux_menu(entries: List[dict]) -> str:
         elif k == "iso":
             lines.append("    KERNEL memdisk")
             lines.append(f"    APPEND iso raw initrd={h}/{rp}")
+        elif k == "casper":
+            vmlinuz = e["vmlinuz"]
+            initrd = e["initrd"]
+            iso_url = e["iso_url"]
+            lines.append(f"    KERNEL {h}/{vmlinuz}")
+            lines.append(f"    APPEND initrd={h}/{initrd} boot=casper netboot=url url={iso_url} ip=dhcp quiet splash --")
         elif k == "debian":
             lines.append(f"    KERNEL {h}/{rp}/linux")
             lines.append(f"    APPEND initrd={h}/{rp}/initrd.gz vga=788 --- quiet")
@@ -1113,6 +1171,13 @@ def _build_ipxe_menu(entries: List[dict]) -> str:
             lines.append("boot || goto error")
         elif k == "iso":
             lines.append(f"sanboot --no-describe {h}/{rp} || goto error")
+        elif k == "casper":
+            vmlinuz = e["vmlinuz"]
+            initrd = e["initrd"]
+            iso_url = e["iso_url"]
+            lines.append(f"kernel {h}/{vmlinuz} boot=casper netboot=url url={iso_url} ip=dhcp quiet splash --")
+            lines.append(f"initrd {h}/{initrd}")
+            lines.append("boot || goto error")
         elif k == "debian":
             lines.append(f"kernel {h}/{rp}/linux vga=788 --- quiet")
             lines.append(f"initrd {h}/{rp}/initrd.gz")
@@ -1194,6 +1259,13 @@ def _build_grub_menu(entries: List[dict]) -> str:
         cls = "os"
         if k in ("windows", "winpe"):
             cls = "windows"
+        elif k == "casper":
+            cls = "gnu-linux"
+            t_lower = e["title"].lower()
+            if "mint" in t_lower:
+                cls = "linuxmint"
+            elif "ubuntu" in t_lower:
+                cls = "ubuntu"
         elif k == "debian":
             cls = "debian"
         elif k == "sysrescue":
@@ -1205,6 +1277,13 @@ def _build_grub_menu(entries: List[dict]) -> str:
         if k in ("windows", "winpe", "iso"):
             out.append(f'    echo "Запуск сетевого загрузчика iPXE для {e["title"]}..."')
             out.append(f"    chainloader {s}/tools/ipxe.efi")
+        elif k == "casper":
+            vmlinuz = e["vmlinuz"]
+            initrd = e["initrd"]
+            iso_url = e["iso_url"]
+            out.append(f'    echo "Загрузка ядра {e["title"]} по сети..."')
+            out.append(f'    linux {s}/{vmlinuz} boot=casper netboot=url url={iso_url} ip=dhcp quiet splash --')
+            out.append(f'    initrd {s}/{initrd}')
         elif k == "debian":
             out.append(f"    linux {s}/{rp}/linux vga=788 --- quiet")
             out.append(f"    initrd {s}/{rp}/initrd.gz")
@@ -1263,6 +1342,15 @@ def regenerate_boot_menus() -> List[dict]:
 
 @app.on_event("startup")
 async def _startup_regenerate_menus():
+    # Scan images and auto-prepare any unprepared ISOs in background
+    images_dir = WEB_ROOT / "images"
+    if images_dir.exists():
+        for iso_file in sorted(images_dir.glob("*.iso")):
+            slug = _slugify(iso_file.stem)
+            win_target = WEB_ROOT / "os" / "windows" / slug
+            linux_target = WEB_ROOT / "os" / "linux" / slug
+            if not win_target.exists() and not linux_target.exists():
+                asyncio.create_task(_auto_prepare_iso(iso_file))
     regenerate_boot_menus()
 
 

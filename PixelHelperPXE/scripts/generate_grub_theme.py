@@ -141,7 +141,7 @@ def generate_background_1080p():
     print(f"[OK] Generated {THEME_DIR / 'background.png'}")
 
 def generate_syslinux_splash():
-    # 1024x768 for Syslinux vesamenu
+    # 1024x768 for Syslinux vesamenu and iPXE UEFI
     W, H = 1024, 768
     im = Image.new("RGBA", (W, H))
     draw = ImageDraw.Draw(im)
@@ -169,12 +169,11 @@ def generate_syslinux_splash():
     # Divider line
     draw.line([(110, 88), (914, 88)], fill=(34, 64, 104, 180), width=1)
     
-    # Menu container card (matching MENU VSHIFT 9, MARGIN 16, WIDTH 96)
-    # Row 9 is 144px, Row 24 is 384px
+    # Menu container card (matching MENU VSHIFT 10, MARGIN 16, WIDTH 96)
     card_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     cdraw = ImageDraw.Draw(card_layer)
     card_x1, card_y1 = 110, 110
-    card_x2, card_y2 = 914, 430
+    card_x2, card_y2 = 914, 560
     cdraw.rounded_rectangle([card_x1, card_y1, card_x2, card_y2], radius=14, fill=C_CARD_BG, outline=C_CARD_BORDER, width=2)
     
     # Card Header strip
@@ -185,13 +184,49 @@ def generate_syslinux_splash():
     im = Image.alpha_composite(im, card_layer)
     draw = ImageDraw.Draw(im)
     
-    # Footer
+    # Footer Instructions & Copy
+    f_footer = get_font(12, bold=False)
+    footer_text_bios = "↑ / ↓ : Навигация по меню   •   Enter : Запуск выбранной ОС   •   Tab : Параметры загрузки"
+    bbox = draw.textbbox((0, 0), footer_text_bios, font=f_footer)
+    tw = bbox[2] - bbox[0]
+    draw.text(((W - tw) // 2, 680), footer_text_bios, font=f_footer, fill=C_TEXT_MUTED)
+
     f_copy = get_font(11, bold=False)
     draw.text((110, 725), "Pixel Little Helper PXE Engine • Server 172.16.16.61", font=f_copy, fill=(98, 124, 158))
     
     rgb_im = im.convert("RGB")
     rgb_im.save(THEME_DIR / "splash_bios.png", "PNG", optimize=True)
     print(f"[OK] Generated {THEME_DIR / 'splash_bios.png'}")
+
+    # Also generate splash_uefi.png for iPXE UEFI mode
+    im_uefi = Image.new("RGBA", (W, H))
+    draw_u = ImageDraw.Draw(im_uefi)
+    for y in range(H):
+        t = y / float(H)
+        r = int(C_BG_TOP[0] * (1 - t) + C_BG_BOTTOM[0] * t)
+        g = int(C_BG_TOP[1] * (1 - t) + C_BG_BOTTOM[1] * t)
+        b = int(C_BG_TOP[2] * (1 - t) + C_BG_BOTTOM[2] * t)
+        draw_u.line([(0, y), (W, y)], fill=(r, g, b, 255))
+    draw_robot_face(draw_u, 110, 26, size=52)
+    draw_u.text((178, 28), "PIXEL LITTLE HELPER", font=f_title, fill=C_TEXT_WHITE)
+    draw_u.text((180, 58), "AUTONOMOUS PXE BOOT MENU (UEFI / HIGH-SPEED)", font=f_sub, fill=C_CYAN_LIGHT)
+    draw_u.rounded_rectangle([750, 32, 914, 58], radius=6, fill=(18, 40, 68), outline=C_CARD_BORDER)
+    draw_u.ellipse([762, 40, 772, 50], fill=C_GREEN_ONLINE)
+    draw_u.text((780, 37), "UEFI x64 Mode", font=f_badge, fill=C_TEXT_WHITE)
+    draw_u.line([(110, 88), (914, 88)], fill=(34, 64, 104, 180), width=1)
+    
+    im_uefi = Image.alpha_composite(im_uefi, card_layer)
+    draw_u = ImageDraw.Draw(im_uefi)
+
+    footer_text_uefi = "↑ / ↓ : Навигация по меню   •   Enter : Запуск выбранной ОС   •   Esc : Выход в iPXE shell"
+    bbox_u = draw_u.textbbox((0, 0), footer_text_uefi, font=f_footer)
+    tw_u = bbox_u[2] - bbox_u[0]
+    draw_u.text(((W - tw_u) // 2, 680), footer_text_uefi, font=f_footer, fill=C_TEXT_MUTED)
+
+    draw_u.text((110, 725), "Pixel Little Helper PXE Engine • Server 172.16.16.61", font=f_copy, fill=(98, 124, 158))
+    rgb_u = im_uefi.convert("RGB")
+    rgb_u.save(THEME_DIR / "splash_uefi.png", "PNG", optimize=True)
+    print(f"[OK] Generated {THEME_DIR / 'splash_uefi.png'}")
 
 def generate_select_9slice():
     # Generates 9-slice images for selected_item_pixmap_style

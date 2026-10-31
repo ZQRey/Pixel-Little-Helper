@@ -901,13 +901,17 @@ def _build_ipxe_menu(entries: List[dict]) -> str:
         "set submenu-timeout ${menu-timeout}",
         "",
         "# Styling & Console Configuration",
-        f"console --picture {h}/splash_bios.png --x 1024 --y 768 ||",
+        f"console --picture {h}/splash_uefi.png --x 1024 --y 768 --left 140 --right 140 --top 144 --bottom 208 ||",
         "colour --rgb 0x246bfd 1",
         "colour --rgb 0x9fb5ce 2",
-        "colour --rgb 0x00d2ff 3",
+        "colour --rgb 0x82caef 3",
+        "colour --rgb 0xffffff 7",
+        "cpair --foreground 7 --background 1 2",
+        "cpair --foreground 3 --background 4 3",
+        "cpair --foreground 2 --background 4 1",
         "",
         ":menu",
-        "menu Pixel Little Helper - Autonomous Network Boot (UEFI)",
+        "menu",
         "item --gap -- Available Operating Systems:",
     ]
     for i, e in enumerate(entries, 1):
@@ -934,11 +938,9 @@ def _build_ipxe_menu(entries: List[dict]) -> str:
         lines.append(f":{slug}")
         lines.append(f"echo Загрузка {e['title']}...")
         if k == "windows":
-            lines.append(f"kernel {h}/tools/wimboot gui")
-            lines.append(f"initrd {h}/{rp}/bootmgr.efi bootmgr.efi")
-            lines.append(f"initrd {h}/{rp}/boot/bcd bcd")
-            lines.append(f"initrd {h}/{rp}/boot/boot.sdi boot.sdi")
-            lines.append(f"initrd {h}/{rp}/sources/boot.wim boot.wim")
+            lines.append(f"kernel {h}/tools/wimboot")
+            lines.append(f"initrd --name bootx64.efi {h}/{rp}/bootx64.efi")
+            lines.append(f"initrd --name boot.wim {h}/{rp}/sources/boot.wim")
             lines.append("boot || goto error")
         elif k == "debian":
             lines.append(f"kernel {h}/{rp}/linux vga=788 --- quiet")

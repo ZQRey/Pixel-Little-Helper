@@ -146,7 +146,7 @@ def generate_background_1080p():
 def generate_syslinux_splash():
     # 1024x768 for Syslinux vesamenu
     W, H = 1024, 768
-    im = Image.new("RGB", (W, H))
+    im = Image.new("RGBA", (W, H))
     draw = ImageDraw.Draw(im)
     
     for y in range(H):
@@ -154,18 +154,46 @@ def generate_syslinux_splash():
         r = int(C_BG_TOP[0] * (1 - t) + C_BG_BOTTOM[0] * t)
         g = int(C_BG_TOP[1] * (1 - t) + C_BG_BOTTOM[1] * t)
         b = int(C_BG_TOP[2] * (1 - t) + C_BG_BOTTOM[2] * t)
-        draw.line([(0, y), (W, y)], fill=(r, g, b))
+        draw.line([(0, y), (W, y)], fill=(r, g, b, 255))
         
-    draw_robot_face(draw, 140, 40, size=48)
-    f_title = get_font(20, bold=True)
-    f_sub = get_font(11, bold=False)
-    draw.text((200, 42), "PIXEL LITTLE HELPER", font=f_title, fill=C_TEXT_WHITE)
-    draw.text((202, 70), "AUTONOMOUS PXE BOOT MENU (BIOS)", font=f_sub, fill=C_CYAN_LIGHT)
+    # Header: Mascot & Title
+    draw_robot_face(draw, 110, 26, size=52)
+    f_title = get_font(22, bold=True)
+    f_sub = get_font(12, bold=False)
+    draw.text((178, 28), "PIXEL LITTLE HELPER", font=f_title, fill=C_TEXT_WHITE)
+    draw.text((180, 58), "AUTONOMOUS PXE BOOT MENU (BIOS / LEGACY)", font=f_sub, fill=C_CYAN_LIGHT)
     
-    # Outer card outline
-    draw.rounded_rectangle([130, 110, 894, 660], radius=12, outline=C_CARD_BORDER, width=2)
+    # Mode badge on top right
+    draw.rounded_rectangle([750, 32, 914, 58], radius=6, fill=(18, 40, 68), outline=C_CARD_BORDER)
+    draw.ellipse([762, 40, 772, 50], fill=C_GREEN_ONLINE)
+    f_badge = get_font(11, bold=True)
+    draw.text((780, 37), "Legacy BIOS Mode", font=f_badge, fill=C_TEXT_WHITE)
+
+    # Divider line
+    draw.line([(110, 88), (914, 88)], fill=(34, 64, 104, 180), width=1)
     
-    im.save(THEME_DIR / "splash_bios.png", "PNG", optimize=True)
+    # Menu container card (matching MENU VSHIFT 9, MARGIN 16, WIDTH 96)
+    # Row 9 is 144px, Row 24 is 384px
+    card_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    cdraw = ImageDraw.Draw(card_layer)
+    card_x1, card_y1 = 110, 110
+    card_x2, card_y2 = 914, 430
+    cdraw.rounded_rectangle([card_x1, card_y1, card_x2, card_y2], radius=14, fill=C_CARD_BG, outline=C_CARD_BORDER, width=2)
+    
+    # Card Header strip
+    cdraw.rounded_rectangle([card_x1 + 2, card_y1 + 2, card_x2 - 2, card_y1 + 34], radius=12, fill=(20, 39, 64, 255))
+    f_card_hdr = get_font(11, bold=True)
+    cdraw.text((card_x1 + 18, card_y1 + 10), "AVAILABLE NETWORK INSTALLATIONS", font=f_card_hdr, fill=C_CYAN_LIGHT)
+    
+    im = Image.alpha_composite(im, card_layer)
+    draw = ImageDraw.Draw(im)
+    
+    # Footer
+    f_copy = get_font(11, bold=False)
+    draw.text((110, 725), "Pixel Little Helper PXE Engine • Server 172.16.16.61", font=f_copy, fill=(98, 124, 158))
+    
+    rgb_im = im.convert("RGB")
+    rgb_im.save(THEME_DIR / "splash_bios.png", "PNG", optimize=True)
     print(f"[OK] Generated {THEME_DIR / 'splash_bios.png'}")
 
 def generate_select_9slice():
@@ -312,3 +340,4 @@ if __name__ == "__main__":
     generate_icons()
     generate_theme_txt()
     print("[SUCCESS] All theme assets generated successfully!")
+

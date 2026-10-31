@@ -760,9 +760,19 @@ def _build_pxelinux_menu(entries: List[dict]) -> str:
         "",
         "MENU RESOLUTION 1024 768",
         "MENU BACKGROUND splash_bios.png",
-        "MENU TITLE Pixel Little Helper - Autonomous Network Boot",
+        "MENU NOTITLE 1",
         "",
-        "MENU COLOR border 30;44 #224068 #00000000 none",
+        "# Position menu inside branded container card",
+        "MENU VSHIFT 10",
+        "MENU ROWS 8",
+        "MENU MARGIN 16",
+        "MENU WIDTH 96",
+        "MENU TABMSGROW 20",
+        "MENU CMDLINEROW 20",
+        "MENU TIMEOUTROW 22",
+        "",
+        "# Color palette matching Pixel Little Helper dark navy & accent blue",
+        "MENU COLOR border 30;44 #00000000 #00000000 none",
         "MENU COLOR title 1;36;44 #ffffff #00000000 none",
         "MENU COLOR sel 7;37;40 #ffffff #246bfd all",
         "MENU COLOR unsel 37;44 #9fb5ce #00000000 none",
@@ -790,12 +800,12 @@ def _build_pxelinux_menu(entries: List[dict]) -> str:
             lines.append(f"    APPEND initrd={h}/os/clonezilla/initrd.img boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/os/clonezilla/filesystem.squashfs")
         lines.append("")
     if not entries:
-        lines += ["LABEL none", "    MENU LABEL (Нет доступных образов)", "    MENU DISABLE", ""]
+        lines += ["LABEL none", "    MENU LABEL (No images available)", "    MENU DISABLE", ""]
     lines += [
         "MENU SEPARATOR", "",
-        "LABEL local", "    MENU LABEL Загрузка с локального диска (Local Hard Drive)", "    MENU DEFAULT", "    COM32 chain.c32", "    APPEND hd0", "",
-        "LABEL reboot", "    MENU LABEL Перезагрузка (Reboot)", "    COM32 reboot.c32", "",
-        "LABEL poweroff", "    MENU LABEL Выключение (Power Off)", "    COM32 poweroff.c32", "",
+        "LABEL local", "    MENU LABEL Boot from local hard drive", "    MENU DEFAULT", "    COM32 chain.c32", "    APPEND hd0", "",
+        "LABEL reboot", "    MENU LABEL Reboot machine", "    COM32 reboot.c32", "",
+        "LABEL poweroff", "    MENU LABEL Power off machine", "    COM32 poweroff.c32", "",
     ]
     return "\n".join(lines)
 

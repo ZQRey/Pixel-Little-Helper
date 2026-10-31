@@ -54,6 +54,17 @@ fi
 
 mkdir -p "${WIN_DIR}"/{boot,sources,iso_extracted}
 
+# Check disk space on target partition (need at least 6 GB free)
+AVAIL_KB=$(df -k "${WIN_DIR}" | awk 'NR==2 {print $4}')
+if [[ "${AVAIL_KB}" -lt 6291456 ]]; then
+    AVAIL_MB=$(( AVAIL_KB / 1024 ))
+    log_err "ОШИБКА: Недостаточно свободного места на диске (${AVAIL_MB} МБ). Требуется минимум 6144 МБ (6 ГБ)."
+    exit 1
+fi
+
+log_info "Очистка предыдущих файлов распакованного образа в ${WIN_DIR}/iso_extracted..."
+rm -rf "${WIN_DIR}/iso_extracted"/*
+
 TMP_MOUNT="$(mktemp -d /tmp/winiso.XXXXXX)"
 cleanup() {
     if mountpoint -q "${TMP_MOUNT}" 2>/dev/null; then

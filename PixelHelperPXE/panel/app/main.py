@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import psutil
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, Query
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -367,6 +368,7 @@ async def api_delete_image(path: str = Query(...)):
     
     if full_path.is_file():
         full_path.unlink()
+        regenerate_boot_menus()
         return {"status": "ok", "deleted": safe_path}
     
     raise HTTPException(status_code=400, detail="Cannot delete directories")
@@ -385,6 +387,193 @@ async def api_upload_image(file: UploadFile = File(...), target_dir: Optional[st
     
     os.chmod(dest_path, 0o644)
     return {"status": "ok", "filename": safe_name, "path": str(dest_path.relative_to(WEB_ROOT)).replace("\\", "/"), "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2)}
+
+
+# ---------------------------------------------------------------------------
+# Resumable (chunked) image upload
+# ---------------------------------------------------------------------------
+UPLOADS_DIR = WEB_ROOT / "images" / ".uploads"
+UPLOAD_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+
+
+class UploadInitRequest(BaseModel):
+    upload_id: str
+    filename: str
+    total_size: int
+
+
+def _validate_upload_id(upload_id: str) -> str:
+    if not upload_id or not UPLOAD_ID_RE.match(upload_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор загрузки.")
+    return upload_id
+
+
+def _upload_paths(upload_id: str):
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    return UPLOADS_DIR / f"{upload_id}.part", UPLOADS_DIR / f"{upload_id}.json"
+
+
+def _load_upload_meta(upload_id: str):
+    _, meta_path = _upload_paths(upload_id)
+    if not meta_path.exists():
+        return None
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _part_size(part: Path) -> int:
+    return part.stat().st_size if part.exists() else 0
+
+
+def _save_upload_meta(upload_id: str, meta: dict) -> None:
+    _, meta_path = _upload_paths(upload_id)
+    tmp = meta_path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    os.replace(tmp, meta_path)
+
+
+@app.post("/api/upload/init")
+async def api_upload_init(payload: UploadInitRequest):
+    upload_id = _validate_upload_id(payload.upload_id)
+    filename = os.path.basename((payload.filename or "").strip()) or "uploaded.iso"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in VALID_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Неподдерживаемый формат файла: {suffix or 'без расширения'}.")
+    if payload.total_size <= 0:
+        raise HTTPException(status_code=400, detail="Некорректный размер файла.")
+
+    part, meta_path = _upload_paths(upload_id)
+    meta = _load_upload_meta(upload_id)
+    if meta and (meta.get("filename") != filename or int(meta.get("total_size", 0)) != int(payload.total_size)):
+        # Same session id but different file: restart the upload.
+        try:
+            part.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            meta_path.unlink()
+        except FileNotFoundError:
+            pass
+        meta = None
+
+    if not meta:
+        meta = {
+            "upload_id": upload_id,
+            "filename": filename,
+            "total_size": int(payload.total_size),
+        }
+        _save_upload_meta(upload_id, meta)
+
+    offset = _part_size(part)
+    if offset > int(payload.total_size):
+        try:
+            part.unlink()
+        except FileNotFoundError:
+            pass
+        offset = 0
+
+    return {
+        "upload_id": upload_id,
+        "filename": filename,
+        "total_size": int(payload.total_size),
+        "offset": offset,
+    }
+
+
+@app.put("/api/upload/chunk/{upload_id}")
+async def api_upload_chunk(
+    upload_id: str,
+    request: Request,
+    offset: int = Header(..., alias="X-Upload-Offset"),
+):
+    upload_id = _validate_upload_id(upload_id)
+    meta = _load_upload_meta(upload_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Сессия загрузки не найдена.")
+    total_size = int(meta.get("total_size", 0))
+    if offset < 0 or offset > total_size:
+        raise HTTPException(status_code=400, detail="Некорректное смещение загрузки.")
+
+    part, _ = _upload_paths(upload_id)
+    current = _part_size(part)
+    if offset > current:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Offset mismatch", "received": current},
+        )
+
+    mode = "r+b" if part.exists() else "wb"
+    with open(part, mode) as buffer:
+        if offset < current:
+            # Client re-sends an overlapping range after an interrupted attempt.
+            buffer.truncate(offset)
+        buffer.seek(offset)
+        try:
+            async for chunk in request.stream():
+                if chunk:
+                    buffer.write(chunk)
+        finally:
+            buffer.flush()
+            os.fsync(buffer.fileno())
+
+    received = _part_size(part)
+    if received > total_size:
+        raise HTTPException(status_code=400, detail="Получено больше данных, чем заявлено.")
+    return {"upload_id": upload_id, "received": received, "total_size": total_size}
+
+
+@app.get("/api/upload/status/{upload_id}")
+async def api_upload_status(upload_id: str):
+    upload_id = _validate_upload_id(upload_id)
+    meta = _load_upload_meta(upload_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Сессия загрузки не найдена.")
+    part, _ = _upload_paths(upload_id)
+    return {
+        "upload_id": upload_id,
+        "filename": meta.get("filename"),
+        "received": _part_size(part),
+        "total_size": int(meta.get("total_size", 0)),
+    }
+
+
+@app.post("/api/upload/complete/{upload_id}")
+async def api_upload_complete(upload_id: str):
+    upload_id = _validate_upload_id(upload_id)
+    meta = _load_upload_meta(upload_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Сессия загрузки не найдена.")
+
+    part, meta_path = _upload_paths(upload_id)
+    received = _part_size(part)
+    total_size = int(meta.get("total_size", 0))
+    if received != total_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Загрузка не завершена: получено {received} из {total_size} байт.",
+        )
+
+    dest_folder = WEB_ROOT / "images"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    safe_name = os.path.basename(meta.get("filename") or "uploaded.iso")
+    dest_path = dest_folder / safe_name
+    os.replace(part, dest_path)
+    os.chmod(dest_path, 0o644)
+    try:
+        meta_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    return {
+        "status": "ok",
+        "filename": safe_name,
+        "path": str(dest_path.relative_to(WEB_ROOT)).replace("\\", "/"),
+        "size_mb": round(dest_path.stat().st_size / (1024 * 1024), 2),
+    }
 
 
 def escape_xml(s: str) -> str:
@@ -409,6 +598,7 @@ class WinPeProcessRequest(BaseModel):
     ad_ou: Optional[str] = ""
     ad_user: Optional[str] = ""
     ad_password: Optional[str] = ""
+    product_key: Optional[str] = ""
     custom_apps: Optional[List[CustomApp]] = []
 
 
@@ -421,6 +611,11 @@ def generate_autounattend_xml(req: WinPeProcessRequest) -> str:
             comp_name = f"{cleaned[:10]}*"
         else:
             comp_name = "*"
+
+    # Product key for automated edition selection (defaults to generic Windows 10/11 Pro key)
+    product_key_val = (req.product_key or "").strip()
+    if not product_key_val:
+        product_key_val = "VK7JG-NPHTM-C97JM-9MPGT-3V66T"
 
     domain_xml = ""
     if req.ad_join and req.ad_domain:
@@ -482,6 +677,10 @@ def generate_autounattend_xml(req: WinPeProcessRequest) -> str:
         <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <UserData>
                 <AcceptEula>true</AcceptEula>
+                <ProductKey>
+                    <Key>{product_key_val}</Key>
+                    <WillShowUI>OnError</WillShowUI>
+                </ProductKey>
             </UserData>
         </component>
     </settings>
@@ -516,6 +715,203 @@ def generate_autounattend_xml(req: WinPeProcessRequest) -> str:
 """
 
 
+# -----------------------------------------------------------------------------
+# Dynamic boot menus: only show entries for images that are actually present
+# -----------------------------------------------------------------------------
+PXE_SERVER_IP = os.getenv("PXE_SERVER_IP", "172.16.16.61")
+HTTP_PORT = os.getenv("PXE_HTTP_PORT", "8088")
+WINDOWS_SOURCE_FILE = WEB_ROOT / "os" / "windows" / ".source"
+
+
+def _menu_safe(text: str) -> str:
+    return re.sub(r'[^A-Za-z0-9 \.\-\(\)_]', "", text).strip() or "Windows"
+
+
+def _available_boot_entries() -> List[dict]:
+    os_dir = WEB_ROOT / "os"
+    entries = []
+
+    win = os_dir / "windows"
+    win_files = [win / "bootmgr", win / "boot" / "bcd", win / "boot" / "boot.sdi", win / "sources" / "boot.wim"]
+    if all(f.exists() for f in win_files):
+        source_name = WINDOWS_SOURCE_FILE.read_text(encoding="utf-8").strip() if WINDOWS_SOURCE_FILE.exists() else ""
+        source_ok = not source_name or (WEB_ROOT / "images" / source_name).exists()
+        if source_ok:
+            title = Path(source_name).stem if source_name else "Windows"
+            entries.append({"kind": "windows", "title": f"Install {_menu_safe(title)}"})
+
+    if (os_dir / "debian" / "linux").exists() and (os_dir / "debian" / "initrd.gz").exists():
+        entries.append({"kind": "debian", "title": "Debian Netinstall"})
+    if (os_dir / "sysrescue" / "vmlinuz").exists() and (os_dir / "sysrescue" / "initram.img").exists():
+        entries.append({"kind": "sysrescue", "title": "SystemRescue"})
+    if (os_dir / "clonezilla" / "vmlinuz").exists() and (os_dir / "clonezilla" / "filesystem.squashfs").exists():
+        entries.append({"kind": "clonezilla", "title": "Clonezilla Live"})
+    return entries
+
+
+def _build_pxelinux_menu(entries: List[dict]) -> str:
+    h = f"http://{PXE_SERVER_IP}:{HTTP_PORT}"
+    lines = [
+        "# Автоматически сгенерировано панелью PXE. Не редактируйте вручную.",
+        "UI vesamenu.c32",
+        "PROMPT 0",
+        "TIMEOUT 150",
+        "ONTIMEOUT local",
+        "",
+        "MENU RESOLUTION 1024 768",
+        "MENU BACKGROUND splash_bios.png",
+        "MENU TITLE Pixel Little Helper - Autonomous Network Boot",
+        "",
+        "MENU COLOR border 30;44 #224068 #00000000 none",
+        "MENU COLOR title 1;36;44 #ffffff #00000000 none",
+        "MENU COLOR sel 7;37;40 #ffffff #246bfd all",
+        "MENU COLOR unsel 37;44 #9fb5ce #00000000 none",
+        "MENU COLOR help 37;40 #82caef #00000000 none",
+        "MENU COLOR timeout_msg 37;40 #82caef #00000000 none",
+        "MENU COLOR timeout 1;37;40 #97fff1 #00000000 none",
+        "MENU COLOR tabmsg 31;40 #627c9e #00000000 none",
+        "",
+    ]
+    for i, e in enumerate(entries, 1):
+        lines.append(f"LABEL img{i}")
+        lines.append(f"    MENU LABEL ^{i}. {e['title']}")
+        k = e["kind"]
+        if k == "windows":
+            lines.append("    KERNEL linux.c32")
+            lines.append(f"    APPEND {h}/tools/wimboot initrdfile={h}/os/windows/bootmgr,{h}/os/windows/boot/bcd,{h}/os/windows/boot/boot.sdi,{h}/os/windows/sources/boot.wim")
+        elif k == "debian":
+            lines.append(f"    KERNEL {h}/os/debian/linux")
+            lines.append(f"    APPEND initrd={h}/os/debian/initrd.gz vga=788 --- quiet")
+        elif k == "sysrescue":
+            lines.append(f"    KERNEL {h}/os/sysrescue/vmlinuz")
+            lines.append(f"    APPEND initrd={h}/os/sysrescue/initram.img archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/os/sysrescue/ copytoram")
+        elif k == "clonezilla":
+            lines.append(f"    KERNEL {h}/os/clonezilla/vmlinuz")
+            lines.append(f"    APPEND initrd={h}/os/clonezilla/initrd.img boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/os/clonezilla/filesystem.squashfs")
+        lines.append("")
+    if not entries:
+        lines += ["LABEL none", "    MENU LABEL (Нет доступных образов)", "    MENU DISABLE", ""]
+    lines += [
+        "MENU SEPARATOR", "",
+        "LABEL local", "    MENU LABEL Загрузка с локального диска (Local Hard Drive)", "    MENU DEFAULT", "    COM32 chain.c32", "    APPEND hd0", "",
+        "LABEL reboot", "    MENU LABEL Перезагрузка (Reboot)", "    COM32 reboot.c32", "",
+        "LABEL poweroff", "    MENU LABEL Выключение (Power Off)", "    COM32 poweroff.c32", "",
+    ]
+    return "\n".join(lines)
+
+
+def _build_grub_menu(entries: List[dict]) -> str:
+    s = f"(http,{PXE_SERVER_IP}:{HTTP_PORT})"
+    h = f"http://{PXE_SERVER_IP}:{HTTP_PORT}"
+    out = [
+        "# Автоматически сгенерировано панелью PXE (Pixel Little Helper). Не редактируйте вручную.",
+        "set timeout=15",
+        "set default=0",
+        "",
+        "# Core network & protocol modules",
+        "insmod net",
+        "insmod efinet",
+        "insmod http",
+        "insmod tftp",
+        "insmod chain",
+        "",
+        "# Video & Graphical Terminal modules",
+        "insmod efi_gop",
+        "insmod efi_uga",
+        "insmod all_video",
+        "insmod font",
+        "insmod gfxterm",
+        "insmod gfxmenu",
+        "insmod png",
+        "",
+        "# Graphics Mode & Terminal Output",
+        "set gfxmode=auto,1920x1080,1024x768",
+        "set gfxpayload=keep",
+        "terminal_output gfxterm",
+        "",
+        "# Load Fonts",
+        "loadfont ($prefix)/themes/pixel/fonts/dejavu_14.pf2",
+        "loadfont ($prefix)/themes/pixel/fonts/dejavu_bold_14.pf2",
+        "loadfont ($prefix)/themes/pixel/fonts/dejavu_11.pf2",
+        "",
+        "# Set Branded Pixel Little Helper Theme",
+        "set theme=($prefix)/themes/pixel/theme.txt",
+        "",
+        "# Fallback text colors (used if graphical mode is unavailable)",
+        "set color_normal=light-gray/black",
+        "set color_highlight=white/blue",
+        "",
+    ]
+    for e in entries:
+        k = e["kind"]
+        cls = "os"
+        if k == "windows":
+            cls = "windows"
+        elif k == "debian":
+            cls = "debian"
+        elif k == "sysrescue":
+            cls = "sysrescue"
+        elif k == "clonezilla":
+            cls = "clonezilla"
+        out.append(f'menuentry "{e["title"]}" --class {cls} --class os {{')
+        if k == "windows":
+            out.append(f"    linux {s}/tools/wimboot")
+            out.append(f"    initrd newc:bootmgr.efi:{s}/os/windows/bootmgr.efi newc:bcd:{s}/os/windows/boot/bcd newc:boot.sdi:{s}/os/windows/boot/boot.sdi newc:boot.wim:{s}/os/windows/sources/boot.wim")
+        elif k == "debian":
+            out.append(f"    linux {s}/os/debian/linux vga=788 --- quiet")
+            out.append(f"    initrd {s}/os/debian/initrd.gz")
+        elif k == "sysrescue":
+            out.append(f"    linux {s}/os/sysrescue/vmlinuz archisobasedir=sysrescue ip=dhcp sysrescue.http={h}/os/sysrescue/ copytoram")
+            out.append(f"    initrd {s}/os/sysrescue/initram.img")
+        elif k == "clonezilla":
+            out.append(f"    linux {s}/os/clonezilla/vmlinuz boot=live config components union=overlay noswap nomodeset net.ifnames=0 nosplash noprompt fetch={h}/os/clonezilla/filesystem.squashfs")
+            out.append(f"    initrd {s}/os/clonezilla/initrd.img")
+        out += ["}", ""]
+    if not entries:
+        out += ['menuentry "(Нет доступных образов)" { true }', ""]
+    out += [
+        'menuentry "Загрузка с локального диска (Local Hard Drive)" --class harddrive --class disk {',
+        "    exit",
+        "}", "",
+        'menuentry "Перезагрузка (Reboot)" --class reboot { reboot }',
+        'menuentry "Выключение (Power Off)" --class halt --class power { halt }', "",
+    ]
+    return "\n".join(out)
+
+
+def regenerate_boot_menus() -> List[dict]:
+    entries = _available_boot_entries()
+    pxe = _build_pxelinux_menu(entries)
+    grub = _build_grub_menu(entries)
+    targets = [
+        (TFTP_ROOT / "pxelinux.cfg" / "default", pxe),
+        (TFTP_ROOT / "grub.cfg", grub),
+        (TFTP_ROOT / "grub" / "grub.cfg", grub),
+        (TFTP_ROOT / "boot" / "grub" / "grub.cfg", grub),
+        (TFTP_ROOT / "debian-installer" / "amd64" / "grub" / "grub.cfg", grub),
+        (WEB_ROOT / "grub" / "grub.cfg", grub),
+    ]
+    for path, content in targets:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_symlink():
+                path.unlink()
+            path.write_text(content, encoding="utf-8")
+        except Exception as ex:
+            print(f"[menu] cannot write {path}: {ex}")
+    return entries
+
+
+@app.on_event("startup")
+async def _startup_regenerate_menus():
+    regenerate_boot_menus()
+
+
+@app.post("/api/menus/regenerate")
+async def api_regenerate_menus():
+    return {"status": "ok", "entries": regenerate_boot_menus()}
+
+
 @app.post("/api/process-windows")
 async def api_process_windows(req: WinPeProcessRequest):
     iso_file = Path(req.iso_path)
@@ -537,7 +933,14 @@ async def api_process_windows(req: WinPeProcessRequest):
     script = SCRIPTS_DIR / "build_winpe.sh"
     cmd = f"bash '{script}' '{iso_file}' '{req.server_ip}' '{unattend_tmp}'"
     code, out, err = await run_cmd(cmd)
-    
+    if code == 0:
+        try:
+            WINDOWS_SOURCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            WINDOWS_SOURCE_FILE.write_text(iso_file.name, encoding="utf-8")
+        except Exception:
+            pass
+    regenerate_boot_menus()
+
     return {
         "status": "ok" if code == 0 else "error",
         "return_code": code,

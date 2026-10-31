@@ -1,0 +1,40 @@
+# Pixel Little Helper GRUB Theme
+# High-Resolution Branded UEFI Bootloader
+
+title-text: ""
+desktop-image: "background.png"
+desktop-color: "#0b1523"
+terminal-font: "dejavu_14"
+
++ boot_menu {
+    left = 370
+    top = 245
+    width = 1180
+    height = 580
+    item_font = "dejavu_14"
+    selected_item_font = "dejavu_bold_14"
+    item_color = "#9fb5ce"
+    selected_item_color = "#ffffff"
+    item_height = 40
+    item_padding = 10
+    item_spacing = 6
+    icon_width = 24
+    icon_height = 24
+    icon_spacing = 14
+    selected_item_pixmap_style = "select_*.png"
+    scrollbar = false
+}
+
++ progress_bar {
+    id = "__timeout__"
+    left = 370
+    top = 845
+    width = 1180
+    height = 14
+    font = "dejavu_11"
+    text_color = "#82caef"
+    fg_color = "#246bfd"
+    bg_color = "#142840"
+    border_color = "#224068"
+    text = "Автоматическая загрузка через %d сек..."
+}
